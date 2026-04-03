@@ -5,8 +5,9 @@ from typing import Sequence
 
 from pydantic import BaseModel, ConfigDict
 from t4_devkit import Tier4
-from t4_devkit.schema import Sample, SampleData, CalibratedSensor
+from t4_devkit.schema import Sample, SampleData, CalibratedSensor, Scene, Log
 from t4_devkit.typing import Quaternion, Vector3
+from t4_devkit.common.timestamp import microseconds2seconds
 
 from autoware_ml.common.enums.enums import LidarChannel
 from autoware_ml.databases.schemas import DatasetRecord
@@ -14,6 +15,19 @@ from autoware_ml.databases.scenarios import ScenarioData
 
 logger = logging.getLogger(__name__)
 
+
+class T4SampleRecordBasicInfo(BaseModel):
+    """Basic information of a T4 sample record."""
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    scenario_id: str
+    sample_id: str
+    sample_index: int
+    timestamp_seconds: float
+    scenario_name: str
+    location: str | None = None
+    vehicle_type: str | None = None
 
 class T4SampleRecord(BaseModel):
     """Temporary T4 sample record."""
@@ -23,6 +37,8 @@ class T4SampleRecord(BaseModel):
     scenario_id: str
     sample_id: str
     sample_index: int
+    timestamp_seconds: float
+    scenario_name: str
     lidar_path: str
     location: str | None
     vehicle_type: str | None
@@ -39,6 +55,8 @@ class T4SampleRecord(BaseModel):
             sample_index=self.sample_index,
             location=self.location,
             vehicle_type=self.vehicle_type,
+            timestamp_seconds=self.timestamp_seconds,
+            scenario_name=self.scenario_name,
         )
 
 
@@ -85,10 +103,26 @@ class T4RecordsGenerator:
         for sample_index in range(0, len(self.t4_devkit_dataset.sample),
                                   self.sample_steps):
             sample = self.t4_devkit_dataset.sample[sample_index]
-            t4_sample_record = self.extract_t4_sample_record(sample, sample_index)
+            t4_sample_record = self.extract_t4_sample_record(
+                sample, sample_index)
             records.append(t4_sample_record.to_dataset_record())
 
         return records
+
+    def _extract_basic_info(self, sample: Sample,
+                            sample_index: int) -> T4SampleRecord:
+        """Extract basic information from a T4 sample."""
+        scene_record: Scene = self.t4_devkit_dataset.get(
+            "scene", sample.scene_token)
+        return T4SampleRecordBasicInfo(
+            scenario_id=self.scenario_data.scenario_id,
+            sample_id=sample.token,
+            sample_index=sample_index,
+            location=self.scenario_data.location,
+            vehicle_type=self.scenario_data.vehicle_type,
+            timestamp_seconds=microseconds2seconds(sample.timestamp),
+            scenario_name=scene_record.name,
+        )
 
     def extract_t4_sample_record(self, sample: Sample,
                                  sample_index: int) -> T4SampleRecord:
@@ -108,7 +142,14 @@ class T4RecordsGenerator:
             "sample_data", lidar_token)
         cs_record: CalibratedSensor = self.t4_devkit_dataset.get(
             "calibrated_sensor", sd_record.calibrated_sensor_token)
+
+        # Third, extract basic information from the T4Dataset
+        basic_info = self._extract_basic_info(sample=sample,
+                                              sample_index=sample_index)
+
+        # Fourth, extract lidar information from the T4Dataset
         lidar_path, _, _ = self.t4_devkit_dataset.get_sample_data(lidar_token)
+
         # TODO (KokSeang): Extract more information, for example, boxes, from the T4Dataset.
         # Last, return the T4 sample record
         return T4SampleRecord(
