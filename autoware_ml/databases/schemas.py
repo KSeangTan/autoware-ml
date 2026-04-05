@@ -32,16 +32,17 @@ class DatasetTableSchema:
     SCENARIO_NAME = DatasetTableColumn("scenario_name", pl.String)
 
     # LiDAR Schema
-    LIDAR_CALIBRATED_SENSOR_ID = DatasetTableColumn("lidar_calibrated_sensor_id", pl.String)
-    LIDAR_CALIBRATED_SENSOR_CHANNEL_NAME = DatasetTableColumn(
-        "lidar_calibrated_sensor_channel_name", pl.String
-    )
+    LIDAR_FRAME_ID = DatasetTableColumn("lidar_frame_id", pl.String)
+    LIDAR_SENSOR_ID = DatasetTableColumn("lidar_sensor_id", pl.String)
+    LIDAR_SENSOR_CHANNEL_NAME = DatasetTableColumn("lidar_sensor_channel_name", pl.String)
     LIDAR_POINTCLOUD_PATH = DatasetTableColumn("lidar_pointcloud_path", pl.String)
     LIDAR_POINTCLOUD_NUM_FEATURES = DatasetTableColumn("lidar_pointcloud_num_features", pl.Int32)
-    LIDAR_TO_EGO_POSE_MATRIX = DatasetTableColumn(
-        "lidar_to_ego_pose_matrix", pl.Array(pl.Float64, shape=(4, 4))
+    LIDAR_SENSOR_TO_EGO_POSE_MATRIX = DatasetTableColumn(
+        "lidar_sensor_to_ego_pose_matrix", pl.Array(pl.Float64, shape=(4, 4))
     )
-    # EGO Schema
+    LIDAR_FRAME_EGO_POSE_TO_GLOBAL_MATRIX = DatasetTableColumn(
+        "lidar_frame_ego_pose_to_global_matrix", pl.Array(pl.Float64, shape=(4, 4))
+    )
 
     # Camera Schema, they consists of multiple cameras, and thus they are stored in a list
     # CAMERA_CHANNEL_NAMES = DatasetTableColumn("camera_channel_name", pl.List(pl.String))
@@ -105,10 +106,15 @@ class DatasetRecord(BaseModel):
     scenario_name: str
 
     # LiDAR Metadata
-    lidar_calibrated_sensor_id: str
-    lidar_calibrated_sensor_channel_name: str
+    lidar_frame_id: str
+    lidar_sensor_id: str
+    lidar_sensor_channel_name: str
     lidar_pointcloud_path: str
     lidar_pointcloud_num_features: int
-    lidar_to_ego_pose_matrix: npt.NDArray[np.float64]  # (4, 4)
+    lidar_sensor_to_ego_pose_matrix: npt.NDArray[np.float64]  # (4, 4)
+    lidar_frame_ego_pose_to_global_matrix: npt.NDArray[
+        np.float64
+    ]  # Ego pose (keyframe: lidar calibrated sensor) to global matrix from the selected lidar sensor (4, 4)
+
     # TODO (KokSeang): Add more annotation fields here
     # bbox_3d: Sequence[npt.NDArray[np.float64]]

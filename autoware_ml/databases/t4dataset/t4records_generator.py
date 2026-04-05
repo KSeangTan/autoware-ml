@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Sequence
 
 from t4_devkit import Tier4
-from t4_devkit.schema import Sample, SampleData, CalibratedSensor, Scene
+from t4_devkit.schema import Sample, SampleData, CalibratedSensor, Scene, EgoPose
 from t4_devkit.common.timestamp import microseconds2seconds
 
 from autoware_ml.common.enums.enums import LidarChannel
@@ -102,7 +102,7 @@ class T4RecordsGenerator:
         cs_record: CalibratedSensor = self.t4_devkit_dataset.get(
             "calibrated_sensor", sd_record.calibrated_sensor_token
         )
-        lidar_to_ego_matrix = convert_quaternion_to_matrix(
+        lidar_sensor_to_ego_matrix = convert_quaternion_to_matrix(
             rotation_quaternion=cs_record.rotation, translation=cs_record.translation
         )
         lidar_path, boxes_3d, _ = self.t4_devkit_dataset.get_sample_data(
@@ -110,12 +110,20 @@ class T4RecordsGenerator:
             as_3d=True,
             as_sensor_coord=True,
         )
+
+        # Extract ego pose to global matrix in the lidar frame from the T4Dataset
+        ego_pose_record: EgoPose = self.t4_devkit_dataset.get("ego_pose", sd_record.ego_pose_token)
+        lidar_frame_ego_pose_to_global_matrix = convert_quaternion_to_matrix(
+            rotation_quaternion=ego_pose_record.rotation, translation=ego_pose_record.translation
+        )
         return T4SampleRecordLidarInfo(
-            lidar_calibrated_sensor_id=cs_record.sensor_token,
-            lidar_calibrated_sensor_channel_name=lidar_channel_name,
+            lidar_frame_id=calibrated_lidar_sample_data_token,
+            lidar_sensor_id=cs_record.token,
+            lidar_sensor_channel_name=lidar_channel_name,
             lidar_pointcloud_path=lidar_path,
             lidar_pointcloud_num_features=self.lidar_pointcloud_num_features,
-            lidar_to_ego_pose_matrix=lidar_to_ego_matrix,
+            lidar_sensor_to_ego_pose_matrix=lidar_sensor_to_ego_matrix,
+            lidar_frame_ego_pose_to_global_matrix=lidar_frame_ego_pose_to_global_matrix,
             boxes_3d=boxes_3d,
         )
 
@@ -127,6 +135,7 @@ class T4RecordsGenerator:
 
         # Second, extract lidar information from the T4Dataset
         lidar_info = self._extract_lidar_info(sample=sample)
+
         # Third, extract multisweep lidar information from the T4Dataset
         # TODO (KokSeang): Extract more information, for example, boxes, from the T4Dataset.
         # Last, return the T4 sample record

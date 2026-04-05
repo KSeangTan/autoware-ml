@@ -31,11 +31,13 @@ class T4SampleRecordLidarInfo(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True)
 
-    lidar_calibrated_sensor_id: str
-    lidar_calibrated_sensor_channel_name: str
+    lidar_frame_id: str
+    lidar_sensor_id: str
+    lidar_sensor_channel_name: str
     lidar_pointcloud_path: str
     lidar_pointcloud_num_features: int
-    lidar_to_ego_pose_matrix: npt.NDArray[np.float64]  # (4, 4)
+    lidar_sensor_to_ego_pose_matrix: npt.NDArray[np.float64]  # (4, 4)
+    lidar_frame_ego_pose_to_global_matrix: npt.NDArray[np.float64]  # (4, 4)
     boxes_3d: Sequence[Box3D]
 
     def parse_lidar_path(self) -> str:
@@ -63,9 +65,11 @@ class T4SampleRecord(BaseModel):
             location=self.basic_info.location,
             vehicle_type=self.basic_info.vehicle_type,
             # LiDAR Metadata
-            lidar_calibrated_sensor_id=self.lidar_info.lidar_calibrated_sensor_id,
-            lidar_calibrated_sensor_channel_name=self.lidar_info.lidar_calibrated_sensor_channel_name,
+            lidar_frame_id=self.lidar_info.lidar_frame_id,
+            lidar_sensor_id=self.lidar_info.lidar_sensor_id,
+            lidar_sensor_channel_name=self.lidar_info.lidar_sensor_channel_name,
             lidar_pointcloud_path=self.lidar_info.parse_lidar_path(),
             lidar_pointcloud_num_features=self.lidar_info.lidar_pointcloud_num_features,
-            lidar_to_ego_pose_matrix=self.lidar_info.lidar_to_ego_pose_matrix,
+            lidar_sensor_to_ego_pose_matrix=self.lidar_info.lidar_sensor_to_ego_pose_matrix,
+            lidar_frame_ego_pose_to_global_matrix=self.lidar_info.lidar_frame_ego_pose_to_global_matrix,
         )
