@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from typing import NamedTuple
 
 import polars as pl
+import numpy as np
+import numpy.typing as npt
 from pydantic import BaseModel, ConfigDict
 
 
@@ -20,6 +22,7 @@ class DatasetTableSchema:
     Annotation table schema.
     """
 
+    # Basic Schema
     SCENARIO_ID = DatasetTableColumn("scenario_id", pl.String)
     SAMPLE_ID = DatasetTableColumn("sample_id", pl.String)
     SAMPLE_INDEX = DatasetTableColumn("sample_index", pl.Int32)
@@ -27,18 +30,28 @@ class DatasetTableSchema:
     LOCATION = DatasetTableColumn("location", pl.String)
     VEHICLE_TYPE = DatasetTableColumn("vehicle_type", pl.String)
     SCENARIO_NAME = DatasetTableColumn("scenario_name", pl.String)
-    LIDAR_CHANNEL_NAME = DatasetTableColumn("lidar_channel_name", pl.String)
-    LIDAR_SENSOR_TOKEN = DatasetTableColumn("lidar_sensor_token", pl.String)
-    LIDAR_TRANSLATION = DatasetTableColumn("lidar_translation",
-                                           pl.Array(pl.Float64, shape=(3, )))
-    LIDAR_ROTATION = DatasetTableColumn("lidar_rotation",
-                                        pl.Array(pl.Float64, shape=(3, 3)))
-    LIDAR_POINTCLOUD_PATH = DatasetTableColumn("lidar_pointcloud_path",
-                                               pl.String)
-    LIDAR_POINTCLOUD_NUM_FEATURES = DatasetTableColumn(
-        "lidar_pointcloud_num_features", pl.Int32)
+
+    # LiDAR Schema
+    LIDAR_CALIBRATED_SENSOR_ID = DatasetTableColumn("lidar_calibrated_sensor_id", pl.String)
+    LIDAR_CALIBRATED_SENSOR_CHANNEL_NAME = DatasetTableColumn(
+        "lidar_calibrated_sensor_channel_name", pl.String
+    )
+    LIDAR_POINTCLOUD_PATH = DatasetTableColumn("lidar_pointcloud_path", pl.String)
+    LIDAR_POINTCLOUD_NUM_FEATURES = DatasetTableColumn("lidar_pointcloud_num_features", pl.Int32)
     LIDAR_TO_EGO_POSE_MATRIX = DatasetTableColumn(
-        "lidar_to_ego_pose_matrix", pl.Array(pl.Float64, shape=(4, 4)))
+        "lidar_to_ego_pose_matrix", pl.Array(pl.Float64, shape=(4, 4))
+    )
+    # EGO Schema
+
+    # Camera Schema, they consists of multiple cameras, and thus they are stored in a list
+    # CAMERA_CHANNEL_NAMES = DatasetTableColumn("camera_channel_name", pl.List(pl.String))
+    # CAMERA_SENSOR_IDS = DatasetTableColumn("camera_sensor_id", pl.List(pl.String))
+    # CAMERA_TRANSLATIONS = DatasetTableColumn("camera_translation", pl.List(pl.Array(pl.Float64, shape=(3, ))))
+    # CAMERA_ROTATIONS = DatasetTableColumn("camera_rotation", pl.List(pl.Array(pl.Float64, shape=(3, 3))))
+    # CAMERA_TO_EGO_POSE_MATRICES = DatasetTableColumn("camera_to_ego_pose_matrix", pl.List(pl.Array(pl.Float64, shape=(4, 4))))
+    # CAMERA_TO_GLOBAL_POSE_MATRICES = DatasetTableColumn("camera_to_global_pose_matrix", pl.List(pl.Array(pl.Float64, shape=(4, 4))))
+    # CAMERA_INTRINSICS = DatasetTableColumn("camera_intrinsics", pl.List(pl.Array(pl.Float64, shape=(3, 3))))
+    # CAMERA_DISTORTION_COEFFICIENTS = DatasetTableColumn("camera_distortion_coefficients", pl.List(pl.Array(pl.Float64, shape=(5, ))))
     # LIDAR_SWEEP_TIMESTAMPS = DatasetTableColumn("lidar_sweep_timestamps",
     #                                             pl.List(pl.Float64))
     # LIDAR_SWEEP_SAMPLE_DATA_TOKENS = DatasetTableColumn(
@@ -47,8 +60,8 @@ class DatasetTableSchema:
     #     "lidar_sweep_ego_to_global_matrices", pl.List(pl.Array(pl.Float64, shape=(4, 4))))
 
     # Ego to global transformation matrix 4x4
-    EGO_POSE_TO_GLOBAL_MATRIX = DatasetTableColumn(
-        "ego_pose_to_global_matrix", pl.Array(pl.Float64, shape=(4, 4)))
+    # EGO_POSE_TO_GLOBAL_MATRIX = DatasetTableColumn(
+    #     "ego_pose_to_global_matrix", pl.Array(pl.Float64, shape=(4, 4)))
 
     # List of 3D bounding boxes with center_x, center_y, center_z, length, width, height, yaw, velocity_x, velocity_y
     # BBOX_3D = DatasetTableColumn("bbox_3d",
@@ -59,11 +72,13 @@ class DatasetTableSchema:
         """
         Convert the dataset table schema to a Polars schema.
         """
-        return pl.Schema({
-            v.name: v.dtype
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__") and isinstance(v, DatasetTableColumn)
-        })
+        return pl.Schema(
+            {
+                v.name: v.dtype
+                for k, v in cls.__dict__.items()
+                if not k.startswith("__") and isinstance(v, DatasetTableColumn)
+            }
+        )
 
 
 class DatasetRecord(BaseModel):
@@ -80,6 +95,7 @@ class DatasetRecord(BaseModel):
     # Set model config to frozen
     model_config = ConfigDict(frozen=True, strict=True)
 
+    # Basic Metadata
     scenario_id: str
     sample_id: str
     sample_index: int
@@ -88,5 +104,11 @@ class DatasetRecord(BaseModel):
     vehicle_type: str
     scenario_name: str
 
+    # LiDAR Metadata
+    lidar_calibrated_sensor_id: str
+    lidar_calibrated_sensor_channel_name: str
+    lidar_pointcloud_path: str
+    lidar_pointcloud_num_features: int
+    lidar_to_ego_pose_matrix: npt.NDArray[np.float64]  # (4, 4)
     # TODO (KokSeang): Add more annotation fields here
     # bbox_3d: Sequence[npt.NDArray[np.float64]]
