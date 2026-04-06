@@ -56,7 +56,7 @@ class T4SampleRecordLidarSweepInfo(BaseModel):
 
     def model_post_init(self, __context) -> None:
         """ All attributes must be of the same length."""
-        assert len(self.lidar_sweep_frame_ids) == len(self.lidar_sweep_timestamps) == len(self.lidar_sweep_pointclouds_paths) == len(self.lidar_sweep_ego_to_global_matrices) == len(self.lidar_sweep_frame_ego_pose_to_global_matrices), "All attributes must be of the same length"
+        assert len(self.lidar_sweep_frame_ids) == len(self.lidar_sweep_timestamps_seconds) == len(self.lidar_sweep_pointclouds_paths) == len(self.lidar_sweep_ego_to_global_matrices) == len(self.lidar_sweep_frame_ego_pose_to_global_matrices), "All attributes must be of the same length"
 
 
 class T4SampleRecord(BaseModel):
@@ -75,6 +75,20 @@ class T4SampleRecord(BaseModel):
 
     def to_dataset_record(self) -> DatasetRecord:
         """Convert T4 sample record to dataset record."""
+
+        # Parse the lidar sweep information
+        lidar_sweep_pointclouds_paths=[
+          self.parse_lidar_pointcloud_path(path)
+          for path in self.lidar_sweep_info.lidar_sweep_pointclouds_paths
+        ]
+        lidar_sweep_ego_to_global_matrices = [
+          matrix.astype(np.float32) for matrix in
+          self.lidar_sweep_info.lidar_sweep_ego_to_global_matrices
+        ]
+        lidar_sweep_frame_ego_pose_to_global_matrices = [
+          matrix.astype(np.float32) for matrix in self.lidar_sweep_info.
+          lidar_sweep_frame_ego_pose_to_global_matrices
+        ]
         return DatasetRecord(
             # Basic Metadata
             scenario_id=self.basic_info.scenario_id,
@@ -100,8 +114,9 @@ class T4SampleRecord(BaseModel):
 
             # Multisweep LiDAR Metadata
             lidar_sweep_frame_ids=self.lidar_sweep_info.lidar_sweep_frame_ids,
-            lidar_sweep_timestamps_seconds=self.lidar_sweep_info.lidar_sweep_timestamps_seconds,
-            lidar_sweep_pointclouds_paths=[self.parse_lidar_pointcloud_path(path) for path in self.lidar_sweep_info.lidar_sweep_pointclouds_paths],
-            lidar_sweep_ego_to_global_matrices=self.lidar_sweep_info.lidar_sweep_ego_to_global_matrices.astype(np.float32),
-            lidar_sweep_frame_ego_pose_to_global_matrices=self.lidar_sweep_info.lidar_sweep_frame_ego_pose_to_global_matrices.astype(np.float32),
+            lidar_sweep_timestamps_seconds=self.lidar_sweep_info.
+            lidar_sweep_timestamps_seconds,
+            lidar_sweep_pointclouds_paths=lidar_sweep_pointclouds_paths,
+            lidar_sweep_ego_to_global_matrices=lidar_sweep_ego_to_global_matrices,
+            lidar_sweep_frame_ego_pose_to_global_matrices=lidar_sweep_frame_ego_pose_to_global_matrices,
         )
