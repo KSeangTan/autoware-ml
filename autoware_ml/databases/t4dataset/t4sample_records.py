@@ -29,7 +29,7 @@ class T4SampleRecordBasicInfo(BaseModel):
 class T4SampleRecordLidarInfo(BaseModel):
     """Lidar information of a T4 sample record."""
 
-    model_config = ConfigDict(frozen=True, strict=True)
+    model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
 
     lidar_frame_id: str
     lidar_sensor_id: str

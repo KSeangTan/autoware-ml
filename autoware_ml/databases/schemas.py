@@ -94,7 +94,7 @@ class DatasetRecord(BaseModel):
     """
 
     # Set model config to frozen
-    model_config = ConfigDict(frozen=True, strict=True)
+    model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
 
     # Basic Metadata
     scenario_id: str
