@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import NamedTuple
+from typing import NamedTuple, Sequence
 
 import polars as pl
 import numpy as np
@@ -34,16 +34,25 @@ class DatasetTableSchema:
     # LiDAR Schema
     LIDAR_FRAME_ID = DatasetTableColumn("lidar_frame_id", pl.String)
     LIDAR_SENSOR_ID = DatasetTableColumn("lidar_sensor_id", pl.String)
-    LIDAR_SENSOR_CHANNEL_NAME = DatasetTableColumn("lidar_sensor_channel_name", pl.String)
-    LIDAR_POINTCLOUD_PATH = DatasetTableColumn("lidar_pointcloud_path", pl.String)
-    LIDAR_POINTCLOUD_NUM_FEATURES = DatasetTableColumn("lidar_pointcloud_num_features", pl.Int32)
+    LIDAR_SENSOR_CHANNEL_NAME = DatasetTableColumn("lidar_sensor_channel_name",
+                                                   pl.String)
+    LIDAR_POINTCLOUD_PATH = DatasetTableColumn("lidar_pointcloud_path",
+                                               pl.String)
+    LIDAR_POINTCLOUD_NUM_FEATURES = DatasetTableColumn(
+        "lidar_pointcloud_num_features", pl.Int32)
     LIDAR_SENSOR_TO_EGO_POSE_MATRIX = DatasetTableColumn(
-        "lidar_sensor_to_ego_pose_matrix", pl.Array(pl.Float64, shape=(4, 4))
-    )
+        "lidar_sensor_to_ego_pose_matrix", pl.Array(pl.Float32, shape=(4, 4)))
     LIDAR_FRAME_EGO_POSE_TO_GLOBAL_MATRIX = DatasetTableColumn(
-        "lidar_frame_ego_pose_to_global_matrix", pl.Array(pl.Float64, shape=(4, 4))
-    )
+        "lidar_frame_ego_pose_to_global_matrix",
+        pl.Array(pl.Float32, shape=(4, 4)))
 
+    # Multisweep Lidar Schema, they are stored in a list
+    LIDAR_SWEEP_FRAME_IDS = DatasetTableColumn("lidar_sweep_frame_ids", pl.List(pl.String))
+    LIDAR_SWEEP_TIMESTAMPS_SECONDS = DatasetTableColumn("lidar_sweep_timestamps_seconds", pl.List(pl.Float64))
+    LIDAR_SWEEP_POINTCLOUDS_PATHS = DatasetTableColumn("lidar_sweep_pointclouds_paths", pl.List(pl.String))
+    LIDAR_SWEEP_EGO_TO_GLOBAL_MATRICES = DatasetTableColumn("lidar_sweep_ego_to_global_matrices", pl.List(pl.Array(pl.Float32, shape=(4, 4))))
+    LIDAR_SWEP_FRAME_EGO_POSE_TO_GLOBAL_MATRICES = DatasetTableColumn("lidar_sweep_frame_ego_pose_to_global_matrices", pl.List(pl.Array(pl.Float32, shape=(4, 4))))
+    
     # Camera Schema, they consists of multiple cameras, and thus they are stored in a list
     # CAMERA_CHANNEL_NAMES = DatasetTableColumn("camera_channel_name", pl.List(pl.String))
     # CAMERA_SENSOR_IDS = DatasetTableColumn("camera_sensor_id", pl.List(pl.String))
@@ -73,13 +82,11 @@ class DatasetTableSchema:
         """
         Convert the dataset table schema to a Polars schema.
         """
-        return pl.Schema(
-            {
-                v.name: v.dtype
-                for k, v in cls.__dict__.items()
-                if not k.startswith("__") and isinstance(v, DatasetTableColumn)
-            }
-        )
+        return pl.Schema({
+            v.name: v.dtype
+            for k, v in cls.__dict__.items()
+            if not k.startswith("__") and isinstance(v, DatasetTableColumn)
+        })
 
 
 class DatasetRecord(BaseModel):
@@ -111,10 +118,16 @@ class DatasetRecord(BaseModel):
     lidar_sensor_channel_name: str
     lidar_pointcloud_path: str
     lidar_pointcloud_num_features: int
-    lidar_sensor_to_ego_pose_matrix: npt.NDArray[np.float64]  # (4, 4)
+    lidar_sensor_to_ego_pose_matrix: npt.NDArray[np.float32]  # (4, 4)
     lidar_frame_ego_pose_to_global_matrix: npt.NDArray[
-        np.float64
+        np.float32
     ]  # Ego pose (keyframe: lidar calibrated sensor) to global matrix from the selected lidar sensor (4, 4)
-
+    
+    # Multisweep Lidar Metadata
+    lidar_sweep_frame_ids: Sequence[str]
+    lidar_sweep_timestamps_seconds: Sequence[float]
+    lidar_sweep_pointclouds_paths: Sequence[str]
+    lidar_sweep_ego_to_global_matrices: Sequence[npt.NDArray[np.float32]] # (4, 4)
+    lidar_sweep_frame_ego_pose_to_global_matrices: Sequence[npt.NDArray[np.float32]] # (4, 4)
     # TODO (KokSeang): Add more annotation fields here
     # bbox_3d: Sequence[npt.NDArray[np.float64]]

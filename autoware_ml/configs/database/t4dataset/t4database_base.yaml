@@ -3,7 +3,7 @@ _convert_: all
 
 database_version: T4Database-base-v1.0.0
 # Root path of actual annotation files
-database_root_path: ${data_root_path}/t4dataset/
+database_root_path: ${data_root_path}/t4datasets/
 # Root path where the scenario yaml files are stored
 scenario_root_path: ${working_dir}/perception-devops/dataset_annotation/t4dataset/detection3d/
 cache_path: ${cache_root_path}/detection3d/

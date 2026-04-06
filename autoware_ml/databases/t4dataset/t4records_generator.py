@@ -1,10 +1,14 @@
 import logging
 
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, Tuple
 
+import numpy.typing as npt
+import numpy as np
+from sqlalchemy import false
 from t4_devkit import Tier4
 from t4_devkit.schema import Sample, SampleData, CalibratedSensor, Scene, EgoPose
+from t4_devkit.schema.name import SchemaName
 from t4_devkit.common.timestamp import microseconds2seconds
 
 from autoware_ml.common.enums.enums import LidarChannel
@@ -14,6 +18,7 @@ from autoware_ml.databases.t4dataset.t4sample_records import (
     T4SampleRecord,
     T4SampleRecordBasicInfo,
     T4SampleRecordLidarInfo,
+    T4SampleRecordLidarSweepInfo,
 )
 from autoware_ml.utils.dataset import convert_quaternion_to_matrix
 
@@ -47,14 +52,13 @@ class T4RecordsGenerator:
 
     def _construct_t4_devkit_dataset(self) -> Tier4:
         """Construct T4 dataset."""
-        scene_root_dir_path = (
-            self.database_root_path
-            / self.scenario_data.db_version
-            / self.scenario_data.scenario_id
-            / self.scenario_data.scenario_version
-        )
+        scene_root_dir_path = (self.database_root_path /
+                               self.scenario_data.db_version /
+                               self.scenario_data.scenario_id /
+                               self.scenario_data.scenario_version)
         if not scene_root_dir_path.exists():
-            raise ValueError(f"Scene root directory {scene_root_dir_path} does not exist.")
+            raise ValueError(
+                f"Scene root directory {scene_root_dir_path} does not exist.")
         return Tier4(data_root=scene_root_dir_path, verbose=False)
 
     def generate_dataset_records(self) -> Sequence[DatasetRecord]:
@@ -63,16 +67,20 @@ class T4RecordsGenerator:
         logger.info(
             f"Generating dataset records for scenario: {self.scenario_data.scenario_id} with sample steps: {self.sample_steps} and max sweeps: {self.max_sweeps}"
         )
-        for sample_index in range(0, len(self.t4_devkit_dataset.sample), self.sample_steps):
+        for sample_index in range(0, len(self.t4_devkit_dataset.sample),
+                                  self.sample_steps):
             sample = self.t4_devkit_dataset.sample[sample_index]
-            t4_sample_record = self.extract_t4_sample_record(sample, sample_index)
+            t4_sample_record = self.extract_t4_sample_record(
+                sample, sample_index)
             records.append(t4_sample_record.to_dataset_record())
 
         return records
 
-    def _extract_basic_info(self, sample: Sample, sample_index: int) -> T4SampleRecordBasicInfo:
+    def _extract_basic_info(self, sample: Sample,
+                            sample_index: int) -> T4SampleRecordBasicInfo:
         """Extract basic information from a T4 sample."""
-        scene_record: Scene = self.t4_devkit_dataset.get("scene", sample.scene_token)
+        scene_record: Scene = self.t4_devkit_dataset.get(
+            SchemaName.SCENE, sample.scene_token)
         return T4SampleRecordBasicInfo(
             scenario_id=self.scenario_data.scenario_id,
             sample_id=sample.token,
@@ -97,14 +105,14 @@ class T4RecordsGenerator:
 
         calibrated_lidar_sample_data_token = sample.data[lidar_channel_name]
         sd_record: SampleData = self.t4_devkit_dataset.get(
-            "sample_data", calibrated_lidar_sample_data_token
-        )
+            SchemaName.SAMPLE_DATA, calibrated_lidar_sample_data_token)
         cs_record: CalibratedSensor = self.t4_devkit_dataset.get(
-            "calibrated_sensor", sd_record.calibrated_sensor_token
-        )
+            SchemaName.CALIBRATED_SENSOR, sd_record.calibrated_sensor_token)
         lidar_sensor_to_ego_matrix = convert_quaternion_to_matrix(
-            rotation_quaternion=cs_record.rotation, translation=cs_record.translation
-        )
+            rotation_quaternion=cs_record.rotation,
+            translation=cs_record.translation,
+            convert_to_float32=False)
+
         lidar_path, boxes_3d, _ = self.t4_devkit_dataset.get_sample_data(
             sample_data_token=calibrated_lidar_sample_data_token,
             as_3d=True,
@@ -112,10 +120,13 @@ class T4RecordsGenerator:
         )
 
         # Extract ego pose to global matrix in the lidar frame from the T4Dataset
-        ego_pose_record: EgoPose = self.t4_devkit_dataset.get("ego_pose", sd_record.ego_pose_token)
+        ego_pose_record: EgoPose = self.t4_devkit_dataset.get(
+            SchemaName.EGO_POSE, sd_record.ego_pose_token)
         lidar_frame_ego_pose_to_global_matrix = convert_quaternion_to_matrix(
-            rotation_quaternion=ego_pose_record.rotation, translation=ego_pose_record.translation
-        )
+            rotation_quaternion=ego_pose_record.rotation,
+            translation=ego_pose_record.translation,
+            convert_to_float32=False)
+
         return T4SampleRecordLidarInfo(
             lidar_frame_id=calibrated_lidar_sample_data_token,
             lidar_sensor_id=cs_record.token,
@@ -123,23 +134,145 @@ class T4RecordsGenerator:
             lidar_pointcloud_path=lidar_path,
             lidar_pointcloud_num_features=self.lidar_pointcloud_num_features,
             lidar_sensor_to_ego_pose_matrix=lidar_sensor_to_ego_matrix,
-            lidar_frame_ego_pose_to_global_matrix=lidar_frame_ego_pose_to_global_matrix,
+            lidar_frame_ego_pose_to_global_matrix=
+            lidar_frame_ego_pose_to_global_matrix,
             boxes_3d=boxes_3d,
         )
 
-    def extract_t4_sample_record(self, sample: Sample, sample_index: int) -> T4SampleRecord:
+    def _compute_sensor_transformation_matrices(
+        self,
+        sensor_sample_data_record: SampleData,
+        selected_sensor_to_ego_pose_matrix: npt.NDArray[np.float32],
+        selected_sensor_frame_ego_pose_to_global_matrix: npt.NDArray[
+            np.float32],
+    ) -> Tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+        """
+        Compute transformation matrices for a sensor.
+        Args:
+            sensor_sample_data_record: Sample data record of the sensor.
+            selected_sensor_to_ego_pose_matrix: Transformation matrix from the selected 
+              sensor to its' the ego pose.
+            selected_sensor_frame_ego_pose_to_global_matrix: Transformation matrix from the selected 
+              sensor frame ego pose to the global frame.
+        Returns:
+            Tuple of transformation matrices:
+              1. Sensor frame ego pose to global matrix (4x4)
+              2. Selected sensor to its' ego pose transformation matrix (4x4)
+        """
+        sensor_calibrated_sensor_record: CalibratedSensor = self.t4_devkit_dataset.get(
+            SchemaName.CALIBRATED_SENSOR,
+            sensor_sample_data_record.calibrated_sensor_token)
+        sensor_ego_pose_record: EgoPose = self.t4_devkit_dataset.get(
+            SchemaName.EGO_POSE, sensor_sample_data_record.ego_pose_token)
+
+        sensor_to_ego_pose_tranlation = sensor_calibrated_sensor_record.translation
+        sensor_to_ego_pose_rotation = sensor_calibrated_sensor_record.rotation
+
+        sensor_frame_ego_pose_to_global_translation = sensor_ego_pose_record.translation
+        sensor_frame_ego_pose_to_global_rotation = sensor_ego_pose_record.rotation
+
+        sensor_frame_ego_pose_to_global_matrix = convert_quaternion_to_matrix(
+            rotation_quaternion=sensor_frame_ego_pose_to_global_rotation,
+            translation=sensor_frame_ego_pose_to_global_translation,
+            convert_to_float32=False)
+
+        sensor_to_ego_pose_matrix = convert_quaternion_to_matrix(
+            rotation_quaternion=sensor_to_ego_pose_rotation,
+            translation=sensor_to_ego_pose_tranlation,
+            convert_to_float32=False)
+
+        # Compute the transformation matrix of sensor to the selected sensor coordinate
+        # Sensor -> sensor frame ego pose -> global -> selected sensor frame ego pose -> selected sensor
+        # For example, if the sensor is a lidar sweep, and the selected sensor is the top lidar sweep:
+        # Sweep -> sweep frame ego pose -> global -> top lidar frame ego pose -> top lidar
+        # Right-to-left multiplication:
+        sensor_to_selected_sensor_matrix = np.linalg.inv(
+            selected_sensor_to_ego_pose_matrix
+        ) @ np.linalg.inv(
+            selected_sensor_frame_ego_pose_to_global_matrix
+        ) @ sensor_frame_ego_pose_to_global_matrix @ sensor_to_ego_pose_matrix
+        return sensor_frame_ego_pose_to_global_matrix, sensor_to_selected_sensor_matrix
+
+    def _extract_lidar_sweep_info(
+        self, sample: Sample,
+        t4_sample_record_lidar_info: T4SampleRecordLidarInfo
+    ) -> T4SampleRecordLidarSweepInfo:
+        """
+        Extract multisweep lidar information from a T4 sample.
+        Args:
+            sample: Current T4 sample.
+            t4_sample_record_lidar_info: Current T4 sample lidar information.
+        Returns:
+            T4SampleRecordLidarInfo: T4 sample lidar sweep information 
+              corresponding to the current T4 sample.
+        """
+        current_lidar_sample_data_token = t4_sample_record_lidar_info.lidar_frame_id
+        lidar_sweep_frame_ids = []
+        lidar_sweep_timestamps_seconds = []
+        lidar_sweep_pointclouds_paths = []
+        lidar_sweep_ego_to_global_matrices = []
+        lidar_sweep_frame_ego_pose_to_global_matrices = []
+
+        current_sample_data_record: SampleData = self.t4_devkit_dataset.get(
+            SchemaName.SAMPLE_DATA, current_lidar_sample_data_token)
+
+        for i in range(self.max_sweeps):
+            # Stop processing if the current lidar sample data has no previous sample data
+            if not current_sample_data_record.prev:
+                break
+
+            current_lidar_sample_data_record: SampleData = current_sample_data_record.prev
+            lidar_sweep_frame_ids.append(
+                current_lidar_sample_data_record.token)
+            lidar_sweep_timestamps_seconds.append(
+                microseconds2seconds(
+                    current_lidar_sample_data_record.timestamp))
+            lidar_sweep_pointclouds_paths.append(
+                self.t4_devkit_dataset.get_sample_data_path(
+                    sample_data_token=current_lidar_sample_data_record.token))
+
+            # Get the current lidar sweep frame ego pose
+            sweep_frame_ego_pose_to_global_matrix, sweep_to_selected_sensor_matrix = self._compute_sensor_transformation_matrices(
+                sensor_sample_data_record=current_lidar_sample_data_record,
+                selected_sensor_to_ego_pose_matrix=t4_sample_record_lidar_info.
+                lidar_sensor_to_ego_pose_matrix,
+                selected_sensor_frame_ego_pose_to_global_matrix=
+                t4_sample_record_lidar_info.
+                lidar_frame_ego_pose_to_global_matrix,
+            )
+            lidar_sweep_ego_to_global_matrices.append(
+                sweep_frame_ego_pose_to_global_matrix)
+            lidar_sweep_frame_ego_pose_to_global_matrices.append(
+                sweep_to_selected_sensor_matrix)
+
+        return T4SampleRecordLidarSweepInfo(
+            lidar_sweep_frame_ids=lidar_sweep_frame_ids,
+            lidar_sweep_timestamps_seconds=lidar_sweep_timestamps_seconds,
+            lidar_sweep_pointclouds_paths=lidar_sweep_pointclouds_paths,
+            lidar_sweep_ego_to_global_matrices=
+            lidar_sweep_ego_to_global_matrices,
+            lidar_sweep_frame_ego_pose_to_global_matrices=
+            lidar_sweep_frame_ego_pose_to_global_matrices,
+        )
+
+    def extract_t4_sample_record(self, sample: Sample,
+                                 sample_index: int) -> T4SampleRecord:
         """Extract T4 sample record from a T4Dataset."""
 
         # First, extract basic information from the T4Dataset
-        basic_info = self._extract_basic_info(sample=sample, sample_index=sample_index)
+        basic_info = self._extract_basic_info(sample=sample,
+                                              sample_index=sample_index)
 
         # Second, extract lidar information from the T4Dataset
         lidar_info = self._extract_lidar_info(sample=sample)
-
+      
         # Third, extract multisweep lidar information from the T4Dataset
+        lidar_sweep_info = self._extract_lidar_sweep_info(sample=sample,
+                                                          t4_sample_record_lidar_info=lidar_info)
         # TODO (KokSeang): Extract more information, for example, boxes, from the T4Dataset.
         # Last, return the T4 sample record
         return T4SampleRecord(
             basic_info=basic_info,
             lidar_info=lidar_info,
+            lidar_sweep_info=lidar_sweep_info,
         )

@@ -25,7 +25,6 @@ class T4SampleRecordBasicInfo(BaseModel):
     location: str | None = None
     vehicle_type: str | None = None
 
-
 class T4SampleRecordLidarInfo(BaseModel):
     """Lidar information of a T4 sample record."""
 
@@ -40,9 +39,24 @@ class T4SampleRecordLidarInfo(BaseModel):
     lidar_frame_ego_pose_to_global_matrix: npt.NDArray[np.float64]  # (4, 4)
     boxes_3d: Sequence[Box3D]
 
-    def parse_lidar_path(self) -> str:
-        """Parse lidar path to {database_version}/{scene_id}/{dataset_version}/data/{lidar_token}/{frame}.bin from path."""
-        return "/".join(self.lidar_pointcloud_path.split("/")[-6:])
+class T4SampleRecordLidarSweepInfo(BaseModel):
+    """Multisweep lidar information of a T4 sample record."""
+
+    model_config = ConfigDict(frozen=True,
+                              strict=True,
+                              arbitrary_types_allowed=True)
+
+    lidar_sweep_frame_ids: Sequence[str]
+    lidar_sweep_timestamps_seconds: Sequence[float]
+    lidar_sweep_pointclouds_paths: Sequence[str]
+    lidar_sweep_ego_to_global_matrices: Sequence[npt.NDArray[
+        np.float64]]  # (4, 4)
+    lidar_sweep_frame_ego_pose_to_global_matrices: Sequence[npt.NDArray[
+        np.float64]]  # (4, 4)
+
+    def model_post_init(self, __context) -> None:
+        """ All attributes must be of the same length."""
+        assert len(self.lidar_sweep_frame_ids) == len(self.lidar_sweep_timestamps) == len(self.lidar_sweep_pointclouds_paths) == len(self.lidar_sweep_ego_to_global_matrices) == len(self.lidar_sweep_frame_ego_pose_to_global_matrices), "All attributes must be of the same length"
 
 
 class T4SampleRecord(BaseModel):
@@ -52,6 +66,12 @@ class T4SampleRecord(BaseModel):
 
     basic_info: T4SampleRecordBasicInfo
     lidar_info: T4SampleRecordLidarInfo
+    lidar_sweep_info: T4SampleRecordLidarSweepInfo
+
+    @staticmethod
+    def parse_lidar_pointcloud_path(lidar_pointcloud_path: str) -> str:
+        """Parse lidar pointcloud path to {database_version}/{scene_id}/{dataset_version}/data/{lidar_token}/{frame}.bin from path."""
+        return "/".join(lidar_pointcloud_path.split("/")[-6:])
 
     def to_dataset_record(self) -> DatasetRecord:
         """Convert T4 sample record to dataset record."""
@@ -67,9 +87,21 @@ class T4SampleRecord(BaseModel):
             # LiDAR Metadata
             lidar_frame_id=self.lidar_info.lidar_frame_id,
             lidar_sensor_id=self.lidar_info.lidar_sensor_id,
-            lidar_sensor_channel_name=self.lidar_info.lidar_sensor_channel_name,
-            lidar_pointcloud_path=self.lidar_info.parse_lidar_path(),
-            lidar_pointcloud_num_features=self.lidar_info.lidar_pointcloud_num_features,
-            lidar_sensor_to_ego_pose_matrix=self.lidar_info.lidar_sensor_to_ego_pose_matrix,
-            lidar_frame_ego_pose_to_global_matrix=self.lidar_info.lidar_frame_ego_pose_to_global_matrix,
+            lidar_sensor_channel_name=self.lidar_info.
+            lidar_sensor_channel_name,
+            lidar_pointcloud_path=self.parse_lidar_pointcloud_path(
+                self.lidar_info.lidar_pointcloud_path),
+            lidar_pointcloud_num_features=self.lidar_info.
+            lidar_pointcloud_num_features,
+            lidar_sensor_to_ego_pose_matrix=self.lidar_info.
+            lidar_sensor_to_ego_pose_matrix.astype(np.float32),
+            lidar_frame_ego_pose_to_global_matrix=self.lidar_info.
+            lidar_frame_ego_pose_to_global_matrix.astype(np.float32),
+
+            # Multisweep LiDAR Metadata
+            lidar_sweep_frame_ids=self.lidar_sweep_info.lidar_sweep_frame_ids,
+            lidar_sweep_timestamps_seconds=self.lidar_sweep_info.lidar_sweep_timestamps_seconds,
+            lidar_sweep_pointclouds_paths=[self.parse_lidar_pointcloud_path(path) for path in self.lidar_sweep_info.lidar_sweep_pointclouds_paths],
+            lidar_sweep_ego_to_global_matrices=self.lidar_sweep_info.lidar_sweep_ego_to_global_matrices.astype(np.float32),
+            lidar_sweep_frame_ego_pose_to_global_matrices=self.lidar_sweep_info.lidar_sweep_frame_ego_pose_to_global_matrices.astype(np.float32),
         )
