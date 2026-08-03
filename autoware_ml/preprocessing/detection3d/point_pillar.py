@@ -16,13 +16,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Sequence
 
 from jaxtyping import Float32
 import torch
 import torch.nn as nn
 
-from autoware_ml.ops.voxelization.voxelization import hard_voxelize
+from autoware_ml.datamodule.multi_task.dataclasses.multi_task_features import (
+    MultiTaskFeatures,
+    Detection3DFeatures,
+)
+from autoware_ml.ops.voxelization.voxelization import hard_voxelize, VoxelsData
 
 
 class PointPillarPreprocessor(nn.Module):
@@ -52,8 +56,8 @@ class PointPillarPreprocessor(nn.Module):
 
     def __init__(
         self,
-        voxel_size: list[float],
-        point_cloud_range: list[float],
+        voxel_size: Sequence[float],
+        point_cloud_range: Sequence[float],
         max_num_points: int,
         max_voxels: int,
         voxelization_z_order_first: bool = True,
@@ -69,11 +73,11 @@ class PointPillarPreprocessor(nn.Module):
         self.voxelization_z_order_first = voxelization_z_order_first
         self._default_point_channels = default_point_channels
 
-    def forward(self, batch_inputs_dict: dict[str, Any]) -> dict[str, Any]:
+    def forward(self, multi_task_features: MultiTaskFeatures) -> MultiTaskFeatures:
         """Voxelize batched point clouds and append pillar tensors.
 
         Args:
-            batch_inputs_dict: Batch dictionary containing a ``"points"`` key
+            multi_task_features: MultiTaskFeatures instance containing a ``"points"`` key
                 with a list of ``(N_i, C)`` point tensors.
 
         Returns:
@@ -84,35 +88,40 @@ class PointPillarPreprocessor(nn.Module):
             - ``"voxel_coords"`` - pillar coordinates ``(total_pillars, 4)`` in
               ``[batch, z, y, x]`` order, ``dtype=torch.int32``.
         """
-        points_list = batch_inputs_dict["points"]
-        outputs = dict(batch_inputs_dict)
-        if not points_list:
-            outputs["voxels"] = self.voxel_size.new_zeros(
-                (0, self.max_num_points, self._default_point_channels)
+        if multi_task_features.multi_task_gt_batch.point_cloud_gt_batch is None:
+            raise ValueError("MultiTaskFeatures must contain point cloud data for voxelization.")
+
+        points_list = multi_task_features.multi_task_gt_batch.point_cloud_gt_batch.points
+        if not len(points_list):
+            voxels_data = VoxelsData(
+                voxels=torch.zeros(
+                    (0, self.max_num_points, self._default_point_channels),
+                    device=self.voxel_size.device,
+                ),
+                num_points=torch.zeros((0,), device=self.voxel_size.device, dtype=torch.int32),
+                coords=torch.zeros((0, 3), device=self.voxel_size.device, dtype=torch.int32),
+                batch_indices=torch.zeros((0,), device=self.voxel_size.device, dtype=torch.int32),
             )
-            outputs["num_points"] = torch.zeros(
-                (0,), device=self.voxel_size.device, dtype=torch.int32
+            return MultiTaskFeatures(
+                multi_task_gt_batch=multi_task_features.multi_task_gt_batch,
+                detection3d_features=Detection3DFeatures(voxels_data=voxels_data),
             )
-            outputs["voxel_coords"] = torch.zeros(
-                (0, 4), device=self.voxel_size.device, dtype=torch.int32
+
+        if len(points_list) != len(
+            multi_task_features.multi_task_gt_batch.point_cloud_gt_batch.batch_indices
+        ):
+            raise ValueError(
+                "Length of points list must match length of batch indices in MultiTaskGTBatch."
             )
-            return outputs
 
         device = points_list[0].device
         voxel_size = self.voxel_size.to(device=device)
         point_cloud_range = self.point_cloud_range.to(device=device)
-
-        # Concat all points across a batch size to a single tensor for voxelization, but keep track of the batch index
-        # (N*B, point dimension)
-        points = torch.cat(points_list, dim=0)
-        # (N*B,) where each point has a batch index
-        points_batch_indices = torch.cat(
-            [
-                torch.full((p.shape[0],), i, device=device, dtype=torch.int32)
-                for i, p in enumerate(points_list)
-            ],
-            dim=0,
+        points = multi_task_features.multi_task_gt_batch.point_cloud_gt_batch.points
+        points_batch_indices = (
+            multi_task_features.multi_task_gt_batch.point_cloud_gt_batch.batch_indices
         )
+
         voxels_data = hard_voxelize(
             points,
             points_batch_indices=points_batch_indices,
@@ -124,24 +133,36 @@ class PointPillarPreprocessor(nn.Module):
 
         # Handle the case where no voxels are generated
         if not len(voxels_data.voxels):
-            outputs["voxels"] = points.new_zeros((0, self.max_num_points, points.shape[1]))
-            outputs["num_points"] = torch.zeros((0,), device=points.device, dtype=torch.int32)
-            outputs["voxel_coords"] = torch.zeros((0, 4), device=points.device, dtype=torch.int32)
-            return outputs
-
-        # Concat batch column to the voxel coordinates
-        batch_coords = torch.cat(
-            [voxels_data.batch_indices.unsqueeze(1), voxels_data.coords], dim=1
-        )
-        batch_voxels = voxels_data.voxels
-        batch_num_points = voxels_data.num_points
+            voxels_data = VoxelsData(
+                voxels=torch.zeros(
+                    (0, self.max_num_points, points.shape[1]),
+                    device=device,
+                ),
+                num_points=torch.zeros((0,), device=device, dtype=torch.int32),
+                coords=torch.zeros((0, 3), device=device, dtype=torch.int32),
+                batch_indices=torch.zeros((0,), device=device, dtype=torch.int32),
+            )
+            return MultiTaskFeatures(
+                multi_task_gt_batch=multi_task_features.multi_task_gt_batch,
+                detection3d_features=Detection3DFeatures(
+                    voxels_data=voxels_data,
+                ),
+            )
 
         # TODO (KokSeang): Remove this backward compatibility code in the future
         if self.voxelization_z_order_first:
-            # Transpose [x, y, z] to [z, y, x] for backward compatibility
-            batch_coords = batch_coords[:, [0, 3, 2, 1]].contiguous()
+            coords = voxels_data.coords[:, [2, 1, 0]].contiguous()
+            # Re-create the VoxelsData with the updated coords
+            voxels_data = VoxelsData(
+                voxels=voxels_data.voxels,
+                num_points=voxels_data.num_points,
+                coords=coords,
+                batch_indices=voxels_data.batch_indices,
+            )
 
-        outputs["voxels"] = batch_voxels
-        outputs["num_points"] = batch_num_points
-        outputs["voxel_coords"] = batch_coords
-        return outputs
+        return MultiTaskFeatures(
+            multi_task_gt_batch=multi_task_features.multi_task_gt_batch,
+            detection3d_features=Detection3DFeatures(
+                voxels_data=voxels_data,
+            ),
+        )
