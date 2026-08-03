@@ -30,6 +30,7 @@ class TestPointPillarScatter(unittest.TestCase):
         self.point_pillars_scatter = PointPillarsScatter(
             in_channels=8,
             output_shape=[16, 16],
+            batch_size=2,
         )
         self.pillar_features = torch.tensor(
             [
@@ -38,7 +39,6 @@ class TestPointPillarScatter(unittest.TestCase):
             ],
             dtype=torch.float32,
         )
-        self.batch_size = 2
         self.batch_indices = torch.tensor([0, 1], dtype=torch.int32)
         self.coords = torch.tensor([[1, 2, 0], [3, 4, 0]], dtype=torch.int32)
 
@@ -48,7 +48,6 @@ class TestPointPillarScatter(unittest.TestCase):
         outputs = self.point_pillars_scatter(
             pillar_features=self.pillar_features,
             coords=self.coords,
-            batch_size=self.batch_size,
             batch_indices=self.batch_indices,
         )
         self.assertEqual(outputs.shape, (2, 8, 16, 16))
