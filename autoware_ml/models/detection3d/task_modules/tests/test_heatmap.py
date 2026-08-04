@@ -18,7 +18,7 @@ import unittest
 
 import torch
 
-from autoware_ml.models.detection3d.task_modules.heatmap import vectorize_graussian_radius
+from autoware_ml.models.detection3d.task_modules.heatmap import vectorize_gaussian_radii
 
 
 class TestHeatmapUtilities(unittest.TestCase):
@@ -29,17 +29,17 @@ class TestHeatmapUtilities(unittest.TestCase):
         self.heights = torch.tensor([[1.0, 2.0, 3.2], [3.0, 4.8, 5.0]])
         self.min_overlap = 0.1
 
-    def test_vectorize_gaussian_radius(self) -> None:
-        """Test the vectorize_graussian_radius function."""
-        gaussian_radius = vectorize_graussian_radius(
+    def test_vectorize_gaussian_radii(self) -> None:
+        """Test the vectorize_gaussian_radii function."""
+        gaussian_radii = vectorize_gaussian_radii(
             widths=self.widths,
             heights=self.heights,
             min_overlap=self.min_overlap,
         )
 
-        self.assertEqual(gaussian_radius.shape, self.widths.shape)
-        expected_radius = torch.tensor([[0, 0, 1], [1, 1, 1]], dtype=torch.int32)
-        self.assertTrue(torch.allclose(gaussian_radius, expected_radius))
+        self.assertEqual(gaussian_radii.shape, self.widths.shape)
+        expected_radii = torch.tensor([[0, 0, 1], [1, 1, 1]], dtype=torch.int32)
+        self.assertTrue(torch.allclose(gaussian_radii, expected_radii))
 
 
 if __name__ == "__main__":
