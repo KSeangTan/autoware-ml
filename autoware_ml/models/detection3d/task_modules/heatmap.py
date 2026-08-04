@@ -207,16 +207,21 @@ def create_gaussian_heatmaps(
     _, max_num_bboxes, max_diameter, _ = batch_gaussians_2d.shape
 
     # global pixel coordinates of every kernel cell
-    # (0, 1, 2, ..., max_height-1)
+    # (0, 1, 2, ..., max_diameter-1)
     idx = torch.arange(max_diameter, device=device)  # (max_diameter,)
 
-    # (B, max_num_bboxes, 1) - (B, max_num_bboxes, 1) + (1, 1, max_height) -> (B, N, max_height)
+    # (B, max_num_bboxes, 1) - (B, max_num_bboxes, 1) + (1, 1, max_diameter) -> (B, N, max_diameter)
+    # From [center_y - radius, center_y + radius], for each box, broadcast to all boxes in the batch
     ys = centers[..., 1].unsqueeze(-1) - gaussian_radii.unsqueeze(-1) + idx
+    # From [center_x - radius, center_x + radius], for each box, broadcast to all boxes in the batch
     xs = centers[..., 0].unsqueeze(-1) - gaussian_radii.unsqueeze(-1) + idx
 
+    # meshgrid to get all combinations of (y, x) for each box in the batch
     # (B, max_num_bboxes, max_diameter, 1) -> (B, max_num_bboxes, max_diameter, max_diameter)
+    # All y-coordinates of the kernel cells for each box in the batch, broadcast to all x-coordinates
     yy = ys.unsqueeze(-1).expand(batch_size, max_num_bboxes, max_diameter, max_diameter)
     # (B, max_num_bboxes, max_diameter, 1) -> (B, max_num_bboxes, max_diameter, max_diameter)
+    # All x-coordinates of the kernel cells for each box in the batch, broadcast to all y-coordinates
     xx = xs.unsqueeze(-2).expand(batch_size, max_num_bboxes, max_diameter, max_diameter)
 
     # (B, max_num_bboxes, max_diameter, max_diameter)
