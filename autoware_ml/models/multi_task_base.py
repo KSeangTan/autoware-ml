@@ -1,0 +1,340 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Base model classes for Autoware-ML.
+
+This module defines shared Lightning model interfaces and helper abstractions
+used by task-specific model wrappers throughout the framework.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, NamedTuple, final
+from types import MappingProxyType
+
+from jaxtyping import Float32
+import lightning as L
+import torch
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
+
+from autoware_ml.datamodule.multi_task.dataclasses.multi_task_features import MultiTaskFeatures
+from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTBatch
+from autoware_ml.metrics.base import MetricSuite
+from autoware_ml.metrics.eval_mixin import MetricEvalMixin
+from autoware_ml.models.dataclasses.multi_task_outputs import MultiTaskOutputs
+from autoware_ml.models.dataclasses.multi_task_predictions import MultiTaskPredictions
+from autoware_ml.preprocessing.multi_task_data_preprocessor import MultiTaskDataPreprocessor
+from autoware_ml.types.dataset import SplitType
+from autoware_ml.utils.optimizer import build_lightning_optimizer_config
+
+
+class LogDictConfigs(NamedTuple):
+    """Configuration for logging metrics in Lightning.
+
+    Attributes:
+        prog_bar: Whether to log to the progress bar.
+        logger: Whether to log to the logger.
+        on_step: Whether to log on each step.
+        on_epoch: Whether to log on each epoch.
+        reduce_fx: Reduction function to apply to the logged metric.
+        sync_dist: Whether to synchronize across distributed processes.
+        batch_size: Optional batch size to use for logging. If None, the batch size will be inferred.
+        rank_zero_only: Whether to log only on rank zero in a distributed environment.
+    """
+
+    prog_bar: bool
+    logger: bool | None = None
+    on_step: bool | None = None
+    on_epoch: bool | None = None
+    reduce_fx: str = "mean"
+    sync_dist: bool = False
+    batch_size: int | None = None
+    rank_zero_only: bool = False
+
+
+class MultiTaskBaseModel(MetricEvalMixin, L.LightningModule):
+    """Base Lightning Module for all Autoware-ML models.
+
+    Provides common functionality for training, validation, and testing with
+    built-in support for flexible optimizer and scheduler configuration.
+    All parameters are explicitly typed for IDE support and type checking.
+    """
+
+    def __init__(
+        self,
+        data_preprocessor: MultiTaskDataPreprocessor,
+        log_dict_configs: LogDictConfigs,
+        optimizer: Callable[..., Optimizer] | None = None,
+        scheduler: Callable[[Optimizer], LRScheduler] | None = None,
+        optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
+        scheduler_config: Mapping[str, Any] | None = None,
+        metrics: Sequence[MetricSuite] | None = None,
+    ):
+        """Initialize base model.
+
+        Args:
+            data_preprocessor: Multi-task data preprocessor.
+            log_dict_configs: Configuration for logging metrics in Lightning.
+            optimizer: Callable that returns an optimizer when given model parameters.
+            scheduler: Callable that returns a scheduler when given the optimizer.
+            log_dict_configs: Configuration for logging metrics in Lightning.
+            optimizer_group_overrides: Optional optimizer overrides keyed by
+                model-defined optimizer group name.
+            scheduler_config: Optional Lightning scheduler metadata such as
+                ``interval`` or ``monitor``.
+            metrics: Task metrics accumulated during validation and test. Empty
+                or ``None`` logs only losses.
+        """
+        super().__init__(metrics=metrics)
+        self._data_preprocessor = data_preprocessor
+        self.optimizer_partial = optimizer
+        self.scheduler_partial = scheduler
+        self.optimizer_group_overrides = (
+            dict(optimizer_group_overrides) if optimizer_group_overrides else None
+        )
+        self.scheduler_config = dict(scheduler_config) if scheduler_config else {}
+        self.log_dict_configs = log_dict_configs
+
+    def on_after_batch_transfer(
+        self, batch: MultiTaskGTBatch, dataloader_idx: int
+    ) -> MultiTaskFeatures:
+        """Apply runtime preprocessing after Lightning moves a batch to device.
+
+        Args:
+            batch: Collated batch of type :class:`MultiTaskGTBatch` on the target device.
+            dataloader_idx: Lightning dataloader index.
+
+        Returns:
+            Batch of type :class:`MultiTaskFeatures` after runtime preprocessing.
+        """
+        return self._data_preprocessor(batch)
+
+    def decode_outputs(self, outputs: MultiTaskOutputs) -> MultiTaskPredictions:
+        """Convert raw model outputs into task-level predictions.
+
+        Task wrappers must override this when prediction-time outputs differ from
+        training-time outputs, for example to convert logits into probabilities
+        and labels.
+
+        Args:
+            outputs: Raw outputs returned by :meth:`forward`.
+
+        Returns:
+            Task-level predictions.
+        """
+        raise NotImplementedError("Model must implement decode_outputs()")
+
+    def build_optimizer_groups(self) -> Mapping[str, Sequence[torch.nn.Parameter]]:
+        """Return structural optimizer groups for the model.
+
+        Models that do not need custom grouping use a single ``default`` group.
+        Models with optimizer-group-specific tuning can override this hook.
+
+        Returns:
+            Mapping from optimizer group names to parameter sequences.
+        """
+        return {
+            "default": [parameter for parameter in self.parameters() if parameter.requires_grad]
+        }
+
+    def forward(self, multi_task_features: MultiTaskFeatures) -> MultiTaskOutputs:
+        """Forward pass of the model.
+
+        Subclasses must follow the signature of this method and return a dataclass containing
+        all model outputs. Users must add new implementations to MultiTaskFeatures and MultiTaskOutputs
+        when supporting new types of tasks to the multi-task model.
+        The default implementation raises a NotImplementedError.
+
+        Args:
+            multi_task_features: Batch of type :class:`MultiTaskFeatures` containing
+                multi-task inputs.
+
+        Returns:
+            Model outputs.
+        """
+        raise NotImplementedError("Model must implement forward()")
+
+    def compute_metrics(
+        self, multi_task_features: MultiTaskFeatures, multi_task_outputs: MultiTaskOutputs
+    ) -> MappingProxyType[str, Float32[torch.Tensor, " 1"]]:
+        """Compute metrics.
+
+        Args:
+            multi_task_features: Full batch dictionary after runtime preprocessing.
+            outputs: Model outputs from forward().
+
+        Returns:
+            ModelMetrics instance containing computed metrics.
+            The ``loss`` field is required. Note that users must register metrics in
+            the DataClass for proper logging and checkpointing.
+        """
+        raise NotImplementedError("Model must implement compute_metrics()")
+
+    def get_log_batch_size(self, multi_task_features: MultiTaskFeatures) -> int | None:
+        """Infer the effective sample batch size for logging.
+
+        It searches for all available inputs in ``MultiTaskFeatures`` to infer the sample count.
+        Models with non-standard input structures should override this hook to provide an
+        explicit sample count.
+
+        Args:
+            multi_task_features: Full batch dictionary from the dataloader.
+
+        Returns:
+            Sample batch size when it can be inferred, otherwise ``None``.
+        """
+        return multi_task_features.multi_task_gt_batch.infer_batch_size()
+
+    def _core_step(
+        self,
+        multi_task_features: MultiTaskFeatures,
+        step_prefix: str,
+    ) -> tuple[MappingProxyType[str, Float32[torch.Tensor, " 1"]], MultiTaskOutputs]:
+        """
+        Core step shared by training, validation, and test. It runs one forward pass,
+        computes metrics, and logs them.
+
+        Args:
+            multi_task_features: Full batch dictionary from the dataloader.
+            step_prefix: Prefix for logging (train, val, test).
+
+        Returns:
+            Tuple of the metric dictionary (as a ``MappingProxyType``) and the raw model outputs.
+            The metric dictionary contains at least a ``"loss"`` key.
+        """
+        outputs = self(multi_task_features)
+        metrics = self.compute_metrics(multi_task_features, outputs)
+        if "loss" not in metrics:
+            raise ValueError("compute_metrics() must return a dict containing a 'loss' key.")
+        batch_size = self.get_log_batch_size(multi_task_features)
+        self.log_dict(
+            {f"{step_prefix}/{k}": v for k, v in metrics.items()},
+            prog_bar=self.log_dict_configs.prog_bar,
+            logger=self.log_dict_configs.logger,
+            on_step=self.log_dict_configs.on_step,
+            on_epoch=self.log_dict_configs.on_epoch,
+            reduce_fx=self.log_dict_configs.reduce_fx,
+            sync_dist=self.log_dict_configs.sync_dist,
+            batch_size=batch_size,
+            rank_zero_only=self.log_dict_configs.rank_zero_only,
+        )
+        return metrics, outputs
+
+    @final
+    def training_step(
+        self, multi_task_features: MultiTaskFeatures, batch_idx: int
+    ) -> Float32[torch.Tensor, " 1"]:
+        """
+        Training step.
+
+        Args:
+            multi_task_features: Inputs/features from multiple samples in the current batch
+                required for the model.
+            batch_idx: Current batch index.
+
+        Returns:
+            Total loss tensor required for backpropagation.
+        """
+        metrics, _ = self._core_step(
+            multi_task_features,
+            step_prefix=SplitType.TRAIN,
+        )
+        return metrics["loss"]
+
+    @final
+    def validation_step(
+        self, multi_task_features: MultiTaskFeatures, batch_idx: int
+    ) -> dict[str, Any]:
+        """
+        Validation step.
+
+        Args:
+            multi_task_features: Inputs/features from multiple samples in the current batch
+                required for the model.
+            batch_idx: Current batch index.
+
+        Returns:
+            Dictionary with at least a ``"loss"`` key and a ``"model_outputs"``
+            key containing the raw forward outputs. The raw outputs are available
+            to ``on_validation_batch_end`` for epoch-level metric accumulation.
+        """
+        metrics, outputs = self._core_step(
+            multi_task_features,
+            step_prefix=SplitType.VAL,
+        )
+        # TODO (KokSeang): Return a dataclass instead of a dict for better type safety and clarity.
+        return {**metrics, "model_outputs": outputs}
+
+    @final
+    def test_step(self, multi_task_features: MultiTaskFeatures, batch_idx: int) -> dict[str, Any]:
+        """Test step.
+
+        Args:
+            multi_task_features: Inputs/features from multiple samples in the current batch
+                required for the model.
+            batch_idx: Batch index.
+
+        Returns:
+            Dictionary with at least a ``"loss"`` key and a ``"model_outputs"``
+            key containing the raw forward outputs.
+        """
+        metrics, outputs = self._core_step(
+            multi_task_features,
+            step_prefix=SplitType.TEST,
+        )
+        # TODO (KokSeang): Return a dataclass instead of a dict for better type safety and clarity.
+        return {**metrics, "model_outputs": outputs}
+
+    @final
+    def predict_step(
+        self, multi_task_features: MultiTaskFeatures, batch_idx: int
+    ) -> MultiTaskPredictions:
+        """Prediction step.
+
+        Args:
+            multi_task_features: Inputs/features from multiple samples in the current batch
+                required for the model.
+            batch_idx: Batch index.
+
+        Returns:
+            Predictions after decoding the raw model outputs.
+        """
+        outputs = self(multi_task_features)
+        return self.decode_outputs(outputs)
+
+    def configure_optimizers(self) -> Optimizer | dict[str, Any]:
+        """Configure optimizers and schedulers.
+
+        Scheduler behavior such as ``interval``, ``frequency``, and ``monitor``
+        is configured explicitly through ``scheduler_config``. The framework
+        only auto-fills ``total_steps`` when the configured scheduler declares
+        that argument and it was not already bound in the scheduler factory.
+
+        Returns:
+            Optimizer instance or Lightning optimizer configuration dictionary.
+        """
+        if self.optimizer_partial is None:
+            raise ValueError("Optimizer must be provided.")
+        return build_lightning_optimizer_config(
+            self,
+            self.optimizer_partial,
+            self.scheduler_partial,
+            optimizer_group_overrides=self.optimizer_group_overrides,
+            scheduler_config=self.scheduler_config,
+            estimated_stepping_batches=self.trainer.estimated_stepping_batches
+            if self._trainer is not None
+            else None,
+        )

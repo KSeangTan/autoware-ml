@@ -31,13 +31,13 @@ class Detection3DGTBatch(NamedTuple):
     """
 
     # (batch_size, maximum number of bboxes, num_Box3DFieldIndex)
-    gt_bboxes_3d: Float32[Tensor, "batch_size max_num_3d_gt_bboxes num_Box3DFieldIndex"] | None
+    gt_bboxes_3d: Float32[Tensor, "batch_size max_num_3d_gt_bboxes num_Box3DFieldIndex"]
     # (batch_size, maximum number of bboxes)
-    gt_labels_3d: Int32[Tensor, "batch_size max_num_3d_gt_bboxes"] | None
+    gt_labels_3d: Int32[Tensor, "batch_size max_num_3d_gt_bboxes"]
     # (batch_size, ), number of valid bboxes for each sample in the batch
-    gt_valid_bboxes: (
-        Int32[Tensor, " batch_size"] | None
-    )  # (B, ), number of maximum valid bboxes for each sample.
+    gt_valid_bboxes: Int32[
+        Tensor, " batch_size"
+    ]  # (B, ), number of maximum valid bboxes for each sample.
 
     @staticmethod
     def collate_gt_samples(
