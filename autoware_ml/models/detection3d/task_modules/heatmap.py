@@ -133,8 +133,8 @@ def create_gaussian_heatmaps(
     Create per-class heatmaps with Gaussian blobs for all valid boxes, fully vectorized
     in a batch.
 
-    For each valid box, a 2D Gaussian kernel of size ``(2 * radius + 1)`` with
-    ``sigma = radius / 6`` is drawn onto the heatmap channel of its class label,
+    For each valid box, a 2D Gaussian kernel of size ``diameter = (2 * radius + 1)`` with
+    ``sigma = diameter / 6`` is drawn onto the heatmap channel of its class label,
     centered at the given ``(x, y)`` center. Where blobs overlap (or a blob overlaps
     existing values), the element-wise maximum is kept, matching the standard max-splat.
 
@@ -197,7 +197,7 @@ def create_gaussian_heatmaps(
     batch_gaussians_2d = _vectorize_gaussian2d(
         heights=diameters,
         widths=diameters,
-        sigmas=gaussian_radii / 6.0,
+        sigmas=diameters / 6.0,
         valid_masks=valid_masks,
         device=device,
         dtype=torch.float32,
