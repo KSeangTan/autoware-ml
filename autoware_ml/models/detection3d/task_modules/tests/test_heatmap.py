@@ -328,7 +328,7 @@ class TestCreateGaussianHeatmap(unittest.TestCase):
         self.assertTrue(torch.allclose(gaussian_heatmaps, self.expected_heatmap, atol=1e-4))
 
     def test_create_gaussian_heatmaps_with_invalid_mask(self) -> None:
-        """Test create_gaussian_heatmap function with 8x8 output but different sigma for each inputs."""
+        """Test create_gaussian_heatmap function with 8x8 output with invalid bboxes."""
         gaussian_heatmaps = create_gaussian_heatmaps(
             heatmap_width=self.heatmap_width,
             heatmap_height=self.heatmap_height,
