@@ -116,7 +116,7 @@ class CenterHead(nn.Module):
 
         self.shared_conv = ConvModule(in_channels, shared_channels)
         self.heatmap = self._build_head(shared_channels, num_classes, init_bias=heatmap_init_bias)
-        self.reg = self._build_head(shared_channels, 2)
+        self.regs = self._build_head(shared_channels, 2)
         self.height = self._build_head(shared_channels, 1)
         self.dim = self._build_head(shared_channels, 3)
         self.rot = self._build_head(shared_channels, 2)
@@ -143,7 +143,7 @@ class CenterHead(nn.Module):
         """Predict dense heatmap and regression maps."""
         shared = self.shared_conv(x)  # (Batch_size, shared_channels, height, width)
         heatmaps = self.heatmap(shared)  # (Batch_size, num_classes, height, width)
-        regs = self.reg(shared)  # (Batch_size, 2, height, width)
+        centers = self.regs(shared)  # (Batch_size, 2, height, width)
         heights = self.height(shared)  # (Batch_size, 1, height, width)
         dims = self.dim(shared)  # (Batch_size, 3, height, width)
         rots = self.rot(shared)  # (Batch_size, 2, height, width)
@@ -152,7 +152,7 @@ class CenterHead(nn.Module):
         )  # (Batch_size, 2, height, width) or None
 
         return CenterHeadOutputs(
-            heatmaps=heatmaps, regs=regs, heights=heights, dims=dims, rots=rots, vels=vels
+            heatmaps=heatmaps, centers=centers, heights=heights, dims=dims, rots=rots, vels=vels
         )
 
     def get_targets(
@@ -217,7 +217,8 @@ class CenterHead(nn.Module):
             widths=lengths,
             heights=widths,
             min_overlap=self.gaussian_overlap,
-        )
+        ).to(device)
+
         center = torch.stack((center_x, center_y), dim=-1)
         # (batch_size, max_num_bboxes, 2)
         center_int = center.floor().to(torch.long)
@@ -237,7 +238,7 @@ class CenterHead(nn.Module):
             (center_x - center_int[:, :, 0].floor(), center_y - center_int[:, :, 1].floor()), dim=-1
         )
         # Convert to log-space for dimension targets to stabilize training
-        dim_targets = gt_bboxes_3d[:, :, Box3DFieldIndex.LENGTH : Box3DFieldIndex.HEIGHT].log()
+        dim_targets = gt_bboxes_3d[:, :, Box3DFieldIndex.LENGTH : Box3DFieldIndex.HEIGHT + 1].log()
         heading_targets = torch.stack(
             (
                 torch.sin(gt_bboxes_3d[:, :, Box3DFieldIndex.YAW]),
@@ -245,10 +246,12 @@ class CenterHead(nn.Module):
             ),
             dim=-1,
         )
+        height_targets = gt_bboxes_3d[:, :, Box3DFieldIndex.Z].unsqueeze(-1)
+
         # (batch_size, max_num_bboxes, 2 + 1 + 3 + 2) if not velocity else
         # (batch_size, max_num_bboxes, 2 + 1 + 3 + 2 + 2)
         reg_targets = torch.cat(
-            [center_targets, gt_bboxes_3d[:, :, Box3DFieldIndex.Z], dim_targets, heading_targets],
+            [center_targets, height_targets, dim_targets, heading_targets],
             dim=-1,
         )
 
@@ -304,7 +307,7 @@ class CenterHead(nn.Module):
         loss_heatmap = self.loss_heatmap(output_heatmaps, targets.heatmaps)
 
         bbox_predictions = [
-            outputs.center_head_outputs.regs,
+            outputs.center_head_outputs.centers,
             outputs.center_head_outputs.heights,
             outputs.center_head_outputs.dims,
             outputs.center_head_outputs.rots,
@@ -326,8 +329,10 @@ class CenterHead(nn.Module):
         )
 
         # Average over the number of valid bounding boxes and avoid division by zero
-        bbox_losses = bbox_losses.sum() / bbox_valid_masks.sum().clamp_min(1.0)
-        total_loss = loss_heatmap + self.loss_bbox_weight * bbox_losses
+        bbox_losses = self.loss_bbox_weight * (
+            bbox_losses.sum() / bbox_valid_masks.sum().clamp_min(1.0)
+        )
+        total_loss = loss_heatmap + bbox_losses
         # MappingProxyType is used to create a read-only dictionary for the loss outputs
         return MappingProxyType(
             {"loss": total_loss, "loss_heatmap": loss_heatmap, "loss_bbox": bbox_losses}
@@ -337,7 +342,6 @@ class CenterHead(nn.Module):
         self,
         center_head_outputs: CenterHeadOutputs,
         flatten_indices: Int64[torch.Tensor, "batch_size max_num_bboxes"],
-        batch_size: int,
         width: int,
     ) -> Float32[torch.Tensor, "batch_size num_classes*max_num_bboxes box_code_size"]:
         """
@@ -356,58 +360,52 @@ class CenterHead(nn.Module):
         ys = torch.div(flatten_indices, width, rounding_mode="floor")
         xs = flatten_indices % width
 
-        # (batch_size, 2, height, width) -> (batch_size, height, width, 2) -> (batch_size, height*width, 2) -> (batch_size, num_classes*max_num_bboxes, 2)
-        regs = center_head_outputs.regs.permute(0, 2, 3, 1).reshape(batch_size, -1, 2)[
-            flatten_indices
-        ]
+        # flatten_indices holds positions along the flattened feature map, so each map has to
+        # be gathered along its height*width axis per sample.
+        # (batch_size, 2, height, width) -> (batch_size, num_classes*max_num_bboxes, 2)
+        centers = _transpose_and_gather_feat(center_head_outputs.centers, flatten_indices)
         # (batch_size, num_classes*max_num_bboxes, 1)
-        heights = center_head_outputs.heights.permute(0, 2, 3, 1).reshape(batch_size, -1, 1)[
-            flatten_indices
-        ]
+        heights = _transpose_and_gather_feat(center_head_outputs.heights, flatten_indices)
         # (batch_size, num_classes*max_num_bboxes, 3)
-        dims = center_head_outputs.dims.permute(0, 2, 3, 1).reshape(batch_size, -1, 3)[
-            flatten_indices
-        ]
+        dims = _transpose_and_gather_feat(center_head_outputs.dims, flatten_indices)
         # Convert log-dimensions back to actual dimensions
         dims = dims.exp()
         # (batch_size, num_classes*max_num_bboxes, 2)
-        rots = center_head_outputs.rots.permute(0, 2, 3, 1).reshape(batch_size, -1, 2)[
-            flatten_indices
-        ]
+        rots = _transpose_and_gather_feat(center_head_outputs.rots, flatten_indices)
         vels = center_head_outputs.vels if self.use_velocity else None
         if vels is not None:
             # (batch_size, num_classes*max_num_bboxes, 2)
-            vels = vels.permute(0, 2, 3, 1).reshape(batch_size, -1, 2)[flatten_indices]
+            vels = _transpose_and_gather_feat(vels, flatten_indices)
 
         # Compute yaws with atan2
         # (batch_size, num_classes*max_num_bboxes, 1)
-        batch_yaws = torch.atan2(rots[:, :, 0], rots[:, :, 1]).unsqueeze(1)
+        batch_yaws = torch.atan2(rots[:, :, 0], rots[:, :, 1]).unsqueeze(-1)
         # Add center translation offsets to their x and y grid and convert them from bev-grid representation to the lidar physical representation
         # (batch_size, num_classes*max_num_bboxes, 1)
-        batch_xs = (xs.to(regs.dtype) + regs[:, :, 0]).unsqueeze(
+        batch_xs = (xs.to(centers.dtype) + centers[:, :, 0]).unsqueeze(
             2
         ) * self.out_size_factor * self.voxel_size[0] + self.point_cloud_range[0]
-        batch_ys = (ys.to(regs.dtype) + regs[:, :, 1]).unsqueeze(
+        batch_ys = (ys.to(centers.dtype) + centers[:, :, 1]).unsqueeze(
             2
         ) * self.out_size_factor * self.voxel_size[1] + self.point_cloud_range[1]
 
         # (1+1+1+3+1) = 7 or (1+1+1+3+1+2) = 9
-        bbox_predictions = [batch_xs, batch_ys, heights, dims, batch_yaws]
+        bboxes_predictions = [batch_xs, batch_ys, heights, dims, batch_yaws]
         if vels is not None:
-            bbox_predictions.append(vels)
+            bboxes_predictions.append(vels)
         # (batch_size, num_classes*max_num_bboxes, 7 or 9)
-        bbox_predictions = torch.cat(bbox_predictions, dim=2)
+        bboxes_predictions = torch.cat(bboxes_predictions, dim=2)
 
-        assert bbox_predictions.shape[2] == self.box_code_size, (
-            f"Expected bbox_predictions to have shape[2] == {self.box_code_size}, "
-            f"but got {bbox_predictions.shape[2]}"
+        assert bboxes_predictions.shape[2] == (self.box_code_size - 1), (
+            f"Expected bboxes_predictions to have shape[2] == {self.box_code_size - 1}, "
+            f"but got {bboxes_predictions.shape[2]}"
         )
-        return bbox_predictions
+        return bboxes_predictions
 
     def _filter_bbox_predictions(
         self,
-        bbox_predictions: Float32[
-            torch.Tensor, "batch_size num_classes max_num_bboxes box_code_size"
+        flatten_bboxes_predictions: Float32[
+            torch.Tensor, "batch_size num_classes*max_num_bboxes box_code_size"
         ],
         scores: Float32[torch.Tensor, "batch_size num_classes max_num_bboxes"],
         class_ids: Int64[torch.Tensor, "batch_size num_classes max_num_bboxes"],
@@ -419,54 +417,49 @@ class CenterHead(nn.Module):
         Filter the predictions based on the keep_masks and return a MultiTaskPredictions object.
         """
         # (batch_size, num_classes, max_num_bboxes) -> (batch_size, num_classes*max_num_bboxes)
-        flatten_keep_masks = keep_masks.view(batch_size, -1)
-        # Return empty list of predictions if no valid bboxes remain after filtering
-        if flatten_keep_masks.sum() == 0:
-            return MultiTaskPredictions(detection3d_predictions=[])
+        flatten_keep_masks = keep_masks.reshape(batch_size, -1)
+        flatten_scores = scores.reshape(batch_size, -1)
+        flatten_class_ids = class_ids.reshape(batch_size, -1)
 
+        # Each sample keeps a different number of boxes, so boolean indexing cannot produce a
+        # rectangular batch here. Sinking the suppressed scores instead keeps the selection
+        # batched, and the survivors are recovered from the keep mask further down.
         # (batch_size, num_classes*max_num_bboxes)
-        valid_flatten_scores = scores.view(batch_size, -1)[flatten_keep_masks]
-        # Get the top-k indices based on the valid scores across classes
-        # (batch_size, num_topk_indices)
-        _, topk_indices = torch.topk(
-            valid_flatten_scores, k=max_num_bboxes, largest=True, sorted=True, dim=1
-        )
-        # Select the scores corresponding to the top-k indices
-        # (batch_size, num_topk_indices)
-        valid_keep_flatten_scores = torch.gather(valid_flatten_scores, dim=1, index=topk_indices)
+        masked_flatten_scores = flatten_scores.masked_fill(~flatten_keep_masks, -torch.inf)
 
-        # (batch_size, num_classes*max_num_bboxes)
-        valid_flatten_class_ids = class_ids.view(batch_size, -1)[flatten_keep_masks]
-        # Select the class ids corresponding to the top-k indices
+        # Rank what survived NMS across all classes and cap the sample at max_num_bboxes.
         # (batch_size, num_topk_indices)
-        valid_keep_flatten_class_ids = torch.gather(
-            valid_flatten_class_ids, dim=1, index=topk_indices
+        num_topk_indices = min(max_num_bboxes, masked_flatten_scores.shape[1])
+        keep_flatten_scores, topk_indices = torch.topk(
+            masked_flatten_scores, k=num_topk_indices, largest=True, sorted=True, dim=1
         )
+        # (batch_size, num_topk_indices)
+        keep_flatten_class_ids = torch.gather(flatten_class_ids, dim=1, index=topk_indices)
+        # A slot is only a real detection when the box behind it survived NMS. Samples with
+        # fewer survivors than num_topk_indices pad the tail with suppressed slots.
+        # (batch_size, num_topk_indices)
+        topk_keep_masks = torch.gather(flatten_keep_masks, dim=1, index=topk_indices)
 
         # (batch_size, num_classes*max_num_bboxes, box_code_size)
-        valid_bbox_prediction_masks = flatten_keep_masks.unsqueeze(-1).expand_as(bbox_predictions)
-        valid_flatten_bbox_predictions = bbox_predictions.view(batch_size, -1, self.box_code_size)[
-            valid_bbox_prediction_masks
-        ]
+        # flatten_bbox_predictions = bboxes_predictions.reshape(batch_size, -1, self.box_code_size)
         # (batch_size, num_topk_indices, box_code_size)
-        valid_keep_flatten_bbox_predictions = torch.gather(
-            valid_flatten_bbox_predictions,
+        code_size = flatten_bboxes_predictions.shape[2]
+        keep_flatten_bbox_predictions = torch.gather(
+            flatten_bboxes_predictions,
             dim=1,
-            index=topk_indices.unsqueeze(-1).expand(-1, -1, self.box_code_size),
+            index=topk_indices.unsqueeze(-1).expand(-1, -1, code_size),
         )
 
-        # Iterate over the batch and create a list of Detection3dPredictions for each sample
+        # Iterate over the batch and create a list of Detection3dPredictions for each sample.
+        # The ragged padding is dropped here, where per-sample tensors are allowed to differ.
         detection3d_predictions = []
         for batch_index in range(batch_size):
-            keep_flatten_scores = valid_keep_flatten_scores[batch_index]
-            keep_flatten_class_ids = valid_keep_flatten_class_ids[batch_index]
-            keep_flatten_bbox_predictions = valid_keep_flatten_bbox_predictions[batch_index]
-
+            sample_keep_masks = topk_keep_masks[batch_index]
             detection3d_predictions.append(
                 Detection3DPredictions(
-                    bboxes_3d=keep_flatten_bbox_predictions,
-                    scores_3d=keep_flatten_scores,
-                    labels_3d=keep_flatten_class_ids,
+                    bboxes_3d=keep_flatten_bbox_predictions[batch_index][sample_keep_masks],
+                    scores_3d=keep_flatten_scores[batch_index][sample_keep_masks],
+                    labels_3d=keep_flatten_class_ids[batch_index][sample_keep_masks],
                 )
             )
 
@@ -520,19 +513,25 @@ class CenterHead(nn.Module):
         # (batch_size, num_classes*max_num_bboxes)
         flatten_indices = top_indices.reshape(batch_size, -1)
 
-        bbox_predictions = self._decode_regression_outputs(
+        # (batch_size, num_classes*max_num_bboxes, box_code_size)
+        flatten_bboxes_predictions = self._decode_regression_outputs(
             center_head_outputs=outputs.center_head_outputs,
             flatten_indices=flatten_indices,
-            batch_size=batch_size,
             width=width,
         )
         valid_bboxes_masks = top_scores > self.score_threshold
-        bbox_centers = bbox_predictions[:, :, :2]
+        # batch_circle_nms works per class row, so the flattened box axis is split back into
+        # (num_classes, max_num_bboxes) to line up with the scores and class ids.
+        # (batch_size, num_classes*max_num_bboxes, box_code_size)
+        #   -> (batch_size, num_classes, max_num_bboxes, 2)
+        bboxes_centers = flatten_bboxes_predictions[:, :, :2].reshape(
+            batch_size, num_classes, max_num_bboxes, 2
+        )
         # (batch_size, num_classes, max_num_bboxes)
         # Note that batch_keep_masks includes the valid_bboxes_masks, so it doesn't need to apply it
         # again after NMS
         keep_masks = batch_circle_nms(
-            bboxes_centers=bbox_centers,
+            bboxes_centers=bboxes_centers,
             scores=top_scores,
             bboxes_labels=class_ids,
             valid_bboxes_masks=valid_bboxes_masks,
@@ -541,7 +540,7 @@ class CenterHead(nn.Module):
         )
         # Filter the predictions based on the keep_masks and return MultiTaskPredictions
         multi_task_predictions = self._filter_bbox_predictions(
-            bbox_predictions=bbox_predictions,
+            flatten_bboxes_predictions=flatten_bboxes_predictions,
             scores=top_scores,
             class_ids=class_ids,
             keep_masks=keep_masks,

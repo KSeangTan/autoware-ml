@@ -32,7 +32,7 @@ class CenterHeadOutputs(BaseModel):
 
     Attributes:
       heatmaps: Heatmap to save probability for each class in a BEV heatmap.
-      regs: Center_x and center_y translation from each cell in a BEV heatmap.
+      centers: Center_x and center_y translation from each cell in a BEV heatmap.
       heights: Height value from each cell in a BEV heatmap.
       dims: Dimension values (length, width, height) from each cell in a BEV heatmap.
       rots: Rotation values (sin, cos) from each cell in a BEV heatmap
@@ -41,7 +41,7 @@ class CenterHeadOutputs(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
     heatmaps: Float32[torch.Tensor, "batch_size num_classes height width"]
-    regs: Float32[torch.Tensor, "batch_size 2 height width"]
+    centers: Float32[torch.Tensor, "batch_size 2 height width"]
     heights: Float32[torch.Tensor, "batch_size 1 height width"]
     dims: Float32[torch.Tensor, "batch_size 3 height width"]
     rots: Float32[torch.Tensor, "batch_size 2 height width"]
