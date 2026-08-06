@@ -12,6 +12,103 @@ import math
 import torch
 
 
+def batch_circle_nms(
+    bboxes_centers: Float32[torch.Tensor, "batch_size num_classes max_num_boxes 2"],
+    scores: Float32[torch.Tensor, "batch_size num_classes max_num_boxes"],
+    bboxes_labels: Int64[torch.Tensor, "batch_size num_classes max_num_boxes"],
+    min_radius: float,
+    valid_bboxes_masks: Bool[torch.Tensor, "batch_size num_classes max_num_boxes"],
+    post_max_size: int,
+) -> Bool[torch.Tensor, "batch_size num_classes max_num_boxes"]:
+    """
+    Apply greedy center-distance NMS across batch and classes in the BEV plane.
+    This NMS checks only if two valid bboxes from the same classes heavily overlap by their
+    L2 center distance without considering their box dimensions and orientations.
+    Note that this NMS assumes bboxes is ordered by classes.
+
+    Args:
+        bboxes_centers: Decoded box centers in metric space.
+        scores: Confidence scores for the boxes.
+        bboxes_labels: Labels for the boxes.
+        min_radius: Minimum center distance for suppression.
+        valid_bboxes_masks: Boolean mask indicating which boxes are valid and should be considered for NMS.
+        post_max_size: Maximum number of boxes kept after suppression, counted per class.
+
+    Returns:
+        Boolean mask of the boxes kept after suppression, aligned with the input order.
+    """
+    batch_size, num_classes, max_num_bboxes = scores.shape
+    num_dimensions = bboxes_centers.shape[-1]
+
+    # Invalid boxes always included
+    # (batch_size, num_classes, max_num_bboxes)
+    orders = scores.argsort(dim=2, descending=True, stable=True)
+    sorted_bboxes_valid_masks = torch.gather(valid_bboxes_masks, index=orders, dim=2)
+    sorted_bboxes_labels = torch.gather(bboxes_labels, index=orders, dim=2)
+    # (batch_size, num_classes, max_num_bboxes) -> (batch_size, num_classes, max_num_bboxes, 2)
+    center_indices = orders.unsqueeze(-1).expand(-1, -1, -1, num_dimensions)
+    sorted_bboxes_centers = torch.gather(bboxes_centers, index=center_indices, dim=2)
+
+    # Pairwise center distances.The matmul-based distance path is disabled to match the elementwise.
+    # (batch_size, num_classes, max_num_bboxes, 2) -> (batch_size, num_classes*max_num_bboxes, 2) ->
+    # (batch_size, num_classes, max_num_bboxes, max_num_bboxes)
+    flatten_bboxes_centers = sorted_bboxes_centers.reshape(-1, max_num_bboxes, num_dimensions)
+    pairwise_distances = torch.cdist(
+        flatten_bboxes_centers,
+        flatten_bboxes_centers,
+        p=2.0,
+        compute_mode="donot_use_mm_for_euclid_dist",
+    ).view(batch_size, num_classes, max_num_bboxes, max_num_bboxes)
+
+    # A pair may only suppress when both boxes share a label.
+    # (batch_size, num_classes, max_num_bboxes, max_num_bboxes)
+    pairwise_labels = sorted_bboxes_labels.unsqueeze(-1) == sorted_bboxes_labels.unsqueeze(-2)
+
+    # Keeps a box only when its center distance is strictly greater than min_radius.
+    # (batch_size, num_classes, max_num_bboxes, max_num_bboxes)
+    pairwise_suppression = (pairwise_distances <= min_radius) & pairwise_labels
+
+    # Only a higher scoring box may suppress a lower scoring one. After the descending sort
+    # that is exactly the strict upper triangle.
+    # Setting triu(diagonal=1) ensures that a box does not suppress itself.
+    # (max_num_bboxes, max_num_bboxes)
+    higher_score_masks = torch.ones(
+        (max_num_bboxes, max_num_bboxes), dtype=torch.bool, device=scores.device
+    ).triu(diagonal=1)
+    pairwise_suppression &= higher_score_masks.view(1, 1, max_num_bboxes, max_num_bboxes)
+
+    # Greedy suppression is sequential by nature, because whether a box survives depends on
+    # previous suppression results, for example, A -> B -> C, where A suppresses B and B suppresses
+    # C, but A does not suppress C directly.
+    # (batch_size, num_classes, max_num_bboxes)
+    candidate_masks = sorted_bboxes_valid_masks.clone()
+    sorted_keep_masks = torch.zeros_like(candidate_masks)
+
+    # Loop over bboxes across batch and class dimensions.
+    for rank in range(max_num_bboxes):
+        # First, move the valid status of the current rank to the keep mask.
+        # (batch_size, num_classes)
+        kept_masks = candidate_masks[:, :, rank]
+        sorted_keep_masks[:, :, rank] = kept_masks
+        # Next, check if the current rank suppresses any bboxes.
+        # (kept_masks.unsqueeze(-1) & pairwise_suppression[:, :, rank, :]) is only True when the
+        # current rank is valid and it suppresses other bboxes.
+        # Then, it negates the suppression result to mark the suppressed bboxes as invalid or valid
+        # for the next rank.
+        candidate_masks &= ~(kept_masks.unsqueeze(-1) & pairwise_suppression[:, :, rank, :])
+
+    # Accumulate sum for each class to ensure that no more than post_max_size boxes
+    # are kept per class.
+    # (batch_size, num_classes, max_num_bboxes)
+    sorted_keep_masks &= sorted_keep_masks.cumsum(dim=2) <= post_max_size
+
+    # Inverse the order to get the original index of each bbox in the unsorted position.
+    inverse_orders = orders.argsort(dim=2, stable=True)
+    # (batch_size, num_classes, max_num_bboxes)
+    keep_masks = torch.gather(sorted_keep_masks, index=inverse_orders, dim=2)
+    return keep_masks.bool()
+
+
 def vectorize_gaussian_radii(
     widths: Float32[torch.Tensor, "batch_size max_num_boxes"],
     heights: Float32[torch.Tensor, "batch_size max_num_boxes"],

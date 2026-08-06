@@ -21,7 +21,7 @@ around the reusable PointPillars and CenterPoint detection components.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from types import MappingProxyType
 from typing import Any
 
@@ -31,11 +31,11 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
 from autoware_ml.datamodule.multi_task.dataclasses.multi_task_features import MultiTaskFeatures
+from autoware_ml.models.dataclasses.multi_task_predictions import MultiTaskPredictions
 from autoware_ml.metrics.base import MetricSuite
-from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
+from autoware_ml.metrics.detection3d.eval_output import multi_task_eval_output
 from autoware_ml.models.multi_task_base import LogDictConfigs, MultiTaskBaseModel
 from autoware_ml.models.dataclasses.multi_task_outputs import MultiTaskOutputs
-from autoware_ml.models.dataclasses.multi_task_predictions import MultiTaskPredictions
 from autoware_ml.models.detection3d.dataclasses.outputs import Detection3DOutputs
 from autoware_ml.models.detection3d.encoders.pillar.pillar_feature_net import PillarFeatureNet
 from autoware_ml.models.detection3d.encoders.pillar.point_pillar_scatter import PointPillarsScatter
@@ -93,17 +93,28 @@ class CenterPointDetectionModel(MultiTaskBaseModel):
         self.pts_neck = pts_neck
         self.bbox_head = bbox_head
 
-    def build_eval_output(self, batch: Mapping[str, Any], outputs: Any) -> dict[str, Any]:
+    # TODO(KokSeang): This signature is temporary different from the base class,
+    # and will be refactored to match the base class signature once the detection metric is refactored
+    # to accept MultiTaskPredictions and MultiTaskFeatures directly.
+    def build_eval_output(
+        self, batch: MultiTaskFeatures, outputs: MultiTaskOutputs
+    ) -> dict[str, Any]:  # type: ignore[override]
         """Decode detections and pair them with ground truth for metrics."""
-        return detection_eval_output(self.bbox_head.predict(outputs), batch)
+        if outputs.detection3d_outputs is None:
+            raise ValueError(
+                "MultiTaskOutputs must contain detection3d_outputs for CenterPoint build_eval_output pass."
+            )
+
+        return multi_task_eval_output(
+            multi_task_predictions=self.bbox_head.decode_outputs(outputs.detection3d_outputs),
+            multi_task_features=batch,
+        )
 
     def forward(self, multi_task_features: MultiTaskFeatures) -> MultiTaskOutputs:
         """Run the detector on voxelized lidar inputs.
 
         Args:
-            voxels: Voxel features.
-            num_points: Number of points in each voxel.
-            voxel_coords: Batched voxel coordinates.
+            multi_task_features: MultiTaskFeatures containing the voxelized lidar inputs.
 
         Returns:
             Detection head outputs.
