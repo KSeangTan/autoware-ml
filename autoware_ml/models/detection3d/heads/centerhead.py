@@ -421,9 +421,8 @@ class CenterHead(nn.Module):
         flatten_scores = scores.reshape(batch_size, -1)
         flatten_class_ids = class_ids.reshape(batch_size, -1)
 
-        # Each sample keeps a different number of boxes, so boolean indexing cannot produce a
-        # rectangular batch here. Sinking the suppressed scores instead keeps the selection
-        # batched, and the survivors are recovered from the keep mask further down.
+        # Each sample keeps a different number of boxes, sinking the suppressed scores instead keeps
+        # the selection batched, and the survivors are recovered from the keep mask further down.
         # (batch_size, num_classes*max_num_bboxes)
         masked_flatten_scores = flatten_scores.masked_fill(~flatten_keep_masks, -torch.inf)
 
@@ -440,8 +439,6 @@ class CenterHead(nn.Module):
         # (batch_size, num_topk_indices)
         topk_keep_masks = torch.gather(flatten_keep_masks, dim=1, index=topk_indices)
 
-        # (batch_size, num_classes*max_num_bboxes, box_code_size)
-        # flatten_bbox_predictions = bboxes_predictions.reshape(batch_size, -1, self.box_code_size)
         # (batch_size, num_topk_indices, box_code_size)
         code_size = flatten_bboxes_predictions.shape[2]
         keep_flatten_bbox_predictions = torch.gather(

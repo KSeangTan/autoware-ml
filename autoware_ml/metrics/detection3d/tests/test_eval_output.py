@@ -132,41 +132,44 @@ class TestMultiTaskEvalOutput(unittest.TestCase):
         self.assertIn("gt_labels", eval_outputs)
         self.assertIn("gt_num_points", eval_outputs)
 
+        assert self.multi_task_features.multi_task_gt_batch.detection3d_gt_batch is not None
         self.assertTrue(
             torch.allclose(
                 eval_outputs["gt_boxes"],
-                self.multi_task_features.multi_task_gt_batch.detection3d_gt_batch.gt_bboxes_3d,  # type: ignore
+                self.multi_task_features.multi_task_gt_batch.detection3d_gt_batch.gt_bboxes_3d,
             )
         )
         self.assertTrue(
             torch.allclose(
                 eval_outputs["gt_labels"],
-                self.multi_task_features.multi_task_gt_batch.detection3d_gt_batch.gt_labels_3d,  # type: ignore
+                self.multi_task_features.multi_task_gt_batch.detection3d_gt_batch.gt_labels_3d,
             )
         )
         self.assertTrue(
             torch.allclose(
                 eval_outputs["gt_num_points"],
-                self.multi_task_features.multi_task_gt_batch.detection3d_gt_batch.gt_bboxes_num_points,  # type: ignore
+                self.multi_task_features.multi_task_gt_batch.detection3d_gt_batch.gt_bboxes_num_points,
             )
         )
+
+        assert self.multi_task_predictions.detection3d_predictions is not None
         for batch_idx in range(len(eval_outputs["predictions"])):
             self.assertTrue(
                 torch.allclose(
                     eval_outputs["predictions"][batch_idx]["bboxes_3d"],
-                    self.multi_task_predictions.detection3d_predictions[batch_idx].bboxes_3d,  # type: ignore
+                    self.multi_task_predictions.detection3d_predictions[batch_idx].bboxes_3d,
                 )
             )
             self.assertTrue(
                 torch.allclose(
                     eval_outputs["predictions"][batch_idx]["scores_3d"],
-                    self.multi_task_predictions.detection3d_predictions[batch_idx].scores_3d,  # type: ignore
+                    self.multi_task_predictions.detection3d_predictions[batch_idx].scores_3d,
                 )
             )
             self.assertTrue(
                 torch.allclose(
                     eval_outputs["predictions"][batch_idx]["labels_3d"],
-                    self.multi_task_predictions.detection3d_predictions[batch_idx].labels_3d,  # type: ignore
+                    self.multi_task_predictions.detection3d_predictions[batch_idx].labels_3d,
                 )
             )
 
