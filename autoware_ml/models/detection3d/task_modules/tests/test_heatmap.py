@@ -15,13 +15,16 @@
 """Unit tests for heatmap utilities."""
 
 import unittest
+from typing import Sequence
 
+from jaxtyping import Float32, Bool
 import torch
 
 from autoware_ml.models.detection3d.task_modules.heatmap import (
     _vectorize_gaussian2d,
     vectorize_gaussian_radii,
     create_gaussian_heatmaps,
+    batch_circle_nms,
 )
 
 
@@ -369,6 +372,233 @@ class TestCreateGaussianHeatmap(unittest.TestCase):
             device=self.device,
         )
         self.assertTrue(torch.allclose(gaussian_heatmaps, self.expected_heatmap, atol=1e-4))
+
+
+class TestBatchCircleNMS(unittest.TestCase):
+    """Unit tests for the batch_circle_nms function."""
+
+    def setUp(self) -> None:
+        """Set up the common device, batch shape and NMS parameters for all tests."""
+        self.device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+        self.batch_size = 2
+        self.num_classes = 3
+        self.min_radius = 1.0
+        self.post_max_size = 10
+
+    def _build_inputs(
+        self,
+        centers: Sequence[Sequence[float]],
+        scores: Sequence[float],
+        valid_masks: Sequence[bool] | None = None,
+    ) -> tuple[
+        Float32[torch.Tensor, "batch_size num_classes max_num_bboxes 2"],
+        Float32[torch.Tensor, "batch_size num_classes max_num_bboxes"],
+        Bool[torch.Tensor, "batch_size num_classes max_num_bboxes"],
+        Float32[torch.Tensor, "batch_size num_classes max_num_bboxes"],
+    ]:
+        """
+        Repeat one row of centers and scores across every sample and class, so each test spells
+        out a single scenario while still exercising the full
+        (batch_size, num_classes, max_num_bboxes) layout. Placing identical geometry in every row
+        also means suppression leaking across rows would remove boxes that must survive.
+        """
+        max_num_bboxes = len(scores)
+        shape = (self.batch_size, self.num_classes, max_num_bboxes)
+        bboxes_centers = (
+            torch.tensor(centers, dtype=torch.float32, device=self.device)
+            .view(1, 1, max_num_bboxes, 2)
+            .expand(*shape, 2)
+            .contiguous()
+        )
+        bboxes_scores = (
+            torch.tensor(scores, dtype=torch.float32, device=self.device)
+            .view(1, 1, max_num_bboxes)
+            .expand(shape)
+            .contiguous()
+        )
+        # Rows are class-wise, matching the class_ids layout decode_outputs builds
+        bboxes_labels = (
+            torch.arange(self.num_classes, dtype=torch.int64, device=self.device)
+            .view(1, self.num_classes, 1)
+            .expand(shape)
+            .contiguous()
+        )
+        valid_bboxes_masks = (
+            torch.tensor(
+                valid_masks if valid_masks is not None else [True] * max_num_bboxes,
+                dtype=torch.bool,
+                device=self.device,
+            )
+            .view(1, 1, max_num_bboxes)
+            .expand(shape)
+            .contiguous()
+        )
+        return (bboxes_centers, bboxes_scores, bboxes_labels, valid_bboxes_masks)
+
+    def _expected_keep_masks(
+        self, keep_masks_row: Sequence[bool]
+    ) -> Bool[torch.Tensor, "batch_size num_classes max_num_bboxes"]:
+        """Repeat one row of expected results across every sample and class."""
+        return (
+            torch.tensor(keep_masks_row, dtype=torch.bool, device=self.device)
+            .view(1, 1, len(keep_masks_row))
+            .expand(self.batch_size, self.num_classes, len(keep_masks_row))
+            .contiguous()
+        )
+
+    def test_batch_circle_nms_suppresses_neighbours_within_radius(self) -> None:
+        """Test that a lower scoring box within min_radius of a kept box is suppressed."""
+        # Two tight pairs 5 m apart: the second box of each pair falls inside min_radius
+        centers, scores, labels, valid_masks = self._build_inputs(
+            centers=[[0.0, 0.0], [0.5, 0.0], [5.0, 0.0], [5.4, 0.0]],
+            scores=[0.9, 0.8, 0.7, 0.6],
+        )
+
+        keep_masks = batch_circle_nms(
+            bboxes_centers=centers,
+            scores=scores,
+            bboxes_labels=labels,
+            min_radius=self.min_radius,
+            valid_bboxes_masks=valid_masks,
+            post_max_size=self.post_max_size,
+        )
+
+        # Second and fourth boxes are suppressed by the first and third boxes in each
+        # batch and classes, respectively
+        expected_keep_masks = self._expected_keep_masks([True, False, True, False])
+        self.assertTrue(torch.equal(keep_masks, expected_keep_masks))
+
+    def test_batch_circle_nms_keeps_box_suppressed_only_by_a_removed_box(self) -> None:
+        """
+        Test the greedy chain A -> B -> C, where A suppresses B and B would have suppressed C.
+        Because B is already gone it cannot suppress anything, so C survives.
+        """
+        # Collinear boxes 1.5 m apart with min_radius 2.0: A-B and B-C overlap, A-C does not
+        centers, scores, labels, valid_masks = self._build_inputs(
+            centers=[[0.0, 0.0], [1.5, 0.0], [3.0, 0.0]],
+            scores=[0.9, 0.8, 0.7],
+        )
+
+        keep_masks = batch_circle_nms(
+            bboxes_centers=centers,
+            scores=scores,
+            bboxes_labels=labels,
+            min_radius=2.0,
+            valid_bboxes_masks=valid_masks,
+            post_max_size=self.post_max_size,
+        )
+
+        # The middle box is suppressed by the first box, but the last box survives because it is
+        # only suppressed by the middle box which is already gone
+        expected_keep_masks = self._expected_keep_masks([True, False, True])
+        self.assertTrue(torch.equal(keep_masks, expected_keep_masks))
+
+    def test_batch_circle_nms_invalid_boxes_neither_kept_nor_suppressing(self) -> None:
+        """
+        Test that an invalid box is dropped and does not suppress its neighbour, so the
+        neighbour survives even though it sits inside the invalid box's radius.
+        """
+        centers, scores, labels, valid_masks = self._build_inputs(
+            centers=[[0.0, 0.0], [0.5, 0.0], [5.0, 0.0]],
+            scores=[0.9, 0.8, 0.7],
+            # The highest scoring box is invalid
+            valid_masks=[False, True, True],
+        )
+
+        keep_masks = batch_circle_nms(
+            bboxes_centers=centers,
+            scores=scores,
+            bboxes_labels=labels,
+            min_radius=self.min_radius,
+            valid_bboxes_masks=valid_masks,
+            post_max_size=self.post_max_size,
+        )
+
+        # The first box is invalid and dropped, so the second box survives even though they overlap
+        expected_keep_masks = self._expected_keep_masks([False, True, True])
+        self.assertTrue(torch.equal(keep_masks, expected_keep_masks))
+
+    def test_batch_circle_nms_caps_survivors_at_post_max_size(self) -> None:
+        """
+        Test that post_max_size truncates a class row to its highest scoring survivors even when
+        no box overlaps another.
+        """
+        centers, scores, labels, valid_masks = self._build_inputs(
+            centers=[[0.0, 0.0], [10.0, 0.0], [20.0, 0.0], [30.0, 0.0]],
+            scores=[0.6, 0.9, 0.7, 0.8],
+        )
+
+        keep_masks = batch_circle_nms(
+            bboxes_centers=centers,
+            scores=scores,
+            bboxes_labels=labels,
+            min_radius=self.min_radius,
+            valid_bboxes_masks=valid_masks,
+            post_max_size=2,
+        )
+
+        # Only the 0.9 and 0.8 boxes fit under the post_max_size cap, so the 0.6 and 0.7
+        # boxes are dropped even though they do not overlap
+        expected_keep_masks = self._expected_keep_masks([False, True, False, True])
+        self.assertTrue(torch.equal(keep_masks, expected_keep_masks))
+
+    def test_batch_circle_nms_does_not_suppress_across_classes(self) -> None:
+        """
+        Test that overlapping boxes in different class rows both survive, since NMS is applied
+        per class rather than across the whole frame.
+        """
+        # Every class row of every sample holds the same two overlapping centers, so a box that
+        # is suppressed anywhere other than inside its own row would show up as a missing keep
+        centers, scores, labels, valid_masks = self._build_inputs(
+            centers=[[0.0, 0.0], [0.2, 0.0]],
+            scores=[0.9, 0.8],
+        )
+
+        keep_masks = batch_circle_nms(
+            bboxes_centers=centers,
+            scores=scores,
+            bboxes_labels=labels,
+            min_radius=self.min_radius,
+            valid_bboxes_masks=valid_masks,
+            post_max_size=self.post_max_size,
+        )
+
+        # Each row independently keeps its own top box, for all num_classes*batch_size rows
+        expected_keep_masks = self._expected_keep_masks([True, False])
+        self.assertTrue(torch.equal(keep_masks, expected_keep_masks))
+        self.assertEqual(int(keep_masks.sum().item()), self.batch_size * self.num_classes)
+
+    def test_batch_circle_nms_only_suppresses_boxes_sharing_a_label(self) -> None:
+        """
+        Test that overlapping boxes inside the same class row survive when their labels differ,
+        which is the only situation where the label check changes the outcome.
+        """
+        # Three overlapping centers per row, with the middle box carrying a different label
+        centers, scores, _, valid_masks = self._build_inputs(
+            centers=[[0.0, 0.0], [0.2, 0.0], [0.4, 0.0]],
+            scores=[0.9, 0.8, 0.7],
+        )
+        # Override the class-wise labels so a single row carries more than one label
+        bboxes_labels = (
+            torch.tensor([0, 1, 0], dtype=torch.int64, device=self.device)
+            .view(1, 1, 3)
+            .expand(self.batch_size, self.num_classes, 3)
+            .contiguous()
+        )
+
+        keep_masks = batch_circle_nms(
+            bboxes_centers=centers,
+            scores=scores,
+            bboxes_labels=bboxes_labels,
+            min_radius=self.min_radius,
+            valid_bboxes_masks=valid_masks,
+            post_max_size=self.post_max_size,
+        )
+
+        # Box 1 differs in label so it survives; box 2 shares label 0 with box 0 and is dropped
+        # because they overlap
+        expected_keep_masks = self._expected_keep_masks([True, True, False])
+        self.assertTrue(torch.equal(keep_masks, expected_keep_masks))
 
 
 if __name__ == "__main__":
