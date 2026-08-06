@@ -131,7 +131,7 @@ class CenterHead(nn.Module):
             nn.Conv2d(in_channels, out_channels, kernel_size=1),
         )
         if init_bias is not None:
-            nn.init.constant_(head[-1].bias, init_bias)
+            nn.init.constant_(head[-1].bias, init_bias)  # type: ignore
         return head
 
     def forward(

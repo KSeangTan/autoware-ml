@@ -322,6 +322,7 @@ class TestCenterHead(unittest.TestCase):
         dummy_outputs.heights[0, 0, 3, 2] = 0.2
         dummy_outputs.dims[0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5], device=self.device).log()
         dummy_outputs.rots[0, 1, 3, 2] = 1.0
+        assert dummy_outputs.vels is not None
         dummy_outputs.vels[0, :, 3, 2] = torch.tensor([0.5, -0.1], device=self.device)
         dummy_detection3d_outputs = Detection3DOutputs(
             center_head_outputs=dummy_outputs, transfusion_head_outputs=None
