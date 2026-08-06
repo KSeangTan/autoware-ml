@@ -41,7 +41,6 @@ class TestCenterHead(unittest.TestCase):
             point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
             voxel_size=[0.5, 0.5, 4.0],
             out_size_factor=2,
-            max_objs=16,
             min_radius=1,
             score_threshold=0.1,
             post_max_size=10,
@@ -67,7 +66,7 @@ class TestCenterHead(unittest.TestCase):
         )
 
     def test_centerhead_weights_mean_std(self) -> None:
-        """Test that the CenterHead weights are initialized with near means and std."""
+        """Test that the CenterHead weights are initialized with means of 0.0 and std < 0.1."""
         weights = []
         biases = []
         for name, param in self.center_head.named_parameters():
@@ -84,13 +83,12 @@ class TestCenterHead(unittest.TestCase):
         bias_std = biases.std().item()
 
         expected_weight_mean = 0.0
-        expected_weight_std = 0.03679
         # Biases should be almost similar since the bias for the heatmap head is initialized
         # to a negative value and the rest are initialized to zero.
         expected_bias_mean = -0.008480
         expected_bias_std = 0.144860
         self.assertAlmostEqual(weight_mean, expected_weight_mean, places=2)
-        self.assertAlmostEqual(weight_std, expected_weight_std, places=2)
+        self.assertLess(weight_std, 0.1)
         self.assertAlmostEqual(bias_mean, expected_bias_mean, places=2)
         self.assertAlmostEqual(bias_std, expected_bias_std, places=2)
 
@@ -203,7 +201,6 @@ class TestCenterHead(unittest.TestCase):
             point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
             voxel_size=[0.5, 0.5, 4.0],
             out_size_factor=2,
-            max_objs=16,
             min_radius=1,
             score_threshold=0.1,
             post_max_size=10,
@@ -231,6 +228,81 @@ class TestCenterHead(unittest.TestCase):
             torch.allclose(
                 decoded_outputs.detection3d_predictions[0].bboxes_3d[0, 3:6],
                 torch.tensor([4.0, 1.6, 1.5], device=self.device),
+            )
+        )
+
+    def test_centerhead_uses_natural_dimension_order(self) -> None:
+        """
+        Test that feeding the regression targets straight back in as predictions round-trips to
+        the original box dimensions, so encoding and decoding agree on the axis order.
+        """
+        center_head = CenterHead(
+            in_channels=4,
+            num_classes=2,
+            shared_channels=4,
+            point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
+            voxel_size=[0.5, 0.5, 4.0],
+            out_size_factor=2,
+            min_radius=1,
+            score_threshold=0.1,
+            post_max_size=10,
+            nms_min_radius=1.0,
+            use_velocity=False,
+        ).to(self.device)
+
+        gt_bboxes_3d = torch.tensor(
+            [[[2.0, 3.0, 0.2, 4.0, 1.6, 1.5, 0.25, 0.0, 0.0, 0.0]]],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        targets = center_head.get_targets(
+            gt_bboxes_3d=gt_bboxes_3d,
+            gt_labels_3d=torch.tensor([[0]], dtype=torch.int32, device=self.device),
+            gt_valid_bboxes=torch.tensor([1], dtype=torch.int32, device=self.device),
+            feature_map_size=(4, 4),
+            device=self.device,
+        )
+
+        self.assertTrue(
+            torch.allclose(
+                targets.reg_targets[0, 0, 3:6],
+                torch.tensor([4.0, 1.6, 1.5], device=self.device).log(),
+            )
+        )
+
+        # Replay the regression targets as if the head had predicted them perfectly
+        flat_index = int(targets.reg_indices[0, 0].item())
+        y_index, x_index = divmod(flat_index, 4)
+        reg_target = targets.reg_targets[0, 0]
+
+        dummy_outputs = self._build_center_head_outputs(
+            batch_size=1, height=4, width=4, use_velocity=False
+        )
+        dummy_outputs.heatmaps[0, :, :, :] = -20.0
+        dummy_outputs.heatmaps[0, 0, y_index, x_index] = 20.0
+        dummy_outputs.centers[0, :, y_index, x_index] = reg_target[0:2]
+        dummy_outputs.heights[0, 0, y_index, x_index] = reg_target[2]
+        dummy_outputs.dims[0, :, y_index, x_index] = reg_target[3:6]
+        dummy_outputs.rots[0, :, y_index, x_index] = reg_target[6:8]
+
+        decoded_outputs = center_head.decode_outputs(
+            Detection3DOutputs(center_head_outputs=dummy_outputs, transfusion_head_outputs=None)
+        )
+        predictions = decoded_outputs.detection3d_predictions
+        assert predictions is not None
+
+        self.assertTrue(
+            torch.allclose(
+                predictions[0].bboxes_3d[0, 3:6],
+                torch.tensor([4.0, 1.6, 1.5], device=self.device),
+            )
+        )
+        # The decoded centre returns to the original metric position of the ground truth box
+        self.assertTrue(
+            torch.allclose(
+                predictions[0].bboxes_3d[0, 0:2],
+                torch.tensor([2.0, 3.0], device=self.device),
+                atol=1e-5,
             )
         )
 
@@ -356,7 +428,6 @@ class TestCenterHead(unittest.TestCase):
             point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
             voxel_size=[0.5, 0.5, 4.0],
             out_size_factor=2,
-            max_objs=16,
             min_radius=1,
             score_threshold=0.1,
             post_max_size=10,

@@ -24,7 +24,7 @@ from jaxtyping import Float32
 import torch
 from torch import nn
 
-from autoware_ml.models.detection3d.encoders.pillar.pfn_layer import PFNLayer
+from autoware_ml.models.detection3d.encoders.pillars.pfn_layer import PFNLayer
 from autoware_ml.ops.voxelization.voxelization import VoxelsData
 
 

@@ -37,8 +37,8 @@ from autoware_ml.metrics.detection3d.eval_output import multi_task_eval_output
 from autoware_ml.models.multi_task_base import LogDictConfigs, MultiTaskBaseModel
 from autoware_ml.models.dataclasses.multi_task_outputs import MultiTaskOutputs
 from autoware_ml.models.detection3d.dataclasses.outputs import Detection3DOutputs
-from autoware_ml.models.detection3d.encoders.pillar.pillar_feature_net import PillarFeatureNet
-from autoware_ml.models.detection3d.encoders.pillar.point_pillar_scatter import PointPillarsScatter
+from autoware_ml.models.detection3d.encoders.pillars.pillar_feature_net import PillarFeatureNet
+from autoware_ml.models.detection3d.encoders.pillars.point_pillar_scatter import PointPillarsScatter
 from autoware_ml.models.detection3d.heads.centerhead import CenterHead
 from autoware_ml.preprocessing.multi_task_data_preprocessor import MultiTaskDataPreprocessor
 
@@ -130,7 +130,9 @@ class CenterPointDetectionModel(MultiTaskBaseModel):
             )
 
         batch_size = multi_task_features.multi_task_gt_batch.infer_batch_size()
-        pillar_features = self.pts_voxel_encoder(multi_task_features)
+        pillar_features = self.pts_voxel_encoder(
+            multi_task_features.detection3d_features.voxels_data
+        )
         bev_features = self.pts_middle_encoder(
             pillar_features=pillar_features,
             coords=multi_task_features.detection3d_features.voxels_data.coords,

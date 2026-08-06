@@ -18,7 +18,7 @@ import unittest
 
 import torch
 
-from autoware_ml.models.detection3d.encoders.pillar.pillar_feature_net import PillarFeatureNet
+from autoware_ml.models.detection3d.encoders.pillars.pillar_feature_net import PillarFeatureNet
 from autoware_ml.ops.voxelization.voxelization import VoxelsData
 
 
@@ -28,26 +28,31 @@ class TestPillarFeatureNet(unittest.TestCase):
         be called in each test case.
         """
         torch.manual_seed(0)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.pts_voxel_encoder = PillarFeatureNet(
             in_channels=5,
             feat_channels=[8],
             voxel_size=[0.5, 0.5, 4.0],
             point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
-        )
+        ).to(self.device)
 
     def test_encode(self) -> None:
         """Test the decorate function of PillarFeatureNet."""
         voxels_data = VoxelsData(
-            voxels=torch.tensor([[[1.25, 0.9, -0.5, 7.0, 0.05]]], dtype=torch.float32),
-            num_points=torch.tensor([1], dtype=torch.int32),
-            coords=torch.tensor([[2, 1, 0]], dtype=torch.int32),  # (x, y, z)
-            batch_indices=torch.tensor([0], dtype=torch.int32),
+            voxels=torch.tensor(
+                [[[1.25, 0.9, -0.5, 7.0, 0.05]]], dtype=torch.float32, device=self.device
+            ),
+            num_points=torch.tensor([1], dtype=torch.int32, device=self.device),
+            coords=torch.tensor([[2, 1, 0]], dtype=torch.int32, device=self.device),  # (x, y, z)
+            batch_indices=torch.tensor([0], dtype=torch.int32, device=self.device),
         )
         features = self.pts_voxel_encoder.encode(
             voxels_data=voxels_data,
         )
 
-        expected = torch.tensor([1.25, 0.9, -0.5, 7.0, 0.05, 0.0, 0.0, 0.0, 0.0, 0.15, -0.5])
+        expected = torch.tensor(
+            [1.25, 0.9, -0.5, 7.0, 0.05, 0.0, 0.0, 0.0, 0.0, 0.15, -0.5], device=self.device
+        )
         self.assertTrue(torch.allclose(features.squeeze(1)[0], expected, atol=1e-6))
 
     def test_forward(self) -> None:
@@ -67,10 +72,13 @@ class TestPillarFeatureNet(unittest.TestCase):
                     ],  # (2, 3, 11)
                 ],
                 dtype=torch.float32,
+                device=self.device,
             ),
-            num_points=torch.tensor([1, 2], dtype=torch.int32),
-            coords=torch.tensor([[2, 1, 0], [2, 1, 0]], dtype=torch.int32),  # (x, y, z)
-            batch_indices=torch.tensor([0, 0], dtype=torch.int32),
+            num_points=torch.tensor([1, 2], dtype=torch.int32, device=self.device),
+            coords=torch.tensor(
+                [[2, 1, 0], [2, 1, 0]], dtype=torch.int32, device=self.device
+            ),  # (x, y, z)
+            batch_indices=torch.tensor([0, 0], dtype=torch.int32, device=self.device),
         )
         features = self.pts_voxel_encoder(voxels_data)
         self.assertEqual(features.shape, (2, 8))  # (num_voxels, feat_channels)
@@ -80,6 +88,7 @@ class TestPillarFeatureNet(unittest.TestCase):
                 [0.5929, 0.5374, 0.3992, 0.5730, 0.0000, 0.6387, 0.0000, 0.5764],
             ],
             dtype=torch.float32,
+            device=self.device,
         )
         self.assertTrue(torch.allclose(features, expected_outputs, atol=1e-4))
 

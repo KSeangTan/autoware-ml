@@ -22,7 +22,7 @@ import torch
 
 from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
 from autoware_ml.models.detection3d.centerpoint import CenterPointDetectionModel
-from autoware_ml.models.detection3d.encoders.pillar import PillarFeatureNet, PointPillarsScatter
+from autoware_ml.models.detection3d.encoders.pillars import PillarFeatureNet, PointPillarsScatter
 from autoware_ml.models.detection3d.heads.centerpoint import CenterHead
 from autoware_ml.models.detection3d.necks.second_fpn import SECONDFPN
 

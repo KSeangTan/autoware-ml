@@ -18,7 +18,7 @@ import unittest
 
 import torch
 
-from autoware_ml.models.detection3d.encoders.pillar.pfn_layer import PFNLayer
+from autoware_ml.models.detection3d.encoders.pillars.pfn_layer import PFNLayer
 
 
 class TestPFNLayer(unittest.TestCase):
@@ -27,6 +27,7 @@ class TestPFNLayer(unittest.TestCase):
         be called in each test case.
         """
         torch.manual_seed(0)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # (num_pillars, num_points, num_channels)
         self.input_features = torch.tensor(
             [
@@ -40,6 +41,7 @@ class TestPFNLayer(unittest.TestCase):
                 ],
             ],
             dtype=torch.float32,
+            device=self.device,
         )
 
     def test_forward_with_last_layer(self) -> None:
@@ -48,7 +50,7 @@ class TestPFNLayer(unittest.TestCase):
             in_channels=5,
             out_channels=8,
             last_layer=True,
-        )
+        ).to(self.device)
         outputs = pfn_layer(
             inputs=self.input_features,
         )
@@ -61,6 +63,7 @@ class TestPFNLayer(unittest.TestCase):
                 [[0.9865, 0.9709, 0.9731, 0.9945, 0.0000, 0.9931, 0.9968, 0.0000]],
             ],
             dtype=torch.float32,
+            device=self.device,
         )
         self.assertTrue(torch.allclose(outputs, expected_outputs, atol=1e-4))
 
@@ -70,7 +73,7 @@ class TestPFNLayer(unittest.TestCase):
             in_channels=5,
             out_channels=8,
             last_layer=False,
-        )
+        ).to(self.device)
         outputs = pfn_layer(
             inputs=self.input_features,
         )
@@ -89,6 +92,7 @@ class TestPFNLayer(unittest.TestCase):
                 ],
             ],
             dtype=torch.float32,
+            device=self.device,
         )
         self.assertTrue(torch.allclose(outputs, expected_outputs, atol=1e-4))
 

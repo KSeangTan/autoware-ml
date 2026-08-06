@@ -66,7 +66,6 @@ class CenterHead(nn.Module):
         point_cloud_range: list[float],
         voxel_size: list[float],
         out_size_factor: int,
-        max_objs: int,
         min_radius: int,
         score_threshold: float,
         post_max_size: int,
@@ -86,7 +85,6 @@ class CenterHead(nn.Module):
             point_cloud_range: Detector point-cloud range.
             voxel_size: Voxel size used by preprocessing.
             out_size_factor: Downsampling factor between BEV cells and head outputs.
-            max_objs: Maximum number of targets kept per sample.
             min_radius: Minimum Gaussian radius for heatmap targets.
             score_threshold: Score threshold applied during decoding.
             post_max_size: Maximum number of predictions kept after decoding.
@@ -102,7 +100,6 @@ class CenterHead(nn.Module):
         self.point_cloud_range = point_cloud_range
         self.voxel_size = voxel_size
         self.out_size_factor = out_size_factor
-        self.max_objs = max_objs
         self.min_radius = min_radius
         self.score_threshold = score_threshold
         self.post_max_size = post_max_size
@@ -218,6 +215,8 @@ class CenterHead(nn.Module):
             heights=widths,
             min_overlap=self.gaussian_overlap,
         ).to(device)
+        # Clamp the Gaussian radii to ensure they are at least the minimum radius
+        gaussian_radii = torch.clamp(gaussian_radii, min=self.min_radius)
 
         center = torch.stack((center_x, center_y), dim=-1)
         # (batch_size, max_num_bboxes, 2)
