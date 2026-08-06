@@ -232,9 +232,11 @@ class CenterHead(nn.Module):
             valid_masks=valid_bbox_masks,
             device=device,
         )
+        # Center targets are translations/offsets from their corresponding bev grid cell position
         center_targets = torch.stack(
             (center_x - center_int[:, :, 0].floor(), center_y - center_int[:, :, 1].floor()), dim=-1
         )
+        # Convert to log-space for dimension targets to stabilize training
         dim_targets = gt_bboxes_3d[:, :, Box3DFieldIndex.LENGTH : Box3DFieldIndex.HEIGHT].log()
         heading_targets = torch.stack(
             (
@@ -510,7 +512,7 @@ class CenterHead(nn.Module):
 
         # (num_classes) -> (1, num_classes) -> (1, num_classes, 1) -> (batch_size, num_classes, max_num_bboxes)
         class_ids = (
-            torch.arange(num_classes, device=heatmaps.device)
+            torch.arange(num_classes, device=heatmaps.device, dtype=torch.long)
             .unsqueeze(0)
             .unsqueeze(2)
             .expand_as(top_indices)

@@ -2,7 +2,7 @@
 Modules to save decoded predictions from a detection3d head.
 """
 
-from jaxtyping import Float32
+from jaxtyping import Float32, Int64
 from pydantic import BaseModel, ConfigDict
 
 import torch
@@ -25,4 +25,4 @@ class Detection3DPredictions(BaseModel):
     # 9 (center_x, center_y, center_z, length, width, height, heading, velocity_x, velocity_y)
     bboxes_3d: Float32[torch.Tensor, "num_boxes num_bbox_params"]
     scores_3d: Float32[torch.Tensor, " num_boxes"]
-    labels_3d: Float32[torch.Tensor, " num_boxes"]
+    labels_3d: Int64[torch.Tensor, " num_boxes"]
