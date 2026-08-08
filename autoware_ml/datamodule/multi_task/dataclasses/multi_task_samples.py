@@ -52,6 +52,13 @@ class PointCloudGTBatch(NamedTuple):
             ],
             dim=0,
         )
+
+        if points.shape[0] != batch_indices.shape[0]:
+            raise ValueError(
+                "Mismatch between number of points and batch indices. "
+                f"Points shape: {points.shape}, Batch indices shape: {batch_indices.shape}"
+            )
+
         return PointCloudGTBatch(
             points=points,
             batch_indices=batch_indices,

@@ -1,0 +1,43 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from abc import ABC, abstractmethod
+
+from autoware_ml.dataclasses.multi_task_batch_features import MultiTaskBatchFeatures
+from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTBatch
+
+
+class DataPreprocessorModule(ABC):
+    """Interface for data preprocessor module."""
+
+    @abstractmethod
+    def __call__(
+        self,
+        multi_task_gt_batch: MultiTaskGTBatch,
+        multi_task_batch_features: MultiTaskBatchFeatures,
+        is_training: bool,
+    ) -> MultiTaskBatchFeatures:
+        """
+        Process multi_task_gt_batch and convert to multi_task_input_features
+        for downstream tasks.
+
+        Args:
+            multi_task_gt_batch (MultiTaskGTBatch): The ground truth batch containing multi-task data.
+            multi_task_batch_features (MultiTaskBatchFeatures): The input features after processing.
+            is_training (bool): Flag indicating whether the model is in training mode.
+
+        Returns:
+            MultiTaskBatchFeatures: The processed input features ready for downstream tasks.
+        """
+        raise NotImplementedError
