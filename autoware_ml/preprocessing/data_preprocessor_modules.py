@@ -14,8 +14,7 @@
 
 from abc import ABC, abstractmethod
 
-from autoware_ml.dataclasses.multi_task_batch_features import MultiTaskBatchFeatures
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTBatch
+from autoware_ml.dataclasses.multi_task_batch_inputs import MultiTaskBatchInputs
 
 
 class DataPreprocessorModule(ABC):
@@ -24,16 +23,13 @@ class DataPreprocessorModule(ABC):
     @abstractmethod
     def __call__(
         self,
-        multi_task_gt_batch: MultiTaskGTBatch,
-        multi_task_batch_features: MultiTaskBatchFeatures,
+        multi_task_batch_features: MultiTaskBatchInputs,
         is_training: bool,
-    ) -> MultiTaskBatchFeatures:
+    ) -> MultiTaskBatchInputs:
         """
-        Process multi_task_gt_batch and convert to multi_task_input_features
-        for downstream tasks.
+        Process batch data and convert to multi_task_input_features for downstream tasks.
 
         Args:
-            multi_task_gt_batch (MultiTaskGTBatch): The ground truth batch containing multi-task data.
             multi_task_batch_features (MultiTaskBatchFeatures): The input features after processing.
             is_training (bool): Flag indicating whether the model is in training mode.
 

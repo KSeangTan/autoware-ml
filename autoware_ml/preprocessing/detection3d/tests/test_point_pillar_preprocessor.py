@@ -26,7 +26,7 @@ from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import (
     PointCloudGTBatch,
     Detection3DGTBatch,
 )
-from autoware_ml.dataclasses.multi_task_batch_features import MultiTaskBatchFeatures
+from autoware_ml.dataclasses.multi_task_batch_inputs import MultiTaskBatchInputs
 
 
 class TestPointPillarPreprocessor(unittest.TestCase):
@@ -61,11 +61,11 @@ class TestPointPillarPreprocessor(unittest.TestCase):
             ),
             detection3d_gt_batch=None,
         )
-        multi_task_input_features = MultiTaskBatchFeatures(voxels_data=None)
-
-        outputs = self.point_pillar_preprocessor(
-            multi_task_gt_batch, multi_task_input_features, is_training=True
+        multi_task_batch_inputs = MultiTaskBatchInputs(
+            multi_task_gt_batch=multi_task_gt_batch, voxels_data=None
         )
+
+        outputs = self.point_pillar_preprocessor(multi_task_batch_inputs, is_training=True)
         self.assertIsNotNone(outputs.voxels_data)
         self.assertEqual(outputs.voxels_data.voxels.shape, (2, 2, 4))
         self.assertEqual(outputs.voxels_data.num_points.tolist(), [2, 1])
@@ -90,11 +90,11 @@ class TestPointPillarPreprocessor(unittest.TestCase):
             ),
             detection3d_gt_batch=None,
         )
-        multi_task_input_features = MultiTaskBatchFeatures(voxels_data=None)
-
-        outputs = self.point_pillar_preprocessor(
-            multi_task_gt_batch, multi_task_input_features, is_training=True
+        multi_task_batch_inputs = MultiTaskBatchInputs(
+            multi_task_gt_batch=multi_task_gt_batch, voxels_data=None
         )
+
+        outputs = self.point_pillar_preprocessor(multi_task_batch_inputs, is_training=True)
         self.assertIsNotNone(outputs.voxels_data)
         self.assertEqual(outputs.voxels_data.voxels.shape, (2, 2, 4))
         self.assertEqual(outputs.voxels_data.num_points.tolist(), [2, 1])
@@ -118,10 +118,10 @@ class TestPointPillarPreprocessor(unittest.TestCase):
             ),
             detection3d_gt_batch=None,
         )
-        multi_task_input_features = MultiTaskBatchFeatures(voxels_data=None)
-        outputs = self.point_pillar_preprocessor(
-            multi_task_gt_batch, multi_task_input_features, is_training=True
+        multi_task_batch_inputs = MultiTaskBatchInputs(
+            multi_task_gt_batch=multi_task_gt_batch, voxels_data=None
         )
+        outputs = self.point_pillar_preprocessor(multi_task_batch_inputs, is_training=True)
         self.assertIsNotNone(outputs.voxels_data)
         self.assertTrue(
             torch.allclose(
@@ -155,10 +155,10 @@ class TestPointPillarPreprocessor(unittest.TestCase):
             ),
             detection3d_gt_batch=None,
         )
-        multi_task_input_features = MultiTaskBatchFeatures(voxels_data=None)
-        outputs = self.point_pillar_preprocessor(
-            multi_task_gt_batch, multi_task_input_features, is_training=True
+        multi_task_batch_inputs = MultiTaskBatchInputs(
+            multi_task_gt_batch=multi_task_gt_batch, voxels_data=None
         )
+        outputs = self.point_pillar_preprocessor(multi_task_batch_inputs, is_training=True)
         self.assertIsNotNone(outputs.voxels_data)
         self.assertTrue(
             torch.allclose(
@@ -182,13 +182,13 @@ class TestPointPillarPreprocessor(unittest.TestCase):
             ),
             detection3d_gt_batch=None,
         )
-        multi_task_input_features = MultiTaskBatchFeatures(voxels_data=None)
+        multi_task_batch_inputs = MultiTaskBatchInputs(
+            multi_task_gt_batch=multi_task_gt_batch, voxels_data=None
+        )
         # Raise a ValueError because the length of points list does not match the length of
         # batch indices in MultiTaskGTBatch.
         with self.assertRaises(ValueError):
-            self.point_pillar_preprocessor(
-                multi_task_gt_batch, multi_task_input_features, is_training=True
-            )
+            self.point_pillar_preprocessor(multi_task_batch_inputs, is_training=True)
 
     def test_empty_batch_returns_empty_pillar_tensors(self) -> None:
         """
@@ -202,10 +202,10 @@ class TestPointPillarPreprocessor(unittest.TestCase):
             ),
             detection3d_gt_batch=None,
         )
-        multi_task_input_features = MultiTaskBatchFeatures(voxels_data=None)
-        outputs = self.point_pillar_preprocessor(
-            multi_task_gt_batch, multi_task_input_features, is_training=True
+        multi_task_batch_inputs = MultiTaskBatchInputs(
+            multi_task_gt_batch=multi_task_gt_batch, voxels_data=None
         )
+        outputs = self.point_pillar_preprocessor(multi_task_batch_inputs, is_training=True)
         self.assertIsNotNone(outputs.voxels_data)
         self.assertEqual(outputs.voxels_data.voxels.shape, (0, 2, 4))
         self.assertEqual(outputs.voxels_data.num_points.shape, (0,))
@@ -249,28 +249,33 @@ class TestPointPillarPreprocessor(unittest.TestCase):
                 gt_bboxes_num_points=gt_bboxes_num_points,
             ),
         )
-        multi_task_input_features = MultiTaskBatchFeatures(voxels_data=None)
-        outputs = self.point_pillar_preprocessor(
-            multi_task_gt_batch, multi_task_input_features, is_training=True
+        multi_task_batch_inputs = MultiTaskBatchInputs(
+            multi_task_gt_batch=multi_task_gt_batch, voxels_data=None
         )
+        outputs = self.point_pillar_preprocessor(multi_task_batch_inputs, is_training=True)
         self.assertIsNotNone(outputs.voxels_data)
-        self.assertIsNotNone(multi_task_gt_batch.point_cloud_gt_batch)
-        self.assertIsNotNone(multi_task_gt_batch.detection3d_gt_batch)
+        self.assertIsNotNone(outputs.multi_task_gt_batch.point_cloud_gt_batch)
+        self.assertIsNotNone(outputs.multi_task_gt_batch.detection3d_gt_batch)
 
         self.assertTrue(
-            torch.allclose(multi_task_gt_batch.detection3d_gt_batch.gt_bboxes_3d, gt_bboxes_3d)
-        )
-        self.assertTrue(
-            torch.allclose(multi_task_gt_batch.detection3d_gt_batch.gt_labels_3d, gt_labels_3d)
-        )
-        self.assertTrue(
             torch.allclose(
-                multi_task_gt_batch.detection3d_gt_batch.gt_valid_bboxes, gt_valid_bboxes
+                outputs.multi_task_gt_batch.detection3d_gt_batch.gt_bboxes_3d, gt_bboxes_3d
             )
         )
         self.assertTrue(
             torch.allclose(
-                multi_task_gt_batch.detection3d_gt_batch.gt_bboxes_num_points, gt_bboxes_num_points
+                outputs.multi_task_gt_batch.detection3d_gt_batch.gt_labels_3d, gt_labels_3d
+            )
+        )
+        self.assertTrue(
+            torch.allclose(
+                outputs.multi_task_gt_batch.detection3d_gt_batch.gt_valid_bboxes, gt_valid_bboxes
+            )
+        )
+        self.assertTrue(
+            torch.allclose(
+                outputs.multi_task_gt_batch.detection3d_gt_batch.gt_bboxes_num_points,
+                gt_bboxes_num_points,
             )
         )
 

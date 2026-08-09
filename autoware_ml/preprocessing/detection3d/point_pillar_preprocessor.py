@@ -21,8 +21,7 @@ from typing import Sequence
 import torch
 
 
-from autoware_ml.dataclasses.multi_task_batch_features import MultiTaskBatchFeatures
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTBatch
+from autoware_ml.dataclasses.multi_task_batch_inputs import MultiTaskBatchInputs
 from autoware_ml.preprocessing.data_preprocessor_modules import DataPreprocessorModule
 from autoware_ml.ops.voxelization.voxelization import hard_voxelize, VoxelsData
 
@@ -67,21 +66,23 @@ class PointPillarPreprocessor(DataPreprocessorModule):
 
     def __call__(
         self,
-        multi_task_gt_batch: MultiTaskGTBatch,
-        multi_task_batch_features: MultiTaskBatchFeatures,
+        multi_task_batch_inputs: MultiTaskBatchInputs,
         is_training: bool,
-    ) -> MultiTaskBatchFeatures:
-        """Voxelize batched point clouds and append pillar tensors.
+    ) -> MultiTaskBatchInputs:
+        """
+        Process batch data and convert to multi_task_input_features for downstream tasks.
 
         Args:
-            multi_task_gt_batch (MultiTaskGTBatch): The ground truth batch containing multi-task data.
-            multi_task_batch_features (MultiTaskBatchFeatures): The input features after processing.
+            multi_task_batch_inputs (MultiTaskBatchInputs): Batch data containing ground truths and
+            input features.
             is_training (bool): Flag indicating whether the model is in training mode.
 
         Returns:
-            MultiTaskBatchFeatures: The processed input features for downstream tasks
+            MultiTaskBatchInputs: The processed input features for downstream tasks
             generating voxelization with VoxelData.
         """
+
+        multi_task_gt_batch = multi_task_batch_inputs.multi_task_gt_batch
         if multi_task_gt_batch.point_cloud_gt_batch is None:
             raise ValueError("MultiTaskGTBatch must contain point cloud data for voxelization.")
 
@@ -96,7 +97,7 @@ class PointPillarPreprocessor(DataPreprocessorModule):
                 batch_indices=torch.zeros((0,), dtype=torch.int32),
             )
             # Return early if no points are available, but still return a valid VoxelsData object
-            return multi_task_batch_features.model_copy(update={"voxels_data": voxels_data})
+            return multi_task_batch_inputs.model_copy(update={"voxels_data": voxels_data})
 
         device = points.device
         voxel_size = torch.tensor(self.voxel_size, device=device)
@@ -124,7 +125,7 @@ class PointPillarPreprocessor(DataPreprocessorModule):
                 batch_indices=torch.zeros((0,), device=device, dtype=torch.int32),
             )
             # Return since no voxels are available
-            return multi_task_batch_features.model_copy(update={"voxels_data": voxels_data})
+            return multi_task_batch_inputs.model_copy(update={"voxels_data": voxels_data})
 
         # TODO (KokSeang): Remove this backward compatibility code in the future
         if self.voxelization_z_order_first:
@@ -137,4 +138,4 @@ class PointPillarPreprocessor(DataPreprocessorModule):
                 batch_indices=voxels_data.batch_indices,
             )
 
-        return multi_task_batch_features.model_copy(update={"voxels_data": voxels_data})
+        return multi_task_batch_inputs.model_copy(update={"voxels_data": voxels_data})

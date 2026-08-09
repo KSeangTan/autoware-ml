@@ -2,7 +2,7 @@ from typing import Sequence
 
 from torch import nn
 
-from autoware_ml.dataclasses.multi_task_batch_features import MultiTaskBatchFeatures
+from autoware_ml.dataclasses.multi_task_batch_inputs import MultiTaskBatchInputs
 from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTBatch
 
 
@@ -21,7 +21,7 @@ class DataPreprocessor:
 
     def __call__(
         self, multi_task_gt_batch: MultiTaskGTBatch, is_training: bool
-    ) -> MultiTaskBatchFeatures:
+    ) -> MultiTaskBatchInputs:
         """Apply runtime preprocessing to the input batch.
 
         Args:
@@ -32,12 +32,12 @@ class DataPreprocessor:
             MultiTaskBatchFeatures: The batch of data after running the list of preprocessor_modules.
         """
         # Build a MultiTaskFeatures instance from the input batch
-        multi_task_batch_features = MultiTaskBatchFeatures(
-            voxels_data=None  # Placeholder for voxelization
+        multi_task_batch_features = MultiTaskBatchInputs(
+            multi_task_gt_batch=multi_task_gt_batch,
+            voxels_data=None,  # Placeholder for voxelization
         )
         for module in self.preprocessor_modules:
             multi_task_batch_features = module(
-                multi_task_gt_batch=multi_task_gt_batch,
                 multi_task_batch_features=multi_task_batch_features,
                 is_training=is_training,
             )
