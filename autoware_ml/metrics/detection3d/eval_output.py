@@ -11,6 +11,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from autoware_ml.dataclasses.multi_task_batch_inputs import MultiTaskBatchInputs
+from autoware_ml.dataclasses.multi_task_predictions import MultiTaskPredictions
+
 
 def detection_eval_output(
     predictions: list[dict[str, Any]], batch: Mapping[str, Any]
@@ -31,3 +34,39 @@ def detection_eval_output(
         "gt_labels": batch["gt_labels"],
         "gt_num_points": batch.get("gt_num_points"),
     }
+
+
+def multi_task_eval_output(
+    multi_task_predictions: MultiTaskPredictions, multi_task_batch_inputs: MultiTaskBatchInputs
+) -> dict[str, Any]:
+    """
+    Pair decoded predictions with ground truth for the detection metric.
+    This function is a temporary interface between MultiTaskPredictions, MultiTaskFeatures and
+    detection_eval_output, and this will be removed once the detection metric is refactored to
+    accept MultiTaskPredictions and MultiTaskFeatures directly.
+
+    Args:
+        multi_task_predictions: MultiTaskPredictions containing the decoded predictions.
+        multi_task_batch_inputs: MultiTaskBatchInputs containing the ground-truth boxes and labels.
+
+    Returns:
+        Flat eval-output dict consumed by the detection metric.
+    """
+    if multi_task_predictions.detection3d_predictions is None:
+        raise ValueError(
+            "MultiTaskPredictions must contain detection3d_predictions for multi_task_eval_output."
+        )
+
+    if multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch is None:
+        raise ValueError(
+            "MultiTaskBatchInputs must contain detection3d_gt_batch for multi_task_eval_output."
+        )
+
+    return detection_eval_output(
+        predictions=multi_task_predictions.to_list(),
+        batch={
+            "gt_boxes": multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch.gt_bboxes_3d,
+            "gt_labels": multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch.gt_labels_3d,
+            "gt_num_points": multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch.gt_bboxes_num_points,
+        },
+    )
