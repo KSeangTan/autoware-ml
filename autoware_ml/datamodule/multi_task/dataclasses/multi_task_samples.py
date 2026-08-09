@@ -112,6 +112,20 @@ class MultiTaskGTBatch(NamedTuple):
     detection3d_gt_batch: Detection3DGTBatch | None
     # TODO (Kok Seang): 3D segmentation
 
+    def infer_batch_size(self) -> Int32:
+        """
+        Infer the batch size from the collated multi-task GT batch.
+
+        Returns:
+            Batch size if it can be inferred, otherwise raises ValueError.
+        """
+        if self.point_cloud_gt_batch is not None:
+            return torch.max(self.point_cloud_gt_batch.batch_indices) + 1
+        elif self.detection3d_gt_batch is not None:
+            return self.detection3d_gt_batch.gt_bboxes_3d.shape[0]
+        else:
+            raise ValueError("Cannot infer batch size from an empty MultiTaskGTBatch.")
+
     @staticmethod
     def collate_pointcloud_gt_samples(
         gt_samples: Sequence[MultiTaskGTSample],

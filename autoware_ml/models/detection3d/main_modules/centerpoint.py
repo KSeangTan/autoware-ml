@@ -100,13 +100,13 @@ class CenterPointDetectionModel(MultiTaskBaseModel):
         self, batch: MultiTaskBatchInputs, outputs: MultiTaskOutputs
     ) -> dict[str, Any]:
         """Decode detections and pair them with ground truth for metrics."""
-        if outputs.detection3d_outputs is None:
+        if outputs.detection3d_head_outputs is None:
             raise ValueError(
-                "MultiTaskOutputs must contain detection3d_outputs for CenterPoint build_eval_output pass."
+                "MultiTaskOutputs must contain detection3d_head_outputs for CenterPoint build_eval_output pass."
             )
 
         return multi_task_eval_output(
-            multi_task_predictions=self.bbox_head.decode_outputs(outputs.detection3d_outputs),
+            multi_task_predictions=self.bbox_head.decode_outputs(outputs.detection3d_head_outputs),
             multi_task_features=batch,
         )
 
@@ -119,24 +119,17 @@ class CenterPointDetectionModel(MultiTaskBaseModel):
         Returns:
             Detection head outputs.
         """
-        if multi_task_batch_inputs.detection3d_features is None:
-            raise ValueError(
-                "MultiTaskBatchInputs must contain detection3d_features for CenterPoint forward pass."
-            )
-
-        if multi_task_batch_inputs.detection3d_features.voxels_data is None:
+        if multi_task_batch_inputs.voxels_data is None:
             raise ValueError(
                 "MultiTaskBatchInputs must contain voxels_data for CenterPoint forward pass."
             )
 
         batch_size = multi_task_batch_inputs.multi_task_gt_batch.infer_batch_size()
-        pillar_features = self.pts_voxel_encoder(
-            multi_task_batch_inputs.detection3d_features.voxels_data
-        )
+        pillar_features = self.pts_voxel_encoder(multi_task_batch_inputs.voxels_data)
         bev_features = self.pts_middle_encoder(
             pillar_features=pillar_features,
-            coords=multi_task_batch_inputs.detection3d_features.voxels_data.coords,
-            batch_indices=multi_task_batch_inputs.detection3d_features.voxels_data.batch_indices,
+            coords=multi_task_batch_inputs.voxels_data.coords,
+            batch_indices=multi_task_batch_inputs.voxels_data.batch_indices,
             batch_size=batch_size,
         )
         bev_features = self.pts_backbone(bev_features)
@@ -157,9 +150,9 @@ class CenterPointDetectionModel(MultiTaskBaseModel):
                 "MultiTaskBatchInputs must contain detection3d_gt_batch for CenterPoint compute_metrics pass."
             )
 
-        if multi_task_outputs.detection3d_outputs is None:
+        if multi_task_outputs.detection3d_head_outputs is None:
             raise ValueError(
-                "MultiTaskOutputs must contain detection3d_outputs for CenterPoint compute_metrics pass."
+                "MultiTaskOutputs must contain detection3d_head_outputs for CenterPoint compute_metrics pass."
             )
 
         gt_bboxes_3d = multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch.gt_bboxes_3d
@@ -169,7 +162,7 @@ class CenterPointDetectionModel(MultiTaskBaseModel):
         )
 
         return self.bbox_head.loss(
-            outputs=multi_task_outputs.detection3d_outputs,
+            outputs=multi_task_outputs.detection3d_head_outputs,
             gt_bboxes_3d=gt_bboxes_3d,
             gt_labels_3d=gt_labels_3d,
             gt_valid_bboxes=gt_valid_bboxes,
@@ -177,10 +170,12 @@ class CenterPointDetectionModel(MultiTaskBaseModel):
 
     def decode_outputs(self, outputs: MultiTaskOutputs) -> MultiTaskPredictions:
         """Decode predictions for inference."""
-        if outputs.detection3d_outputs is None:
+        if outputs.detection3d_head_outputs is None:
             raise ValueError(
-                "MultiTaskOutputs must contain detection3d_outputs for CenterPoint decode_outputs pass."
+                "MultiTaskOutputs must contain detection3d_head_outputs for CenterPoint decode_outputs pass."
             )
 
-        multi_task_predictions = self.bbox_head.decode_outputs(outputs=outputs.detection3d_outputs)
+        multi_task_predictions = self.bbox_head.decode_outputs(
+            outputs=outputs.detection3d_head_outputs
+        )
         return multi_task_predictions
