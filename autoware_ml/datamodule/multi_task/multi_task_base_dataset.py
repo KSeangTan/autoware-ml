@@ -11,6 +11,7 @@ from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import (
     MultiTaskGTBatch,
 )
 from autoware_ml.transforms.multi_task.base import MultiTaskTransformsCompose
+from autoware_ml.types.dataset import SplitType
 
 
 class MultiTaskBaseDataset(Dataset):
@@ -20,6 +21,7 @@ class MultiTaskBaseDataset(Dataset):
         self,
         database_root_path: str,
         max_num_3d_gt_bboxes: int,
+        split_type: SplitType,
         dataset_records_dataframe: pl.DataFrame | None,
         transforms: MultiTaskTransformsCompose | None,
     ) -> None:
@@ -30,6 +32,7 @@ class MultiTaskBaseDataset(Dataset):
           max_num_3d_gt_bboxes: Maximum number of 3D ground truth bounding boxes in the dataset.
               This is allowed to be 0 if the dataset does not contain any 3D ground truth
               bounding boxes or it does not need to run 3D detection tasks.
+          split_type: The split type of the dataset (train, val, test).
           dataset_records_dataframe: Polars DataFrame of dataset records to be used in the
               multi-task dataset. Accept None if the dataset records
               are not available at initialization.
@@ -40,6 +43,7 @@ class MultiTaskBaseDataset(Dataset):
         self.max_num_3d_gt_bboxes = max_num_3d_gt_bboxes
         self.transforms = transforms
         self.dataset_records_dataframe = dataset_records_dataframe
+        self.split_type = split_type
 
     def __len__(self) -> int:
         """Return the number of dataset records.

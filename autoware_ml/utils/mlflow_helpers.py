@@ -489,6 +489,7 @@ def prepare_run_context(
     config_name: str,
     hydra_dir: Path | None,
     stage: str,
+    run_name: str | None = None,
     parent_run_id: str | None = None,
     experiment_name: str | None = None,
     extra_tags: dict[str, Any] | None = None,
@@ -505,7 +506,7 @@ def prepare_run_context(
         artifact_location,
     )
 
-    run_name = generate_run_name(config_name, stage, started_at)
+    run_name = run_name or generate_run_name(config_name, stage, started_at)
     provisional_hydra_dir = hydra_dir or generate_hydra_run_dir(
         config_name,
         resolved_tracking_uri,

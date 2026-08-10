@@ -19,6 +19,7 @@ from autoware_ml.datamodule.multi_task.multi_task_base_dataset import (
 from autoware_ml.datamodule.multi_task.base_dataset_task import BaseDatasetTask
 from autoware_ml.transforms.multi_task.base import MultiTaskTransformsCompose
 from autoware_ml.types.tasks import TaskType
+from autoware_ml.types.dataset import SplitType
 
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
         self,
         database_root_path: str,
         max_num_3d_gt_bboxes: int,
+        split_type: SplitType,
         dataset_records_dataframe: pl.DataFrame | None,
         transforms: MultiTaskTransformsCompose | None,
         dataset_tasks: MappingProxyType[TaskType | str, BaseDatasetTask],
@@ -56,6 +58,7 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
             max_num_3d_gt_bboxes=max_num_3d_gt_bboxes,
             dataset_records_dataframe=dataset_records_dataframe,
             transforms=transforms,
+            split_type=split_type,
         )
 
         # Convert the dataset_tasks to TaskType: BaseDatasetTask mapping if the keys are strings
@@ -66,7 +69,7 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
             }
         )
         logger.info(
-            f"Initialized MultiTaskT4Dataset with {len(self.dataset_tasks)} "
+            f"Initialized MultiTaskT4Dataset ({self.split_type}) with {len(self.dataset_tasks)} "
             f"task datasets: {list(self.dataset_tasks.keys())} "
             f"transforms: {self.transforms} and max_num_3d_gt_bboxes: {self.max_num_3d_gt_bboxes}"
         )
