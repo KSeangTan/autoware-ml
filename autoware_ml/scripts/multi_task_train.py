@@ -26,6 +26,7 @@ from omegaconf import DictConfig
 
 from autoware_ml.builders.database_builder import build_database, build_datamodule
 from autoware_ml.builders.mlflow_builder import build_mlflow_run_context
+from autoware_ml.builders.model_builder import build_model, build_data_preprocessor
 from autoware_ml.builders.trainer_logger_builder import build_trainer_logger
 from autoware_ml.utils.runtime import (
     configure_torch_runtime,
@@ -70,9 +71,13 @@ def main(cfg: DictConfig):
         cfg, ml_flow_run_context=run_context, stage="train", config_name=config_name
     )
 
-    # Instantiate datamodule
+    # Build datamodule
     database = build_database(cfg)
     _ = build_datamodule(cfg, database=database)
+
+    # Build model
+    data_preprocessor = build_data_preprocessor(cfg)
+    _ = build_model(cfg, data_preprocessor=data_preprocessor)
 
     # experiment_dir = cfg.experiment_dir
     # logger.info(f"Experiment directory: {experiment_dir}")

@@ -2,8 +2,7 @@
 defaults:
   - /experiments/default_experiment
   - /optimizers@optimizer: default_adamw
-  - /datamodule@datamodule: t4dataset/default_detection3d_datamodule
-  - /metrics@metrics: default_detection3d_t4dataset_metrics
+  - /metrics/t4dataset@metrics: default_detection3d_metrics
   - _self_
 
 database: ???
@@ -13,16 +12,18 @@ metric_ranges: ???
 max_num_points: 32
 max_voxels: 96000
 
-data_preprocessing:
+data_preprocessor:
   pipeline:
-    - _target_: autoware_ml.preprocessing.detection3d.point_pillar.PointPillarPreprocessor
+    - _target_: autoware_ml.preprocessing.detection3d.point_pillar_preprocessor.PointPillarPreprocessor
       voxel_size: ${voxel_size}
       point_cloud_range: ${point_cloud_range}
       max_num_points: ${max_num_points}
       max_voxels: ${max_voxels}
+      voxelization_z_order_first: false
 
 trainer:
-  max_epochs: ???
+  max_epochs: 30
+  check_val_every_n_epoch: 5
   gradient_clip_val: 5.0
   gradient_clip_algorithm: norm
 
@@ -55,6 +56,14 @@ deploy:
 model:
   _target_: autoware_ml.models.detection3d.main_modules.centerpoint.CenterPointDetectionModel
   metrics: ${metrics}
+  log_dict_configs:
+    _target_: autoware_ml.models.multi_task_base_model.LogDictConfigs
+    _convert_: all
+    on_step: false
+    on_epoch: true
+    prog_bar: true
+    sync_dist: true
+
   pts_voxel_encoder:
     _target_: autoware_ml.models.detection3d.encoders.pillars.pillar_feature_net.PillarFeatureNet
     in_channels: 5
@@ -87,7 +96,6 @@ model:
     point_cloud_range: ${point_cloud_range}
     voxel_size: ${voxel_size}
     out_size_factor: ???
-    max_objs: 500
     min_radius: 2
     score_threshold: 0.0
     post_max_size: 100

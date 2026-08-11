@@ -2,16 +2,19 @@
 defaults:
   - base
   - /database@database: t4dataset/t4dataset_j6gen2_base
-  - /metrics@metric_ranges: default_detection3d_t4dataset_120m_metric_ranges
+  - /datamodule@datamodule: t4dataset/default_detection3d_datamodule
+  - /metrics/t4dataset@metric_ranges: default_detection3d_120m_metric_ranges
   - _self_
 
 batch_size: 8
 num_workers: 8
+max_num_3d_gt_bboxes: 500
 
 experiment_group_name: voxel024_second_secfpn_30e_t4dataset_120m
 experiment_name: j6gen2_base
 point_cloud_range: [-122.4, -122.4, -3.0, 122.4, 122.4, 5.0]
 voxel_size: [0.24, 0.24, 8.0]
+
 eval_class_range:
   car: 121.0
   truck: 121.0
@@ -20,9 +23,6 @@ eval_class_range:
   pedestrian: 121.0
   traffic_cone: 121.0
   barrier: 121.0
-
-trainer:
-  max_epochs: 30
 
 model:
   pts_middle_encoder:
@@ -41,6 +41,8 @@ datamodule:
     shuffle: true
   # Overwrite transforms
   train_dataset:
+    max_num_3d_gt_bboxes: ${max_num_3d_gt_bboxes}
+
     transforms:
       _target_: autoware_ml.transforms.multi_task.base.MultiTaskTransformsCompose
       _convert_: all
@@ -119,3 +121,9 @@ datamodule:
 
           min_points: 3
           bev_range: [-60.0, -60.0, 60.0, 60.0]
+
+  test_dataset:
+    max_num_3d_gt_bboxes: ${max_num_3d_gt_bboxes}
+
+  validation_dataset:
+    max_num_3d_gt_bboxes: ${max_num_3d_gt_bboxes}

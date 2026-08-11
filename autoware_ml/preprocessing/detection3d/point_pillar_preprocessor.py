@@ -53,7 +53,7 @@ class PointPillarPreprocessor(DataPreprocessorModule):
         point_cloud_range: Sequence[float],
         max_num_points: int,
         max_voxels: int,
-        voxelization_z_order_first: bool = True,
+        voxelization_z_order_first: bool = False,
         default_point_channels: int = 4,
     ) -> None:
         super().__init__()
