@@ -22,8 +22,8 @@ data_preprocessor:
       voxelization_z_order_first: false
 
 trainer:
-  max_epochs: 30
-  check_val_every_n_epoch: 5
+  max_epochs: ???
+  check_val_every_n_epoch: ???
   gradient_clip_val: 5.0
   gradient_clip_algorithm: norm
 

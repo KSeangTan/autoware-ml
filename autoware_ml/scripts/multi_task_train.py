@@ -22,22 +22,71 @@ import logging
 
 import hydra
 from hydra.core.hydra_config import HydraConfig
+import lightning as L
 from omegaconf import DictConfig
+from pathlib import Path
 
 from autoware_ml.builders.database_builder import build_database, build_datamodule
 from autoware_ml.builders.mlflow_builder import build_mlflow_run_context
 from autoware_ml.builders.model_builder import build_model, build_data_preprocessor
 from autoware_ml.builders.trainer_logger_builder import build_trainer_logger
+from autoware_ml.datamodule.multi_task.multi_task_data_module import MultiTaskDataModule
+from autoware_ml.models.multi_task_base_model import MultiTaskBaseModel
 from autoware_ml.utils.runtime import (
     configure_torch_runtime,
     get_config_path,
+    instantiate_callbacks,
+    instantiate_trainer,
     log_configuration,
+    log_hyperparameters,
     set_seed,
 )
 
 logger = logging.getLogger(__name__)
 _CONFIG_PATH = get_config_path()
 CONFIG_NAME_PREFIX = "experiments/"
+
+
+def train(
+    trainer: L.Trainer,
+    cfg: DictConfig,
+    model: MultiTaskBaseModel,
+    datamodule: MultiTaskDataModule,
+    checkpoint_dir: str,
+    resume_checkpoint_path: str | None,
+) -> float:
+    """
+    Start a training loop.
+
+    Args:
+        trainer: Lightning trainer
+        model: Multi-task base model
+        datamodule: Multi-task data module
+        run_context: MLflow run context
+        resume_checkpoint_path: Path to resume checkpoint, if any
+    """
+
+    logger.info("Starting training...")
+    logger.info(f"Max epochs: {cfg.trainer.max_epochs}")
+    logger.info(f"Accelerator: {cfg.trainer.get('accelerator', 'auto')}")
+    logger.info(f"Devices: {cfg.trainer.get('devices', 'auto')}")
+
+    trainer.fit(model, datamodule=datamodule, ckpt_path=resume_checkpoint_path)
+    logger.info("Training completed!")
+    logger.info("Saving checkpoints and artifacts...")
+    logger.info(f"Checkpoints saved to: {checkpoint_dir}")
+
+    # Return optimized metric for hyperparameter tuning, if running
+    optimized_metric = cfg.get("optimized_metric", "val/loss")
+    score = trainer.callback_metrics.get(optimized_metric)
+    if score is None:
+        available_metrics = sorted(str(key) for key in trainer.callback_metrics)
+        raise ValueError(
+            f"Optimized metric '{optimized_metric}' was not logged. "
+            f"Available callback metrics: {available_metrics}"
+        )
+
+    return score
 
 
 @hydra.main(version_base=None, config_path=_CONFIG_PATH)
@@ -52,6 +101,7 @@ def main(cfg: DictConfig):
     if config_name is None:
         raise ValueError("Hydra config name is not available.")
 
+    logger_enabled = cfg.get("logger") is not None
     config_name = config_name.removeprefix(CONFIG_NAME_PREFIX)
     experiment_name = f"{cfg.experiment_group_name}/{cfg.experiment_name}"
 
@@ -61,155 +111,63 @@ def main(cfg: DictConfig):
         experiment_name=experiment_name,
         config_name=config_name,
         experiment_uid=cfg.experiment_uid,
+        logger_enabled=logger_enabled,
     )
 
     configure_torch_runtime()
     set_seed(cfg)
 
     # Build trainer logger
-    _ = build_trainer_logger(
-        cfg, ml_flow_run_context=run_context, stage="train", config_name=config_name
+    trainer_logger = build_trainer_logger(
+        cfg,
+        ml_flow_run_context=run_context,
+        stage="train",
+        config_name=config_name,
+        logger_enabled=logger_enabled,
     )
 
     # Build datamodule
     database = build_database(cfg)
-    _ = build_datamodule(cfg, database=database)
+    datamodule = build_datamodule(cfg, database=database)
 
     # Build model
     data_preprocessor = build_data_preprocessor(cfg)
-    _ = build_model(cfg, data_preprocessor=data_preprocessor)
+    resume_checkpoint_path = cfg.get("resume_checkpoint", None)
+    model = build_model(
+        cfg, data_preprocessor=data_preprocessor, resume_checkpoint_path=resume_checkpoint_path
+    )
 
-    # experiment_dir = cfg.experiment_dir
-    # logger.info(f"Experiment directory: {experiment_dir}")
-    # logger_enabled = should_enable_logger(cfg)
-    # full_experiment_name = f"{cfg.experiment_group_name}/{cfg.experiment_name}"
-    # if logger_enabled:
-    #     pre_created_run_id = os.environ.get(AUTOWARE_ML_RUN_ID_ENV)
-    #     if pre_created_run_id is not None:
-    #         run_context = load_run_context(cfg.logger.tracking_uri, pre_created_run_id)
-    #         if experiment_dir != run_context.hydra_dir:
-    #             raise RuntimeError(
-    #                 f"Hydra work directory '{experiment_dir}' does not match the pre-created MLflow "
-    #                 f"run directory '{run_context.hydra_dir}'."
-    #             )
-    #     else:
-    #         run_context = prepare_run_context(
-    #             cfg.logger.tracking_uri,
-    #             full_experiment_name,
-    #             hydra_dir=experiment_dir,
-    #             stage="train",
-    #         )
-    return 1.0
-    # work_dir = resolve_work_dir()
-    # logger.info(f"Working directory: {work_dir}")
-    # config_name = get_user_config_name()
-    # logger_enabled = should_enable_logger(cfg)
-    # run_context = None
-    # if logger_enabled:
-    #     pre_created_run_id = os.environ.get(AUTOWARE_ML_RUN_ID_ENV)
-    #     if pre_created_run_id is not None:
-    #         run_context = load_run_context(cfg.logger.tracking_uri, pre_created_run_id)
-    #         if work_dir != run_context.hydra_dir:
-    #             raise RuntimeError(
-    #                 f"Hydra work directory '{work_dir}' does not match the pre-created MLflow "
-    #                 f"run directory '{run_context.hydra_dir}'."
-    #             )
-    #     else:
-    #         run_context = prepare_run_context(
-    #             cfg.logger.tracking_uri,
-    #             config_name,
-    #             hydra_dir=work_dir,
-    #             stage="train",
-    #         )
+    logger.info("Instantiating callbacks...")
+    checkpoint_dir = run_context.checkpoints_dir if run_context is not None else None
+    callbacks = instantiate_callbacks(
+        cfg,
+        logger_enabled=logger_enabled,
+        checkpoint_dir=checkpoint_dir,
+    )
 
-    # configure_torch_runtime()
-    # set_seed(cfg)
+    logger.info("Instantiating trainer...")
+    trainer_root_dir = run_context.artifact_dir if run_context is not None else cfg.experiment_dir
+    trainer: L.Trainer = instantiate_trainer(
+        cfg,
+        callbacks,
+        trainer_logger,
+        trainer_root_dir,
+    )
+    log_hyperparameters(cfg, trainer_logger)
 
-    # logger.info("Instantiating datamodule...")
-    # datamodule: L.LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
+    # Start training
+    if checkpoint_dir is None:
+        checkpoint_dir = Path(cfg.experiment_dir) / "checkpoints"
 
-    # logger.info("Instantiating model...")
-    # model: L.LightningModule = hydra.utils.instantiate(cfg.model)
-    # model.set_data_preprocessing(hydra.utils.instantiate(cfg.data_preprocessing))
-
-    # resume_checkpoint_path = cfg.get("resume_checkpoint", None)
-    # weights_path = cfg.get("weights", None)
-    # if resume_checkpoint_path is not None and weights_path is not None:
-    #     raise ValueError("'--resume-checkpoint' and '--weights' are mutually exclusive.")
-    # if weights_path is not None:
-    #     apply_matching_weights(model, weights_path, map_location="cpu", logger=logger)
-    # if resume_checkpoint_path is not None:
-    #     progress = torch.load(
-    #         resume_checkpoint_path, map_location="cpu", weights_only=False, mmap=True
-    #     )
-    #     logger.info(
-    #         "Resuming from '%s': checkpoint saved at epoch %d (global step %d), "
-    #         "training continues at epoch %d.",
-    #         resume_checkpoint_path,
-    #         progress["epoch"],
-    #         progress["global_step"],
-    #         progress["epoch"] + 1,
-    #     )
-    #     del progress
-
-    # logger.info("Instantiating callbacks...")
-    # callbacks = instantiate_callbacks(
-    #     cfg,
-    #     logger_enabled=logger_enabled,
-    #     checkpoint_dir=run_context.checkpoints_dir if run_context is not None else None,
-    # )
-
-    # logger.info("Instantiating loggers...")
-    # trainer_logger = None
-    # if logger_enabled:
-    #     write_run_config_artifacts(cfg, run_context.artifact_dir)
-    #     write_run_metadata(
-    #         run_context.artifact_dir,
-    #         build_run_metadata(run_context, config_name, run_context.hydra_dir, "train"),
-    #     )
-    #     configure_logger(
-    #         cfg.logger,
-    #         run_context.experiment_name,
-    #         run_context.run_name,
-    #         run_context.tags,
-    #         run_id=run_context.run_id,
-    #     )
-    #     trainer_logger = hydra.utils.instantiate(cfg.logger)
-
-    # logger.info("Instantiating trainer...")
-    # trainer: L.Trainer = instantiate_trainer(
-    #     cfg,
-    #     callbacks,
-    #     trainer_logger,
-    #     run_context.artifact_dir if run_context is not None else work_dir,
-    # )
-
-    # log_hyperparameters(cfg, trainer_logger)
-
-    # # Start training
-    # logger.info("Starting training...")
-    # logger.info(f"Max epochs: {cfg.trainer.max_epochs}")
-    # logger.info(f"Accelerator: {cfg.trainer.get('accelerator', 'auto')}")
-    # logger.info(f"Devices: {cfg.trainer.get('devices', 'auto')}")
-
-    # trainer.fit(model, datamodule=datamodule, ckpt_path=resume_checkpoint_path)
-
-    # logger.info("Training completed!")
-    # checkpoints_dir = (
-    #     run_context.checkpoints_dir if run_context is not None else work_dir / "checkpoints"
-    # )
-    # logger.info(f"Checkpoints saved to: {checkpoints_dir}")
-
-    # # Return optimized metric for hyperparameter tuning, if running
-    # optimized_metric = cfg.get("optimized_metric", "val/loss")
-    # score = trainer.callback_metrics.get(optimized_metric)
-    # if score is None:
-    #     available_metrics = sorted(str(key) for key in trainer.callback_metrics)
-    #     raise ValueError(
-    #         f"Optimized metric '{optimized_metric}' was not logged. "
-    #         f"Available callback metrics: {available_metrics}"
-    #     )
-    # return float(score)
+    score = train(
+        trainer=trainer,
+        cfg=cfg,
+        model=model,
+        datamodule=datamodule,
+        checkpoint_dir=checkpoint_dir,
+        resume_checkpoint_path=resume_checkpoint_path,
+    )
+    return score
 
 
 if __name__ == "__main__":

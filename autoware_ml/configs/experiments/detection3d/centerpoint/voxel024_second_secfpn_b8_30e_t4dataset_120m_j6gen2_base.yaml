@@ -10,8 +10,8 @@ batch_size: 8
 num_workers: 8
 max_num_3d_gt_bboxes: 500
 
-experiment_group_name: voxel024_second_secfpn_30e_t4dataset_120m
-experiment_name: j6gen2_base
+experiment_group_name: centerpoint/${database.version}/j6gen2_base
+experiment_name: voxel024_second_secfpn_30e_t4dataset_120m
 point_cloud_range: [-122.4, -122.4, -3.0, 122.4, 122.4, 5.0]
 voxel_size: [0.24, 0.24, 8.0]
 
@@ -23,6 +23,10 @@ eval_class_range:
   pedestrian: 121.0
   traffic_cone: 121.0
   barrier: 121.0
+
+trainer:
+  max_epochs: 30
+  check_val_every_n_epoch: 5
 
 model:
   pts_middle_encoder:

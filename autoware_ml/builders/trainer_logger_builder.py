@@ -29,7 +29,11 @@ logger = logging.getLogger(__name__)
 
 
 def build_trainer_logger(
-    cfg: DictConfig, ml_flow_run_context: MlflowRunContext, stage: str, config_name: str
+    cfg: DictConfig,
+    ml_flow_run_context: MlflowRunContext,
+    stage: str,
+    config_name: str,
+    logger_enabled: bool,
 ) -> MlflowRunContext:
     """
     Build an MLFlowRunContext from the Hydra configuration.
@@ -37,15 +41,14 @@ def build_trainer_logger(
     Args:
         cfg: Hydra configuration.
         ml_flow_run_context: An existing MLflowRunContext object.
-        experiment_name: The name of the experiment.
         stage: The stage of the run, e.g., "train" or "test".
         config_name: The name of the user configuration (yaml file).
+        logger_enabled: Whether the logger is enabled.
 
     Returns:
         An MLFlowRunContext object containing the run ID, experiment name, and user config name.
     """
     logger.info("Building trainer logger...")
-    logger_enabled = cfg.get("logger") is not None
     trainer_logger = None
     if not logger_enabled:
         logger.info("Logger is not enabled in the configuration.")

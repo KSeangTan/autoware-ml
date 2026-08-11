@@ -35,6 +35,7 @@ def build_mlflow_run_context(
     experiment_name: str,
     experiment_uid: str,
     config_name: str,
+    logger_enabled: bool,
 ) -> MlflowRunContext:
     """
     Build an MLFlowRunContext from the Hydra configuration.
@@ -42,13 +43,17 @@ def build_mlflow_run_context(
     Args:
         cfg: Hydra configuration
         stage: The stage of the run, e.g., "train" or "test".
+        experiment_name: The name of the experiment.
+        experiment_uid: A unique identifier for the experiment.
+        config_name: The name of the user configuration (yaml file).
+        logger_enabled: Whether the logger is enabled.
+
     Returns:
         An MLFlowRunContext object containing the run ID, experiment name, and user config name.
     """
     logger.info("Building MLflow run context...")
     experiment_group_dir = Path(cfg.experiment_group_dir)
     experiment_name = generate_experiment_name(experiment_name)
-    logger_enabled = cfg.get("logger") is not None
     if logger_enabled:
         pre_created_run_id = os.environ.get(AUTOWARE_ML_RUN_ID_ENV)
         if pre_created_run_id is not None:
