@@ -26,3 +26,17 @@ callbacks:
   lr_monitor:
     _target_: lightning.pytorch.callbacks.LearningRateMonitor
     logging_interval: step
+
+  device_stats_monitor:
+    _target_: lightning.pytorch.callbacks.DeviceStatsMonitor
+    cpu_stats: true
+
+  iteration_timer:
+    _target_: autoware_ml.callbacks.iteration_timer.IterationTimer
+    sync_cuda: false
+    warmup_iters: 1
+    log_interval: ${trainer.log_every_n_steps}
+
+  io_processing_timer:
+    _target_: autoware_ml.callbacks.io_processing_timer.IOProcessingTimer
+    log_interval: ${trainer.log_every_n_steps}
