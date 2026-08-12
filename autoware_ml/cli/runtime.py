@@ -251,10 +251,16 @@ def prepare_runtime_environment(
                 "checkpoint_path": str(checkpoint_path),
                 "source_run_id": parent_run_id or "",
             }
+
+        if "experiment_group_dir" in cfg and cfg.experiment_group_dir is not None:
+            hydra_dir = cfg.experiment_group_dir
+        else:
+            hydra_dir = None
+
         run_context = prepare_run_context(
             cfg.logger.tracking_uri,
             config_name,
-            hydra_dir=None,
+            hydra_dir=hydra_dir,
             stage=stage,
             parent_run_id=parent_run_id,
             experiment_name=experiment_name,

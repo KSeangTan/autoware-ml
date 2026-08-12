@@ -146,7 +146,9 @@ def main(cfg: DictConfig):
     )
 
     logger.info("Instantiating trainer...")
-    trainer_root_dir = run_context.artifact_dir if run_context is not None else cfg.experiment_dir
+    trainer_root_dir = (
+        run_context.artifact_dir if run_context is not None else cfg.experiment_run_dir
+    )
     trainer: L.Trainer = instantiate_trainer(
         cfg,
         callbacks,
@@ -157,7 +159,7 @@ def main(cfg: DictConfig):
 
     # Start training
     if checkpoint_dir is None:
-        checkpoint_dir = Path(cfg.experiment_dir) / "checkpoints"
+        checkpoint_dir = Path(cfg.experiment_run_dir) / "checkpoints"
 
     score = train(
         trainer=trainer,

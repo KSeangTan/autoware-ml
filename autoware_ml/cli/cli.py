@@ -56,7 +56,9 @@ session_app = typer.Typer(
 )
 
 TASK_CONFIG_PREFIX = "tasks"
+MULTI_TASK_CONFIG_PREFIX = "experiments"
 TRAIN_ENTRYPOINT_MODULE = "autoware_ml.scripts.train"
+MULTI_TASK_TRAIN_ENTRYPOINT_MODULE = "autoware_ml.scripts.multi_task_train"
 DEPLOY_ENTRYPOINT_MODULE = "autoware_ml.scripts.deploy"
 TEST_ENTRYPOINT_MODULE = "autoware_ml.scripts.test"
 CLI_RUNTIME_MODULE = "autoware_ml.cli.runtime"
@@ -288,6 +290,95 @@ def train(
         resume_checkpoint=resume_checkpoint,
         new_run=new_run,
         config_prefix=TASK_CONFIG_PREFIX,
+    )
+
+
+@app.command(
+    name="multi_task_train",
+    cls=OptionFirstTyperCommand,
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def multi_task_train(
+    ctx: typer.Context,
+    config_name: Annotated[
+        str,
+        typer.Option(
+            "--config-name",
+            help="Config name or YAML config path",
+            autocompletion=complete_task_config,
+        ),
+    ],
+    weights: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--weights",
+            help="One or more checkpoint paths for pretrained weight initialization "
+            "(repeatable; later checkpoints overwrite earlier ones). "
+            "Mutually exclusive with --resume-checkpoint.",
+            autocompletion=complete_checkpoint_path,
+        ),
+    ] = None,
+    resume_checkpoint: Annotated[
+        str | None,
+        typer.Option(
+            "--resume-checkpoint",
+            help="Full Lightning checkpoint path to resume training from "
+            "(restores model weights, optimizer state, and epoch, and continues "
+            "the checkpoint's source MLflow run). Mutually exclusive with --weights.",
+            autocompletion=complete_checkpoint_path,
+        ),
+    ] = None,
+    new_run: Annotated[
+        bool,
+        typer.Option(
+            "--new-run",
+            help="With --resume-checkpoint: continue the training state in a new "
+            "MLflow run instead of the checkpoint's source run.",
+        ),
+    ] = False,
+) -> None:
+    """Run model training through the Hydra-backed training entrypoint.
+
+    Pass ``--weights`` to initialize model parameters from one or more pretrained
+    checkpoints before training starts (e.g. transfer learning from a seg3d backbone
+    into a det3d model). Pass ``--resume-checkpoint`` to resume an interrupted training
+    run from its full saved state; it continues inside the checkpoint's source MLflow
+    run unless ``--new-run`` forks it. The two options are mutually exclusive.
+
+    Args:
+        ctx: Typer context containing additional Hydra overrides.
+        config_name: Config name or config file path to train.
+        weights: One or more checkpoint paths for pretrained weight initialization.
+        resume_checkpoint: Full Lightning checkpoint path to resume training from.
+        new_run: Whether to fork the resumed training into a new MLflow run.
+    """
+    if weights and resume_checkpoint:
+        raise typer.BadParameter("--weights and --resume-checkpoint are mutually exclusive.")
+    if new_run and not resume_checkpoint:
+        raise typer.BadParameter("--new-run requires --resume-checkpoint.")
+
+    hydra_overrides: list[str] = []
+    if weights:
+        weights_list = "[" + ",".join(weights) + "]"
+        hydra_overrides.append(f"+weights={weights_list}")
+    if resume_checkpoint:
+        resume_path = Path(resume_checkpoint).expanduser().resolve()
+        if not resume_path.is_file():
+            raise typer.BadParameter(f"Resume checkpoint '{resume_checkpoint}' does not exist.")
+        resume_checkpoint = str(resume_path)
+        hydra_overrides.append(f"+resume_checkpoint={resume_checkpoint}")
+
+    run_lazy_script(
+        CLI_RUNTIME_MODULE,
+        "run_hydra_entrypoint",
+        entrypoint_module=MULTI_TASK_TRAIN_ENTRYPOINT_MODULE,
+        config_name=config_name,
+        stage="train",
+        extra_args=ctx.args,
+        hydra_overrides=hydra_overrides,
+        resume_checkpoint=resume_checkpoint,
+        new_run=new_run,
+        config_prefix=MULTI_TASK_CONFIG_PREFIX,
     )
 
 
