@@ -151,6 +151,22 @@ class T4Dataset(BaseDatabase):
         )
         return string
 
+    @property
+    def hash_repr(self) -> str:
+        """
+        Get the representation of the database that identifies the content of its cache.
+
+        Extends the base representation with the lidar settings that shape the cached records.
+
+        Returns:
+          str: Content representation of the database.
+        """
+
+        return (
+            f"{super().hash_repr}"
+            f"(lidar_pointcloud_num_features={self._lidar_pointcloud_num_features})"
+        )
+
     def __eq__(self, other: DatabaseInterface) -> bool:
         """
         Compare two databases by their version and scenario IDs.
