@@ -224,8 +224,6 @@ class MultiTaskBaseModel(MetricEvalMixin, L.LightningModule):
         # suffix the keys (``val/loss_step``/``val/loss_epoch``) and break callbacks that
         # monitor ``val/loss``.
         on_step = self.log_dict_configs.on_step if step_prefix == SplitType.TRAIN else False
-        # Sample loading and transform time is measured in the dataloader worker and carried on
-        # the batch; IOProcessingTimer logs it as ``{stage}/io_processing_total_time``.
         logged_values: dict[str, Any] = {f"{step_prefix}/{k}": v for k, v in metrics.items()}
         self.log_dict(
             logged_values,

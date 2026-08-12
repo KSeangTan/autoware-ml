@@ -62,11 +62,14 @@ def multi_task_eval_output(
             "MultiTaskBatchInputs must contain detection3d_gt_batch for multi_task_eval_output."
         )
 
-    return detection_eval_output(
-        predictions=multi_task_predictions.to_list(),
-        batch={
-            "gt_boxes": multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch.gt_bboxes_3d,
-            "gt_labels": multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch.gt_labels_3d,
-            "gt_num_points": multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch.gt_bboxes_num_points,
-        },
-    )
+    gt_detections = multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch
+    valid = gt_detections.gt_valid_bboxes
+    batch = {
+        "gt_boxes": [gt_detections.gt_bboxes_3d[i, : valid[i]] for i in range(len(valid))],
+        "gt_labels": [gt_detections.gt_labels_3d[i, : valid[i]] for i in range(len(valid))],
+        "gt_num_points": [
+            gt_detections.gt_bboxes_num_points[i, : valid[i]] for i in range(len(valid))
+        ],
+    }
+
+    return detection_eval_output(predictions=multi_task_predictions.to_list(), batch=batch)
