@@ -100,6 +100,10 @@ class MultiTaskGTSample(NamedTuple):
     # Information about lidar transformation
     lidar_transformation_sample: LiDARTransformationSample | None = None
 
+    # Seconds spent loading this sample and running it through the transform pipeline.
+    # Assigned by the dataset once the pipeline has finished.
+    io_processing_time: float = 0.0
+
 
 class MultiTaskGTBatch(NamedTuple):
     """
@@ -111,6 +115,9 @@ class MultiTaskGTBatch(NamedTuple):
     point_cloud_gt_batch: PointCloudGTBatch | None
     detection3d_gt_batch: Detection3DGTBatch | None
     # TODO (Kok Seang): 3D segmentation
+
+    # Summed io_processing_time of every sample collated into this batch.
+    io_processing_time: float = 0.0
 
     def infer_batch_size(self) -> Int32:
         """
@@ -215,4 +222,5 @@ class MultiTaskGTBatch(NamedTuple):
         return MultiTaskGTBatch(
             point_cloud_gt_batch=point_cloud_gt_batch,
             detection3d_gt_batch=detection3d_gt_batch,
+            io_processing_time=sum(sample.io_processing_time for sample in gt_samples),
         )

@@ -21,6 +21,7 @@ used by task-specific model wrappers throughout the framework.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+import time
 from typing import Any, NamedTuple, final
 from types import MappingProxyType
 
@@ -107,6 +108,44 @@ class MultiTaskBaseModel(MetricEvalMixin, L.LightningModule):
         )
         self.scheduler_config = dict(scheduler_config) if scheduler_config else {}
         self.log_dict_configs = log_dict_configs
+        self._last_train_batch_end_time: float | None = None
+        self._data_wait_time = 0.0
+
+    def on_train_epoch_start(self) -> None:
+        """Drop the batch-end timestamp so the first batch of the epoch is not charged
+        with the idle gap that precedes it (validation, checkpointing, epoch setup)."""
+        self._last_train_batch_end_time = None
+        self._data_wait_time = 0.0
+
+    def on_before_batch_transfer(
+        self, batch: MultiTaskGTBatch, dataloader_idx: int
+    ) -> MultiTaskGTBatch:
+        """Measure how long the training loop waited for this batch to arrive.
+
+        The hook runs once the dataloader has produced a batch and before it is moved to
+        the device, so the gap since the previous batch ended is the stall the training
+        loop actually experienced, unlike the worker-side cost in ``io_processing_time``.
+
+        Args:
+            batch: Collated batch of type :class:`MultiTaskGTBatch` on the CPU.
+            dataloader_idx: Lightning dataloader index.
+
+        Returns:
+            The batch, unchanged.
+        """
+        if self.training and self._last_train_batch_end_time is not None:
+            self._data_wait_time = time.perf_counter() - self._last_train_batch_end_time
+        return batch
+
+    def on_train_batch_end(self, outputs: Any, batch: MultiTaskBatchInputs, batch_idx: int) -> None:
+        """Record when the training step finished, to measure the wait for the next batch.
+
+        Args:
+            outputs: Value returned by :meth:`training_step`.
+            batch: Batch consumed by the step that just finished.
+            batch_idx: Current batch index.
+        """
+        self._last_train_batch_end_time = time.perf_counter()
 
     def on_after_batch_transfer(
         self, batch: MultiTaskGTBatch, dataloader_idx: int
@@ -224,8 +263,16 @@ class MultiTaskBaseModel(MetricEvalMixin, L.LightningModule):
         # suffix the keys (``val/loss_step``/``val/loss_epoch``) and break callbacks that
         # monitor ``val/loss``.
         on_step = self.log_dict_configs.on_step if step_prefix == SplitType.TRAIN else False
+        # Sample loading and transform time is measured in the dataloader worker and carried
+        # on the batch, because Lightning forbids self.log() inside on_after_batch_transfer().
+        logged_values: dict[str, Any] = {f"{step_prefix}/{k}": v for k, v in metrics.items()}
+        logged_values[f"{step_prefix}/io_processing_seconds"] = (
+            multi_task_batch_inputs.multi_task_gt_batch.io_processing_time
+        )
+        if step_prefix == SplitType.TRAIN:
+            logged_values[f"{step_prefix}/data_wait_seconds"] = self._data_wait_time
         self.log_dict(
-            {f"{step_prefix}/{k}": v for k, v in metrics.items()},
+            logged_values,
             prog_bar=self.log_dict_configs.prog_bar,
             logger=self.log_dict_configs.logger,
             on_step=on_step,

@@ -1,5 +1,6 @@
 from abc import abstractmethod
 from pathlib import Path
+import time
 from typing import Sequence
 
 
@@ -64,8 +65,10 @@ class MultiTaskBaseDataset(Dataset):
         Returns:
             Transformed MultiTaskGTSample instance.
         """
+        start_time = time.perf_counter()
         multi_task_gt_sample = self.get_data_sample(index)
-        return self.apply_transforms(multi_task_gt_sample)
+        transformed_gt_sample = self.apply_transforms(multi_task_gt_sample)
+        return transformed_gt_sample._replace(io_processing_time=time.perf_counter() - start_time)
 
     def assign_dataset_records(self, dataset_records_dataframe: pl.DataFrame) -> None:
         """Assign the dataset records dataframe.
