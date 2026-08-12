@@ -59,7 +59,7 @@ model:
   log_dict_configs:
     _target_: autoware_ml.models.multi_task_base_model.LogDictConfigs
     _convert_: all
-    on_step: false
+    on_step: true
     on_epoch: true
     prog_bar: true
     sync_dist: true

@@ -220,11 +220,15 @@ class MultiTaskBaseModel(MetricEvalMixin, L.LightningModule):
         if "loss" not in metrics:
             raise ValueError("compute_metrics() must return a dict containing a 'loss' key.")
         batch_size = self.get_log_batch_size(multi_task_batch_inputs)
+        # Step-level logging is training-only. Enabling it for val/test would make Lightning
+        # suffix the keys (``val/loss_step``/``val/loss_epoch``) and break callbacks that
+        # monitor ``val/loss``.
+        on_step = self.log_dict_configs.on_step if step_prefix == SplitType.TRAIN else False
         self.log_dict(
             {f"{step_prefix}/{k}": v for k, v in metrics.items()},
             prog_bar=self.log_dict_configs.prog_bar,
             logger=self.log_dict_configs.logger,
-            on_step=self.log_dict_configs.on_step,
+            on_step=on_step,
             on_epoch=self.log_dict_configs.on_epoch,
             reduce_fx=self.log_dict_configs.reduce_fx,
             sync_dist=self.log_dict_configs.sync_dist,
