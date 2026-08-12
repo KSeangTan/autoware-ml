@@ -528,6 +528,55 @@ class TestCenterHead(unittest.TestCase):
         self.assertTrue(torch.isfinite(losses["loss"]))
         self.assertTrue(torch.isfinite(losses["loss_bbox"]))
 
+    def test_get_targets_keeps_out_of_map_boxes_at_gatherable_index(self) -> None:
+        """
+        Test that boxes whose centers fall outside the feature map still carry an index the loss
+        can gather with. They are excluded from the loss by their mask, but loss() gathers every
+        index before masking, so an out-of-map index reads out of bounds, which raises on CPU and
+        trips a device-side assert on CUDA.
+        """
+        feature_height, feature_width = 4, 4
+        gt_bboxes_3d = torch.tensor(
+            [
+                [
+                    [2.2, 3.3, 0.2, 4.0, 1.6, 1.5, 0.25, 0.5, -0.1, -0.2],
+                    # Past the far end of the range, its index runs beyond height * width
+                    [90.0, 90.0, 0.2, 4.0, 1.6, 1.5, 0.25, 0.5, -0.1, -0.2],
+                    # Behind the origin of the range, its index goes negative
+                    [-50.0, -50.0, 0.2, 4.0, 1.6, 1.5, 0.25, 0.5, -0.1, -0.2],
+                    # A NaN center floors to a garbage integer
+                    [math.nan, 3.3, 0.2, 4.0, 1.6, 1.5, 0.25, 0.5, -0.1, -0.2],
+                ]
+            ],
+            device=self.device,
+            dtype=torch.float32,
+        )
+        gt_labels_3d = torch.tensor([[0, 0, 0, 0]], dtype=torch.int32, device=self.device)
+        # Every box is within the valid count, so only the in-bounds check can reject them
+        gt_valid_bboxes = torch.tensor([4], dtype=torch.int32, device=self.device)
+
+        targets = self.center_head.get_targets(
+            gt_bboxes_3d=gt_bboxes_3d.clone(),
+            gt_labels_3d=gt_labels_3d,
+            gt_valid_bboxes=gt_valid_bboxes,
+            feature_map_size=(feature_height, feature_width),
+            device=self.device,
+        )
+
+        self.assertTrue(targets.valid_masks[0, 0].item())
+        self.assertFalse(targets.valid_masks[0, 1:].any().item())
+        self.assertTrue((targets.reg_indices >= 0).all().item())
+        self.assertTrue((targets.reg_indices < feature_height * feature_width).all().item())
+
+        # The gather inside loss() is what the indices have to survive
+        losses = self.center_head.loss(
+            outputs=self._build_zero_center_head_outputs_for_loss(),
+            gt_bboxes_3d=gt_bboxes_3d.clone(),
+            gt_labels_3d=gt_labels_3d,
+            gt_valid_bboxes=gt_valid_bboxes,
+        )
+        self.assertTrue(torch.isfinite(losses["loss"]))
+
     def test_loss_without_velocity_treats_every_channel_as_geometry(self) -> None:
         """
         Test that a head built without velocity treats all of its channels as geometry: the

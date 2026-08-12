@@ -13,7 +13,7 @@ max_num_points: 32
 max_voxels: 96000
 
 data_preprocessor:
-  pipeline:
+  preprocessor_modules:
     - _target_: autoware_ml.preprocessing.detection3d.point_pillar_preprocessor.PointPillarPreprocessor
       voxel_size: ${voxel_size}
       point_cloud_range: ${point_cloud_range}
@@ -83,11 +83,13 @@ model:
     out_channels: [64, 128, 256]
     layer_nums: [3, 5, 5]
     layer_strides: ???
+    activation_checkpointing: true
   pts_neck:
     _target_: autoware_ml.models.detection3d.necks.second_fpn.SECONDFPN
     in_channels: [64, 128, 256]
     out_channels: [128, 128, 128]
     upsample_strides: [0.5, 1, 2]
+    activation_checkpointing: true
   bbox_head:
     _target_: autoware_ml.models.detection3d.heads.centerhead.CenterHead
     in_channels: 384

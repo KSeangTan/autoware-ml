@@ -86,7 +86,7 @@ def train(
             f"Available callback metrics: {available_metrics}"
         )
 
-    return score
+    return float(score)
 
 
 @hydra.main(version_base=None, config_path=_CONFIG_PATH)
@@ -164,7 +164,7 @@ def main(cfg: DictConfig):
         cfg=cfg,
         model=model,
         datamodule=datamodule,
-        checkpoint_dir=checkpoint_dir,
+        checkpoint_dir=str(checkpoint_dir),
         resume_checkpoint_path=resume_checkpoint_path,
     )
     return score

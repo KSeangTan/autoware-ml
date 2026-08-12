@@ -15,6 +15,7 @@
 import logging
 
 from hydra.utils import instantiate
+from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig
 
 from autoware_ml.utils.mlflow_helpers import (
@@ -34,7 +35,7 @@ def build_trainer_logger(
     stage: str,
     config_name: str,
     logger_enabled: bool,
-) -> MlflowRunContext:
+) -> Logger | None:
     """
     Build an MLFlowRunContext from the Hydra configuration.
 

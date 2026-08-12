@@ -29,16 +29,16 @@ class DataPreprocessor:
             is_training (bool): Set True if DataPreprocessor is run in the training mode.
 
         Returns:
-            MultiTaskBatchFeatures: The batch of data after running the list of preprocessor_modules.
+            MultiTaskBatchInputs: The batch of data after running the list of preprocessor_modules.
         """
         # Build a MultiTaskFeatures instance from the input batch
-        multi_task_batch_features = MultiTaskBatchInputs(
+        multi_task_batch_inputs = MultiTaskBatchInputs(
             multi_task_gt_batch=multi_task_gt_batch,
             voxels_data=None,  # Placeholder for voxelization
         )
         for module in self.preprocessor_modules:
-            multi_task_batch_features = module(
-                multi_task_batch_features=multi_task_batch_features,
+            multi_task_batch_inputs = module(
+                multi_task_batch_inputs=multi_task_batch_inputs,
                 is_training=is_training,
             )
-        return multi_task_batch_features
+        return multi_task_batch_inputs

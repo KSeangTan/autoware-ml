@@ -107,7 +107,7 @@ class CenterPointDetectionModel(MultiTaskBaseModel):
 
         return multi_task_eval_output(
             multi_task_predictions=self.bbox_head.decode_outputs(outputs.detection3d_head_outputs),
-            multi_task_features=batch,
+            multi_task_batch_inputs=batch,
         )
 
     def forward(self, multi_task_batch_inputs: MultiTaskBatchInputs) -> MultiTaskOutputs:

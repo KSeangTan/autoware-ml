@@ -120,7 +120,7 @@ class MultiTaskBaseModel(MetricEvalMixin, L.LightningModule):
         Returns:
             Batch of type :class:`MultiTaskBatchInputs` after runtime preprocessing.
         """
-        return self._data_preprocessor(batch)
+        return self._data_preprocessor(batch, is_training=self.training)
 
     def decode_outputs(self, outputs: MultiTaskOutputs) -> MultiTaskPredictions:
         """Convert raw model outputs into task-level predictions.

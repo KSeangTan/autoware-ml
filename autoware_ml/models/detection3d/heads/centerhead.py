@@ -265,6 +265,12 @@ class CenterHead(nn.Module):
 
         # (batch_size, max_num_bboxes) -> (batch_size, max_num_bboxes)
         reg_indices = (center_int[:, :, 1] * feature_width + center_int[:, :, 0]).long()
+        # Boxes rejected by valid_bbox_masks sit outside the feature map, so their flattened
+        # index is not a legal gather position: a box past the range maps beyond height*width,
+        # one behind the range maps negative, and a NaN coordinate floors to a garbage integer.
+        # They contribute nothing to the loss, but loss() gathers with every index before the
+        # mask is applied, so they have to be redirected to a legal cell here.
+        reg_indices = torch.where(valid_bbox_masks, reg_indices, torch.zeros_like(reg_indices))
         return CenterHeadTargets(
             heatmaps=heatmaps,
             reg_targets=reg_targets,
