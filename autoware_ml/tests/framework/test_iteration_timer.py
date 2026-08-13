@@ -56,7 +56,7 @@ class TestStepMetrics:
 
         _run_train_iters(callback, _trainer(), module, [0.0, 1.5])
 
-        assert _logged(module)["train/iter_time"] == pytest.approx(1.5)
+        assert _logged(module)["train/batch_forward_time"] == pytest.approx(1.5)
 
     def test_data_time_measures_gap_between_iterations(self) -> None:
         callback = IterationTimer()
@@ -87,8 +87,43 @@ class TestStepMetrics:
         callback.on_train_batch_end(trainer, module, outputs=None, batch=None, batch_idx=0)
 
         logged = _logged(module)
-        assert logged["val/iter_time"] == pytest.approx(90.0)
-        assert logged["train/iter_time"] == pytest.approx(100.5)
+        assert logged["val/batch_forward_time"] == pytest.approx(90.0)
+        assert logged["train/batch_forward_time"] == pytest.approx(100.5)
+
+
+class TestTotalIterationTime:
+    def test_total_is_the_fetch_plus_the_forward(self) -> None:
+        callback = IterationTimer()
+        module = _module()
+
+        # iter 0 runs 0.0 -> 1.0, iter 1 fetches for 0.25s then runs for 0.75s.
+        _run_train_iters(callback, _trainer(), module, [0.0, 1.0, 1.25, 2.0])
+
+        logged = _logged(module)
+        assert logged["train/data_time"] == pytest.approx(0.25)
+        assert logged["train/batch_forward_time"] == pytest.approx(0.75)
+        assert logged["train/total_iter_time"] == pytest.approx(1.0)
+
+    def test_first_iteration_has_no_total(self) -> None:
+        callback = IterationTimer()
+        module = _module()
+
+        _run_train_iters(callback, _trainer(), module, [0.0, 1.0])
+
+        assert "train/total_iter_time" not in _logged(module)
+
+    def test_epoch_summary_reports_mean_and_max(self) -> None:
+        callback = IterationTimer(warmup_iters=0)
+        module = _module()
+        trainer = _trainer()
+
+        # Totals of the 2nd and 3rd iterations: (1.0 + 1.0) and (2.0 + 3.0).
+        _run_train_iters(callback, trainer, module, [0.0, 10.0, 11.0, 12.0, 14.0, 17.0])
+        callback.on_train_epoch_end(trainer, module)
+
+        logged = _logged(module)
+        assert logged["train/total_iter_time_mean"] == pytest.approx(3.5)
+        assert logged["train/total_iter_time_max"] == pytest.approx(5.0)
 
 
 class TestEpochSummary:
@@ -102,8 +137,8 @@ class TestEpochSummary:
         callback.on_train_epoch_end(trainer, module)
 
         logged = _logged(module)
-        assert logged["train/iter_time_mean"] == pytest.approx(2.0)
-        assert logged["train/iter_time_max"] == pytest.approx(3.0)
+        assert logged["train/batch_forward_time_mean"] == pytest.approx(2.0)
+        assert logged["train/batch_forward_time_max"] == pytest.approx(3.0)
 
     def test_summary_is_skipped_when_all_iterations_are_warmup(self) -> None:
         callback = IterationTimer(warmup_iters=5)
@@ -113,7 +148,7 @@ class TestEpochSummary:
         _run_train_iters(callback, trainer, module, [0.0, 1.0])
         callback.on_train_epoch_end(trainer, module)
 
-        assert "train/iter_time_mean" not in _logged(module)
+        assert "train/batch_forward_time_mean" not in _logged(module)
 
     def test_epoch_end_resets_state_for_next_epoch(self) -> None:
         callback = IterationTimer(warmup_iters=0)
@@ -130,7 +165,7 @@ class TestEpochSummary:
         logged = _logged(module)
         # A stale batch-end timestamp would show up as a 99s data_time.
         assert "train/data_time" not in logged
-        assert logged["train/iter_time_mean"] == pytest.approx(1.0)
+        assert logged["train/batch_forward_time_mean"] == pytest.approx(1.0)
 
 
 class TestSanityCheck:
@@ -159,7 +194,7 @@ class TestSanityCheck:
         callback.on_validation_batch_start(trainer, module, batch=None, batch_idx=0)
         callback.on_validation_batch_end(trainer, module, outputs=None, batch=None, batch_idx=0)
 
-        assert _logged(module)["val/iter_time"] == pytest.approx(2.0)
+        assert _logged(module)["val/batch_forward_time"] == pytest.approx(2.0)
 
 
 class TestConstructorValidation:

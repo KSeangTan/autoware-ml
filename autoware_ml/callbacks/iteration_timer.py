@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import statistics
 import time
-from typing import Any
+from typing import Any, NamedTuple
 
 import torch
 from lightning.pytorch import LightningModule, Trainer
@@ -34,26 +34,45 @@ VAL = "val"
 TEST = "test"
 
 
+class IterationTiming(NamedTuple):
+    """One iteration's compute duration and the wall-clock cost it belongs to.
+
+    Attributes:
+        batch_forward_time: Seconds between the batch-start and batch-end hooks.
+        total_iter_time: ``batch_forward_time`` plus the fetch that preceded it,
+            or ``None`` for the first iteration of an epoch, which has no
+            measurable fetch.
+    """
+
+    batch_forward_time: float
+    total_iter_time: float | None
+
+
 class _StageTimer:
     """Accumulate per-iteration timings for a single loop stage.
 
     Attributes:
-        iter_times: Iteration durations collected in the current epoch.
+        batch_forward_times: Iteration compute durations collected in the current epoch.
         data_times: Batch-fetch durations collected in the current epoch.
+        total_times: Fetch plus compute durations collected in the current epoch.
     """
 
     def __init__(self) -> None:
-        self.iter_times: list[float] = []
+        self.batch_forward_times: list[float] = []
         self.data_times: list[float] = []
+        self.total_times: list[float] = []
         self._batch_start: float | None = None
         self._batch_end: float | None = None
+        self._pending_data_time: float | None = None
 
     def reset(self) -> None:
         """Drop all timings and pending timestamps, ready for a new epoch."""
-        self.iter_times.clear()
+        self.batch_forward_times.clear()
         self.data_times.clear()
+        self.total_times.clear()
         self._batch_start = None
         self._batch_end = None
+        self._pending_data_time = None
 
     def start_batch(self, now: float) -> float | None:
         """Mark the beginning of an iteration.
@@ -68,39 +87,54 @@ class _StageTimer:
         """
         self._batch_start = now
         if self._batch_end is None:
+            self._pending_data_time = None
             return None
         data_time = now - self._batch_end
         self.data_times.append(data_time)
+        self._pending_data_time = data_time
         return data_time
 
-    def end_batch(self, now: float) -> float | None:
+    def end_batch(self, now: float) -> IterationTiming | None:
         """Mark the end of an iteration.
 
         Args:
             now: Current timestamp, in seconds.
 
         Returns:
-            Seconds the iteration took, or ``None`` when no matching
+            The iteration's timings, or ``None`` when no matching
             :meth:`start_batch` was recorded.
         """
         self._batch_end = now
         if self._batch_start is None:
             return None
-        iter_time = now - self._batch_start
+        batch_forward_time = now - self._batch_start
         self._batch_start = None
-        self.iter_times.append(iter_time)
-        return iter_time
+        self.batch_forward_times.append(batch_forward_time)
+        total_iter_time = None
+        if self._pending_data_time is not None:
+            total_iter_time = self._pending_data_time + batch_forward_time
+            self.total_times.append(total_iter_time)
+        self._pending_data_time = None
+        return IterationTiming(
+            batch_forward_time=batch_forward_time, total_iter_time=total_iter_time
+        )
 
 
 class IterationTimer(Callback):
     """Record how long each train, validation, and test iteration takes.
 
-    Every iteration contributes two step metrics, ``{stage}/iter_time`` (the
-    time spent between the batch-start and batch-end hooks) and
-    ``{stage}/data_time`` (the gap since the previous iteration ended, which
-    is dominated by waiting on the dataloader). At the end of each epoch the
-    callback logs ``{stage}/iter_time_mean``, ``{stage}/iter_time_max`` and
-    ``{stage}/data_time_mean``, all in seconds.
+    Every iteration contributes three step metrics: ``{stage}/batch_forward_time``
+    (the time spent between the batch-start and batch-end hooks),
+    ``{stage}/data_time`` (the gap since the previous iteration ended, which is
+    dominated by waiting on the dataloader), and ``{stage}/total_iter_time``
+    (their sum, the wall-clock cost of the iteration). At the end of each epoch
+    the callback logs ``{stage}/batch_forward_time_mean``,
+    ``{stage}/batch_forward_time_max``, ``{stage}/data_time_mean``,
+    ``{stage}/total_iter_time_mean`` and ``{stage}/total_iter_time_max``, all in
+    seconds.
+
+    The first iteration of an epoch has no measurable fetch, so it contributes
+    neither ``data_time`` nor ``total_iter_time``.
 
     Because CUDA kernels are launched asynchronously, a batch-end hook can be
     reached while the GPU is still busy; ``sync_cuda`` inserts a device
@@ -167,13 +201,26 @@ class IterationTimer(Callback):
         if trainer.sanity_checking:
             return
         timer = self._timers[stage]
-        iter_time = timer.end_batch(self._now())
-        if iter_time is None:
+        timing = timer.end_batch(self._now())
+        if timing is None:
             return
-        self._log(pl_module, f"{stage}/iter_time", iter_time)
-        count = len(timer.iter_times)
+        self._log(pl_module, f"{stage}/batch_forward_time", timing.batch_forward_time)
+        if timing.total_iter_time is not None:
+            self._log(pl_module, f"{stage}/total_iter_time", timing.total_iter_time)
+        count = len(timer.batch_forward_times)
         if self.log_interval and count % self.log_interval == 0:
-            logger.info("%s iteration %d: %.4fs", stage, count, iter_time)
+            if timing.total_iter_time is None:
+                logger.info(
+                    "%s iteration %d: forward %.4fs", stage, count, timing.batch_forward_time
+                )
+            else:
+                logger.info(
+                    "%s iteration %d: forward %.4fs, total %.4fs",
+                    stage,
+                    count,
+                    timing.batch_forward_time,
+                    timing.total_iter_time,
+                )
 
     def _epoch_end(self, stage: str, trainer: Trainer, pl_module: LightningModule) -> None:
         """Summarize the finished epoch for ``stage`` and reset its timer.
@@ -187,25 +234,42 @@ class IterationTimer(Callback):
             self._timers[stage].reset()
             return
         timer = self._timers[stage]
-        iter_times = timer.iter_times[self.warmup_iters :]
+        batch_forward_times = timer.batch_forward_times[self.warmup_iters :]
         data_times = timer.data_times[self.warmup_iters :]
-        if iter_times:
+        total_times = timer.total_times[self.warmup_iters :]
+        if batch_forward_times:
             self._log(
-                pl_module, f"{stage}/iter_time_mean", statistics.fmean(iter_times), on_step=False
+                pl_module,
+                f"{stage}/batch_forward_time_mean",
+                statistics.fmean(batch_forward_times),
+                on_step=False,
             )
-            self._log(pl_module, f"{stage}/iter_time_max", max(iter_times), on_step=False)
+            self._log(
+                pl_module,
+                f"{stage}/batch_forward_time_max",
+                max(batch_forward_times),
+                on_step=False,
+            )
             logger.info(
                 "%s epoch timing over %d iterations (%d warmup excluded): mean %.4fs, max %.4fs",
                 stage,
-                len(iter_times),
-                min(self.warmup_iters, len(timer.iter_times)),
-                statistics.fmean(iter_times),
-                max(iter_times),
+                len(batch_forward_times),
+                min(self.warmup_iters, len(timer.batch_forward_times)),
+                statistics.fmean(batch_forward_times),
+                max(batch_forward_times),
             )
         if data_times:
             self._log(
                 pl_module, f"{stage}/data_time_mean", statistics.fmean(data_times), on_step=False
             )
+        if total_times:
+            self._log(
+                pl_module,
+                f"{stage}/total_iter_time_mean",
+                statistics.fmean(total_times),
+                on_step=False,
+            )
+            self._log(pl_module, f"{stage}/total_iter_time_max", max(total_times), on_step=False)
         timer.reset()
 
     @staticmethod

@@ -25,6 +25,7 @@ dependencies = [
     "mlflow==3.10.1",
     "numpy==1.26.4",
     "nuscenes-devkit==1.2.0",
+    "nvidia-ml-py==13.610.43",
     "optuna==4.8.0",
     "onnx==1.21.0",
     "onnx_graphsurgeon==0.5.8",

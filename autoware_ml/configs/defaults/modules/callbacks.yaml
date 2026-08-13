@@ -37,6 +37,15 @@ callbacks:
     warmup_iters: 1
     log_interval: ${trainer.log_every_n_steps}
 
-  io_processing_timer:
-    _target_: autoware_ml.callbacks.io_processing_timer.IOProcessingTimer
+  data_processing_timer:
+    _target_: autoware_ml.callbacks.data_processing_timer.DataProcessingTimer
+    log_interval: ${trainer.log_every_n_steps}
+
+  cpu_stats_monitor:
+    _target_: autoware_ml.callbacks.cpu_stats_monitor.CPUStatsMonitor
+    log_interval: ${trainer.log_every_n_steps}
+    memory_stats: true
+
+  gpu_stats_monitor:
+    _target_: autoware_ml.callbacks.gpu_stats_monitor.GPUStatsMonitor
     log_interval: ${trainer.log_every_n_steps}

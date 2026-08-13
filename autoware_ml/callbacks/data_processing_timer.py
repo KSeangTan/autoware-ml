@@ -28,10 +28,10 @@ from autoware_ml.types.dataset import SplitType
 
 logger = logging.getLogger(__name__)
 
-METRIC_NAME = "io_processing_total_time"
+METRIC_NAME = "data_processing_total_time"
 
 
-class IOProcessingTimer(Callback):
+class DataProcessingTimer(Callback):
     """Record the sample loading and transform time carried on each batch.
 
     ``MultiTaskBaseDataset`` measures loading plus transform time per sample
@@ -42,7 +42,7 @@ class IOProcessingTimer(Callback):
     the batch first becomes available to the module.
 
     Because the value is a sum over the samples collated into one batch, it is
-    logged as ``{stage}/io_processing_total_time`` (in seconds) for the train,
+    logged as ``{stage}/data_processing_total_time`` (in seconds) for the train,
     validation, and test loops. With ``num_workers > 0`` this time overlaps with
     compute, so it is a measure of IO work performed, not of time the training
     loop was blocked -- compare it against ``{stage}/data_time`` from
@@ -50,9 +50,9 @@ class IOProcessingTimer(Callback):
     much of it the loop actually waited for.
 
     At the end of each epoch the per-epoch total, the per-batch mean, and the
-    slowest batch are logged as ``{stage}/io_processing_total_time_sum``,
-    ``{stage}/io_processing_total_time_mean`` and
-    ``{stage}/io_processing_total_time_max``.
+    slowest batch are logged as ``{stage}/data_processing_total_time_sum``,
+    ``{stage}/data_processing_total_time_mean`` and
+    ``{stage}/data_processing_total_time_max``.
 
     Args:
         log_interval: Log an IO timing line to the Python logger every this many
@@ -110,14 +110,6 @@ class IOProcessingTimer(Callback):
             self._log(pl_module, f"{stage}/{METRIC_NAME}_sum", total, on_step=False)
             self._log(pl_module, f"{stage}/{METRIC_NAME}_mean", mean, on_step=False)
             self._log(pl_module, f"{stage}/{METRIC_NAME}_max", max_batch_time, on_step=False)
-            logger.info(
-                "%s IO processing over %d batches: total %.4fs, mean %.4fs, max %.4fs per batch",
-                stage,
-                len(batch_times),
-                total,
-                mean,
-                max_batch_time,
-            )
         batch_times.clear()
 
     @staticmethod
