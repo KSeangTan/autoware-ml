@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 import psutil
@@ -24,8 +23,6 @@ from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.callbacks import Callback
 
 from autoware_ml.dataclasses.multi_task_batch_inputs import MultiTaskBatchInputs
-
-logger = logging.getLogger(__name__)
 
 TRAIN = "train"
 VAL = "val"

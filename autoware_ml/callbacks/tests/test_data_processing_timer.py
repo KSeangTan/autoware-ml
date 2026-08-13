@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """Unit tests for the data processing timing callback: step metric, epoch totals,
-sanity-check suppression, and console logging at a fixed batch interval."""
+sanity-check suppression, and the logging interval."""
 
 from __future__ import annotations
 
@@ -21,8 +21,6 @@ import unittest
 from unittest.mock import MagicMock
 
 from autoware_ml.callbacks.data_processing_timer import DataProcessingTimer
-
-_LOGGER_NAME = "autoware_ml.callbacks.data_processing_timer"
 
 
 def _module() -> MagicMock:
@@ -154,50 +152,41 @@ class TestSanityCheck(unittest.TestCase):
 
 
 class TestLogInterval(unittest.TestCase):
-    """Console logging happens every ``log_interval`` batches, counted per stage."""
+    """The batch metric is logged every ``log_interval`` batches."""
 
-    def _run_batches(self, callback: DataProcessingTimer, count: int) -> None:
-        """Feed ``count`` training batches through the callback."""
-        trainer, module = _trainer(), _module()
-        for batch_idx in range(count):
-            callback.on_train_batch_start(trainer, module, batch=_batch(0.5), batch_idx=batch_idx)
-
-    def test_every_nth_batch_is_logged(self) -> None:
-        """Only the batches landing on the interval reach the console."""
-        callback = DataProcessingTimer(log_interval=2)
-
-        with self.assertLogs(_LOGGER_NAME, level="INFO") as captured:
-            self._run_batches(callback, count=5)
-
-        # Batches 2 and 4 of 5 land on the interval.
-        lines = [
-            record.message for record in captured.records if "IO processing batch" in record.message
-        ]
-        self.assertEqual(len(lines), 2)
-        self.assertIn("batch 2", lines[0])
-        self.assertIn("batch 4", lines[1])
-
-    def test_zero_disables_console_logging(self) -> None:
-        """A zero interval leaves only the per-epoch summary."""
-        callback = DataProcessingTimer(log_interval=0)
-
-        with self.assertNoLogs(_LOGGER_NAME, level="INFO"):
-            self._run_batches(callback, count=5)
-
-    def test_interval_counts_per_stage(self) -> None:
-        """Batches from different stages are counted against separate intervals."""
+    def test_only_matching_batches_are_logged(self) -> None:
+        """With an interval of two, batch 1 contributes no metric."""
         callback = DataProcessingTimer(log_interval=2)
         trainer, module = _trainer(), _module()
 
-        with self.assertNoLogs(_LOGGER_NAME, level="INFO"):
-            # One train batch and one val batch must not add up to the interval.
-            callback.on_train_batch_start(trainer, module, batch=_batch(0.5), batch_idx=0)
-            callback.on_validation_batch_start(trainer, module, batch=_batch(0.5), batch_idx=0)
+        callback.on_train_batch_start(trainer, module, batch=_batch(0.5), batch_idx=1)
 
-    def test_negative_interval_is_rejected(self) -> None:
-        """Construction fails rather than silently accepting a negative interval."""
+        self.assertEqual(module.log.call_args_list, [])
+
+    def test_matching_batches_are_logged(self) -> None:
+        """Batch 2 lands on an interval of two and is logged."""
+        callback = DataProcessingTimer(log_interval=2)
+        trainer, module = _trainer(), _module()
+
+        callback.on_train_batch_start(trainer, module, batch=_batch(0.5), batch_idx=2)
+
+        self.assertAlmostEqual(_logged(module)["train/data_processing_total_time"], 0.5)
+
+    def test_skipped_batches_still_reach_the_epoch_summary(self) -> None:
+        """Accumulation is independent of the logging interval."""
+        callback = DataProcessingTimer(log_interval=10)
+        trainer, module = _trainer(), _module()
+
+        for batch_idx in range(3):
+            callback.on_train_batch_start(trainer, module, batch=_batch(1.0), batch_idx=batch_idx)
+        callback.on_train_epoch_end(trainer, module)
+
+        self.assertAlmostEqual(_logged(module)["train/data_processing_total_time_sum"], 3.0)
+
+    def test_non_positive_interval_is_rejected(self) -> None:
+        """A zero interval would divide by zero, so it is refused."""
         with self.assertRaisesRegex(ValueError, "log_interval"):
-            DataProcessingTimer(log_interval=-1)
+            DataProcessingTimer(log_interval=0)
 
 
 if __name__ == "__main__":

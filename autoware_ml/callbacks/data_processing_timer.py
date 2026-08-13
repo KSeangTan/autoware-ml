@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import logging
 import statistics
 from typing import Any
 
@@ -25,8 +24,6 @@ from lightning.pytorch.callbacks import Callback
 
 from autoware_ml.dataclasses.multi_task_batch_inputs import MultiTaskBatchInputs
 from autoware_ml.types.dataset import SplitType
-
-logger = logging.getLogger(__name__)
 
 METRIC_NAME = "data_processing_total_time"
 
@@ -55,14 +52,14 @@ class DataProcessingTimer(Callback):
     ``{stage}/data_processing_total_time_max``.
 
     Args:
-        log_interval: Log an IO timing line to the Python logger every this many
-            batches, counted per stage. ``0`` disables console logging and
-            leaves only the per-epoch summary.
+        log_interval: Log the batch metric every this many batches. The batch
+            index drives the decision, so every rank logs the same batches. The
+            per-epoch summary covers every batch regardless.
     """
 
-    def __init__(self, log_interval: int = 0) -> None:
-        if log_interval < 0:
-            raise ValueError(f"log_interval must be non-negative, got {log_interval}.")
+    def __init__(self, log_interval: int = 1) -> None:
+        if log_interval < 1:
+            raise ValueError(f"log_interval must be positive, got {log_interval}.")
         self.log_interval = log_interval
         self._batch_times: dict[str, list[float]] = {
             stage: []
@@ -70,15 +67,24 @@ class DataProcessingTimer(Callback):
         }
 
     def _record_batch(
-        self, stage: str, trainer: Trainer, pl_module: LightningModule, batch: MultiTaskBatchInputs
+        self,
+        stage: str,
+        trainer: Trainer,
+        pl_module: LightningModule,
+        batch: MultiTaskBatchInputs,
+        batch_idx: int,
     ) -> None:
-        """Log one batch's IO processing time.
+        """Accumulate one batch's IO processing time and log it on the interval.
+
+        Every batch is accumulated so that the epoch summary stays complete, but
+        only the batches landing on ``log_interval`` are logged.
 
         Args:
             stage: Loop stage being recorded.
             trainer: Active trainer.
             pl_module: Module used to log metrics.
             batch: Batch handed to the loop after transfer to the device.
+            batch_idx: Index of the current batch.
         """
         if trainer.sanity_checking:
             return
@@ -87,9 +93,8 @@ class DataProcessingTimer(Callback):
             return
         batch_times = self._batch_times[stage]
         batch_times.append(io_time)
-        self._log(pl_module, f"{stage}/{METRIC_NAME}", io_time)
-        if self.log_interval and len(batch_times) % self.log_interval == 0:
-            logger.info("%s IO processing batch %d: %.4fs", stage, len(batch_times), io_time)
+        if batch_idx % self.log_interval == 0:
+            self._log(pl_module, f"{stage}/{METRIC_NAME}", io_time)
 
     def _record_epoch(self, stage: str, trainer: Trainer, pl_module: LightningModule) -> None:
         """Log the epoch total, per-batch mean and slowest batch, then reset the stage.
@@ -145,7 +150,7 @@ class DataProcessingTimer(Callback):
         batch_idx: int,
     ) -> None:
         """Record the IO processing time of a training batch."""
-        self._record_batch(SplitType.TRAIN.value, trainer, pl_module, batch)
+        self._record_batch(SplitType.TRAIN.value, trainer, pl_module, batch, batch_idx)
 
     def on_train_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Log the training epoch IO processing summary."""
@@ -160,7 +165,7 @@ class DataProcessingTimer(Callback):
         dataloader_idx: int = 0,
     ) -> None:
         """Record the IO processing time of a validation batch."""
-        self._record_batch(SplitType.VAL.value, trainer, pl_module, batch)
+        self._record_batch(SplitType.VAL.value, trainer, pl_module, batch, batch_idx)
 
     def on_validation_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Log the validation epoch IO processing summary."""
@@ -175,7 +180,7 @@ class DataProcessingTimer(Callback):
         dataloader_idx: int = 0,
     ) -> None:
         """Record the IO processing time of a test batch."""
-        self._record_batch(SplitType.TEST.value, trainer, pl_module, batch)
+        self._record_batch(SplitType.TEST.value, trainer, pl_module, batch, batch_idx)
 
     def on_test_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Log the test epoch IO processing summary."""
