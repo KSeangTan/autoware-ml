@@ -192,7 +192,7 @@ class IterationTimer(Callback):
             return
         data_time = self._timers[stage].start_batch(self._now())
         if data_time is not None and batch_idx % self.log_interval == 0:
-            self._log(pl_module, f"{stage}/data_time", data_time)
+            self._log(pl_module, f"{stage}/data_waiting_time", data_time)
 
     def _batch_end(
         self, stage: str, trainer: Trainer, pl_module: LightningModule, batch_idx: int
@@ -245,7 +245,10 @@ class IterationTimer(Callback):
             )
         if data_times:
             self._log(
-                pl_module, f"{stage}/data_time_mean", statistics.fmean(data_times), on_step=False
+                pl_module,
+                f"{stage}/data_waiting_time_mean",
+                statistics.fmean(data_times),
+                on_step=False,
             )
         if total_times:
             self._log(
