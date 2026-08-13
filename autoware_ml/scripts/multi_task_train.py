@@ -23,6 +23,8 @@ import logging
 import hydra
 from hydra.core.hydra_config import HydraConfig
 import lightning as L
+from lightning.pytorch.utilities.rank_zero import rank_zero_only
+from mlflow.system_metrics.system_metrics_monitor import SystemMetricsMonitor
 from omegaconf import DictConfig
 from pathlib import Path
 
@@ -126,6 +128,13 @@ def main(cfg: DictConfig):
         logger_enabled=logger_enabled,
     )
 
+    system_metrics_monitor = None
+    if run_context is not None and rank_zero_only.rank == 0:
+        system_metrics_monitor = SystemMetricsMonitor(
+            run_context.run_id, tracking_uri=run_context.tracking_uri
+        )
+        system_metrics_monitor.start()
+
     # Build datamodule
     database = build_database(cfg)
     datamodule = build_datamodule(cfg, database=database)
@@ -169,6 +178,9 @@ def main(cfg: DictConfig):
         checkpoint_dir=str(checkpoint_dir),
         resume_checkpoint_path=resume_checkpoint_path,
     )
+    if system_metrics_monitor is not None:
+        system_metrics_monitor.finish()
+
     return score
 
 
