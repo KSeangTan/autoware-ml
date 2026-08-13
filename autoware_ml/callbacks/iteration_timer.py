@@ -250,6 +250,12 @@ class IterationTimer(Callback):
                 statistics.fmean(data_times),
                 on_step=False,
             )
+            self._log(
+                pl_module,
+                f"{stage}/data_waiting_time_max",
+                max(data_times),
+                on_step=False,
+            )
         if total_times:
             self._log(
                 pl_module,
