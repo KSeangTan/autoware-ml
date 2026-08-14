@@ -1,3 +1,4 @@
+import logging
 import numpy as np
 import polars as pl
 
@@ -7,6 +8,8 @@ from autoware_ml.datamodule.multi_task.base_dataset_task import BaseDatasetTask
 from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.types.geometry import Box3DFieldIndex, Box3DCenterCoordinateType
+
+logger = logging.getLogger(__name__)
 
 
 class T4Detection3DTask(BaseDatasetTask):
@@ -142,3 +145,25 @@ class T4Detection3DTask(BaseDatasetTask):
             detection3d_gt_bboxes_3d=detection3d_bboxes_3d,
             segmentation3d_gt_sample=None,
         )
+
+    def log_dataset_info(self) -> None:
+        """
+        Log and print dataset information for the specific task.
+        """
+        if self.dataset_records_dataframe is None:
+            logger.warning("Dataset records dataframe is not available.")
+            return
+
+        # Log the number of each classes in the dataset without filtering valid bboxes
+        # class_counts = (
+        #     self.dataset_records_dataframe.select(DatasetTableSchema.BOXES_3D.name)
+        #     .explode(DatasetTableSchema.BOXES_3D.name)
+        #     .unnest(DatasetTableSchema.BOXES_3D.name)
+        #     .groupby(Box3DDatasetSchema.BOX3D_LABEL_NAME.name)
+        #     .agg(pl.count().alias("count"))
+        #     .sort("count", reverse=True)
+        # )
+        # num_samples = len(self.dataset_records_dataframe)
+        # logger.info(f"Number of samples in the dataset: {num_samples}")
+
+        # Log additional dataset information as needed

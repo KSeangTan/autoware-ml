@@ -74,6 +74,10 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
             f"transforms: {self.transforms} and max_num_3d_gt_bboxes: {self.max_num_3d_gt_bboxes}"
         )
 
+        # Log dataset information to console for each task dataset
+        for dataset_task in self.dataset_tasks.values():
+            dataset_task.log_dataset_info()
+
     def get_data_sample(self, index: int) -> MultiTaskGTSample:
         """
         Process the dataset records dataframe for multiple tasks in the T4 dataset.
