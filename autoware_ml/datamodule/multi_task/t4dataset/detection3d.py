@@ -154,6 +154,27 @@ class T4Detection3DTask(BaseDatasetTask):
             logger.warning("Dataset records dataframe is not available.")
             return
 
+        # Log the number of bboxes per class, before and after filtering valid bboxes
+        class_counts = (
+            self.dataset_records_dataframe.select(DatasetTableSchema.BOXES_3D.name)
+            .explode(DatasetTableSchema.BOXES_3D.name)
+            .unnest(DatasetTableSchema.BOXES_3D.name)
+            .groupby(Box3DDatasetSchema.BOX3D_LABEL_NAME.name)
+            .agg(
+                [
+                    pl.count().alias("count"),
+                    pl.col(Box3DDatasetSchema.BOX3D_VALID.name).sum().alias("valid_count"),
+                ]
+            )
+            .sort("count", reverse=True)
+        )
+        class_names = class_counts[Box3DDatasetSchema.BOX3D_LABEL_NAME.name].to_list()
+        total_counts = dict(zip(class_names, class_counts["count"].to_list()))
+        valid_counts = dict(zip(class_names, class_counts["valid_count"].to_list()))
+
+        logger.info(f"Number of bboxes per class in the dataset: {total_counts}")
+        logger.info(f"Number of bboxes per class in valid bboxes: {valid_counts}")
+        # Log the number of classes in the dataset after filtering valid bboxes if filter_valid_masks is True
         # Log the number of each classes in the dataset without filtering valid bboxes
         # class_counts = (
         #     self.dataset_records_dataframe.select(DatasetTableSchema.BOXES_3D.name)

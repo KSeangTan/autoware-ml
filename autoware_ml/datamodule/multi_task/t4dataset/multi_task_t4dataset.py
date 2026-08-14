@@ -195,3 +195,4 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
                 dataset_records_dataframe
             )
             dataset_task.dataset_records_dataframe = filtered_dataset_records_dataframe
+            dataset_task.log_dataset_info()  # Log dataset information for each task dataset
