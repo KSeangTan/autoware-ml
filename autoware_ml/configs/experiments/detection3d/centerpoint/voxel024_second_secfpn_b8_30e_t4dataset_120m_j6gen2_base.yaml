@@ -11,7 +11,7 @@ num_workers: 8
 max_num_3d_gt_bboxes: 500
 
 experiment_group_name: centerpoint/${database.version}/j6gen2_base
-experiment_name: voxel024_second_secfpn_30e_t4dataset_120m
+experiment_name: voxel024_second_secfpn_b8_30e_t4dataset_120m
 point_cloud_range: [-122.4, -122.4, -3.0, 122.4, 122.4, 5.0]
 voxel_size: [0.24, 0.24, 8.0]
 
