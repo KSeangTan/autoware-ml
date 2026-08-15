@@ -53,6 +53,36 @@ class DatabaseTaskConfig(BaseModel):
 
         return data
 
+    def __getstate__(self) -> dict[str, Any]:
+        """
+        Get the picklable state of the model.
+
+        A MappingProxyType cannot be pickled, so the label remapper is unwrapped into a plain
+        dict. This is what lets the task configuration be sent to the worker processes that
+        generate the database records.
+
+        Returns:
+            dict[str, Any]: State of the model, with a picklable label remapper.
+        """
+        state = super().__getstate__()
+        fields = state.get("__dict__", {})
+        if isinstance(fields.get("label_remapper"), MappingProxyType):
+            state = {**state, "__dict__": {**fields, "label_remapper": dict(self.label_remapper)}}
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        """
+        Restore the model from its pickled state, re-wrapping the label remapper.
+
+        Args:
+            state: State of the model, as returned by :meth:`__getstate__`.
+        """
+        super().__setstate__(state)
+        label_remapper = self.__dict__.get("label_remapper")
+        if isinstance(label_remapper, Mapping) and not isinstance(label_remapper, MappingProxyType):
+            # The model is frozen, so the field is restored through __dict__
+            self.__dict__["label_remapper"] = MappingProxyType(label_remapper)
+
     @property
     def hash_repr(self) -> str:
         """
