@@ -159,14 +159,14 @@ class T4Detection3DTask(BaseDatasetTask):
             self.dataset_records_dataframe.select(DatasetTableSchema.BOXES_3D.name)
             .explode(DatasetTableSchema.BOXES_3D.name)
             .unnest(DatasetTableSchema.BOXES_3D.name)
-            .groupby(Box3DDatasetSchema.BOX3D_LABEL_NAME.name)
+            .group_by(Box3DDatasetSchema.BOX3D_LABEL_NAME.name)
             .agg(
                 [
-                    pl.count().alias("count"),
+                    pl.len().alias("count"),
                     pl.col(Box3DDatasetSchema.BOX3D_VALID.name).sum().alias("valid_count"),
                 ]
             )
-            .sort("count", reverse=True)
+            .sort("count", descending=True)
         )
         class_names = class_counts[Box3DDatasetSchema.BOX3D_LABEL_NAME.name].to_list()
         total_counts = dict(zip(class_names, class_counts["count"].to_list()))
