@@ -39,22 +39,22 @@ class DataProcessingTimer(Callback):
     the batch first becomes available to the module.
 
     Because the value is a sum over the samples collated into one batch, it is
-    logged as ``{stage}/data_processing_total_time`` (in seconds) for the train,
-    validation, and test loops. With ``num_workers > 0`` this time overlaps with
-    compute, so it is a measure of IO work performed, not of time the training
-    loop was blocked -- compare it against ``{stage}/data_time`` from
+    logged as ``train/data_processing_total_time`` (in seconds). With
+    ``num_workers > 0`` this time overlaps with compute, so it is a measure of IO
+    work performed, not of time the training loop was blocked -- compare it
+    against ``train/data_waiting_time`` from
     :class:`~autoware_ml.callbacks.iteration_timer.IterationTimer` to see how
     much of it the loop actually waited for.
 
-    At the end of each epoch the per-epoch total, the per-batch mean, and the
-    slowest batch are logged as ``{stage}/data_processing_total_time_sum``,
-    ``{stage}/data_processing_total_time_mean`` and
+    The validation and test loops contribute epoch summaries only.
+    At the end of each epoch the per-batch mean and the slowest batch are
+    logged, for every stage, as ``{stage}/data_processing_total_time_mean`` and
     ``{stage}/data_processing_total_time_max``.
 
     Args:
-        log_interval: Log the batch metric every this many batches. The batch
-            index drives the decision, so every rank logs the same batches. The
-            per-epoch summary covers every batch regardless.
+        log_interval: Log the training batch metric every this many batches. The
+            batch index drives the decision, so every rank logs the same batches.
+            The per-epoch summaries cover every batch of every stage regardless.
     """
 
     def __init__(self, log_interval: int = 1) -> None:
@@ -76,8 +76,9 @@ class DataProcessingTimer(Callback):
     ) -> None:
         """Accumulate one batch's IO processing time and log it on the interval.
 
-        Every batch is accumulated so that the epoch summary stays complete, but
-        only the batches landing on ``log_interval`` are logged.
+        Every batch is accumulated so that the epoch summary stays complete.
+        Only training batches landing on ``log_interval`` are logged as a step
+        metric; the class docstring explains why the other stages are excluded.
 
         Args:
             stage: Loop stage being recorded.
@@ -93,11 +94,11 @@ class DataProcessingTimer(Callback):
             return
         batch_times = self._batch_times[stage]
         batch_times.append(io_time)
-        if batch_idx % self.log_interval == 0:
+        if stage == SplitType.TRAIN.value and batch_idx % self.log_interval == 0:
             self._log(pl_module, f"{stage}/{METRIC_NAME}", io_time)
 
     def _record_epoch(self, stage: str, trainer: Trainer, pl_module: LightningModule) -> None:
-        """Log the epoch total, per-batch mean and slowest batch, then reset the stage.
+        """Log the per-batch mean and slowest batch, then reset the stage.
 
         Args:
             stage: Loop stage being recorded.

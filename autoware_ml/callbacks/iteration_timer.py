@@ -25,10 +25,7 @@ from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.callbacks import Callback
 
 from autoware_ml.dataclasses.multi_task_batch_inputs import MultiTaskBatchInputs
-
-TRAIN = "train"
-VAL = "val"
-TEST = "test"
+from autoware_ml.types.dataset import SplitType
 
 
 class IterationTiming(NamedTuple):
@@ -120,18 +117,21 @@ class _StageTimer:
 class IterationTimer(Callback):
     """Record how long each train, validation, and test iteration takes.
 
-    Every iteration contributes three step metrics: ``{stage}/batch_forward_time``
-    (the time spent between the batch-start and batch-end hooks),
-    ``{stage}/data_time`` (the gap since the previous iteration ended, which is
-    dominated by waiting on the dataloader), and ``{stage}/total_iter_time``
-    (their sum, the wall-clock cost of the iteration). At the end of each epoch
-    the callback logs ``{stage}/batch_forward_time_mean``,
-    ``{stage}/batch_forward_time_max``, ``{stage}/data_time_mean``,
+    Every training iteration contributes three step metrics:
+    ``train/batch_forward_time`` (the time spent between the batch-start and
+    batch-end hooks), ``train/data_waiting_time`` (the gap since the previous
+    iteration ended, which is dominated by waiting on the dataloader), and
+    ``train/total_iter_time`` (their sum, the wall-clock cost of the iteration).
+    The validation and test loops contribute epoch summaries only.
+
+    At the end of each epoch the callback logs, for every stage,
+    ``{stage}/batch_forward_time_mean``, ``{stage}/batch_forward_time_max``,
+    ``{stage}/data_waiting_time_mean``, ``{stage}/data_waiting_time_max``,
     ``{stage}/total_iter_time_mean`` and ``{stage}/total_iter_time_max``, all in
     seconds.
 
     The first iteration of an epoch has no measurable fetch, so it contributes
-    neither ``data_time`` nor ``total_iter_time``.
+    neither ``data_waiting_time`` nor ``total_iter_time``.
 
     Because CUDA kernels are launched asynchronously, a batch-end hook can be
     reached while the GPU is still busy; ``sync_cuda`` inserts a device
@@ -144,9 +144,10 @@ class IterationTimer(Callback):
         warmup_iters: Number of leading iterations per epoch excluded from the
             epoch summary. The first iterations pay for dataloader worker
             startup and kernel autotuning and are not representative.
-        log_interval: Log the per-iteration metrics every this many iterations.
-            The batch index drives the decision, so every rank logs the same
-            iterations. The per-epoch summary covers every iteration regardless.
+        log_interval: Log the per-iteration training metrics every this many
+            iterations. The batch index drives the decision, so every rank logs
+            the same iterations. The per-epoch summaries cover every iteration
+            of every stage regardless.
     """
 
     def __init__(
@@ -162,7 +163,9 @@ class IterationTimer(Callback):
         self.sync_cuda = sync_cuda
         self.warmup_iters = warmup_iters
         self.log_interval = log_interval
-        self._timers = {stage: _StageTimer() for stage in (TRAIN, VAL, TEST)}
+        self._timers = {
+            stage.value: _StageTimer() for stage in (SplitType.TRAIN, SplitType.VAL, SplitType.TEST)
+        }
 
     def _now(self) -> float:
         """Return the current time, optionally after draining CUDA work.
@@ -179,8 +182,9 @@ class IterationTimer(Callback):
     ) -> None:
         """Time the batch fetch and open a new iteration for ``stage``.
 
-        Every iteration is timed so that the epoch summary stays complete, but
-        only the iterations landing on ``log_interval`` are logged.
+        Every iteration is timed so that the epoch summary stays complete. Only
+        training iterations landing on ``log_interval`` are logged as a step
+        metric; the class docstring explains why the other stages are excluded.
 
         Args:
             stage: Loop stage being timed.
@@ -191,13 +195,19 @@ class IterationTimer(Callback):
         if trainer.sanity_checking:
             return
         data_time = self._timers[stage].start_batch(self._now())
-        if data_time is not None and batch_idx % self.log_interval == 0:
+        if stage != SplitType.TRAIN.value or batch_idx % self.log_interval != 0:
+            return
+        if data_time is not None:
             self._log(pl_module, f"{stage}/data_waiting_time", data_time)
 
     def _batch_end(
         self, stage: str, trainer: Trainer, pl_module: LightningModule, batch_idx: int
     ) -> None:
         """Close the open iteration for ``stage`` and log its duration.
+
+        Every iteration is timed so that the epoch summary stays complete. Only
+        training iterations landing on ``log_interval`` are logged as a step
+        metric; the class docstring explains why the other stages are excluded.
 
         Args:
             stage: Loop stage being timed.
@@ -209,7 +219,7 @@ class IterationTimer(Callback):
             return
         timer = self._timers[stage]
         timing = timer.end_batch(self._now())
-        if timing is None or batch_idx % self.log_interval != 0:
+        if timing is None or stage != SplitType.TRAIN.value or batch_idx % self.log_interval != 0:
             return
         self._log(pl_module, f"{stage}/batch_forward_time", timing.batch_forward_time)
         if timing.total_iter_time is not None:
@@ -297,7 +307,7 @@ class IterationTimer(Callback):
         batch_idx: int,
     ) -> None:
         """Open the timing window for a training iteration."""
-        self._batch_start(TRAIN, trainer, pl_module, batch_idx)
+        self._batch_start(SplitType.TRAIN.value, trainer, pl_module, batch_idx)
 
     def on_train_batch_end(
         self,
@@ -308,11 +318,11 @@ class IterationTimer(Callback):
         batch_idx: int,
     ) -> None:
         """Close the timing window for a training iteration."""
-        self._batch_end(TRAIN, trainer, pl_module, batch_idx)
+        self._batch_end(SplitType.TRAIN.value, trainer, pl_module, batch_idx)
 
     def on_train_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Log the training epoch timing summary."""
-        self._epoch_end(TRAIN, trainer, pl_module)
+        self._epoch_end(SplitType.TRAIN.value, trainer, pl_module)
 
     def on_validation_batch_start(
         self,
@@ -323,7 +333,7 @@ class IterationTimer(Callback):
         dataloader_idx: int = 0,
     ) -> None:
         """Open the timing window for a validation iteration."""
-        self._batch_start(VAL, trainer, pl_module, batch_idx)
+        self._batch_start(SplitType.VAL.value, trainer, pl_module, batch_idx)
 
     def on_validation_batch_end(
         self,
@@ -335,11 +345,11 @@ class IterationTimer(Callback):
         dataloader_idx: int = 0,
     ) -> None:
         """Close the timing window for a validation iteration."""
-        self._batch_end(VAL, trainer, pl_module, batch_idx)
+        self._batch_end(SplitType.VAL.value, trainer, pl_module, batch_idx)
 
     def on_validation_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Log the validation epoch timing summary."""
-        self._epoch_end(VAL, trainer, pl_module)
+        self._epoch_end(SplitType.VAL.value, trainer, pl_module)
 
     def on_test_batch_start(
         self,
@@ -350,7 +360,7 @@ class IterationTimer(Callback):
         dataloader_idx: int = 0,
     ) -> None:
         """Open the timing window for a test iteration."""
-        self._batch_start(TEST, trainer, pl_module, batch_idx)
+        self._batch_start(SplitType.TEST.value, trainer, pl_module, batch_idx)
 
     def on_test_batch_end(
         self,
@@ -362,8 +372,8 @@ class IterationTimer(Callback):
         dataloader_idx: int = 0,
     ) -> None:
         """Close the timing window for a test iteration."""
-        self._batch_end(TEST, trainer, pl_module, batch_idx)
+        self._batch_end(SplitType.TEST.value, trainer, pl_module, batch_idx)
 
     def on_test_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Log the test epoch timing summary."""
-        self._epoch_end(TEST, trainer, pl_module)
+        self._epoch_end(SplitType.TEST.value, trainer, pl_module)

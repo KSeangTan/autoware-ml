@@ -1,5 +1,5 @@
-"""Tests for the per-iteration timing callback: step metrics, epoch summaries,
-warmup exclusion, and sanity-check suppression."""
+"""Tests for the per-iteration timing callback: step metrics and their train-only
+restriction, epoch summaries, warmup exclusion, and sanity-check suppression."""
 
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ class TestStepMetrics:
         # iter 0 runs 0.0 -> 1.0, iter 1 starts at 1.25 (0.25s fetching).
         _run_train_iters(callback, _trainer(), module, [0.0, 1.0, 1.25, 2.0])
 
-        assert _logged(module)["train/data_time"] == pytest.approx(0.25)
+        assert _logged(module)["train/data_waiting_time"] == pytest.approx(0.25)
 
     def test_first_iteration_has_no_data_time(self) -> None:
         callback = IterationTimer()
@@ -73,10 +73,10 @@ class TestStepMetrics:
 
         _run_train_iters(callback, _trainer(), module, [0.0, 1.0])
 
-        assert "train/data_time" not in _logged(module)
+        assert "train/data_waiting_time" not in _logged(module)
 
     def test_stages_are_timed_independently(self) -> None:
-        callback = IterationTimer()
+        callback = IterationTimer(warmup_iters=0)
         module = _module()
         trainer = _trainer()
         callback._now = _Clock([0.0, 10.0, 100.0, 100.5])  # type: ignore[method-assign]
@@ -85,10 +85,56 @@ class TestStepMetrics:
         callback.on_validation_batch_start(trainer, module, batch=None, batch_idx=0)
         callback.on_validation_batch_end(trainer, module, outputs=None, batch=None, batch_idx=0)
         callback.on_train_batch_end(trainer, module, outputs=None, batch=None, batch_idx=0)
+        callback.on_validation_epoch_end(trainer, module)
 
         logged = _logged(module)
-        assert logged["val/batch_forward_time"] == pytest.approx(90.0)
+        # Validation is timed but only summarised; training keeps its step metric.
+        assert logged["val/batch_forward_time_mean"] == pytest.approx(90.0)
         assert logged["train/batch_forward_time"] == pytest.approx(100.5)
+
+
+class TestEvaluationStagesAreSummaryOnly:
+    """Lightning flushes eval step metrics every batch, so they are not logged."""
+
+    @pytest.mark.parametrize(
+        ("start_hook", "end_hook"),
+        [
+            ("on_validation_batch_start", "on_validation_batch_end"),
+            ("on_test_batch_start", "on_test_batch_end"),
+        ],
+    )
+    def test_no_step_metrics_are_logged(self, start_hook: str, end_hook: str) -> None:
+        callback = IterationTimer(warmup_iters=0)
+        module = _module()
+        trainer = _trainer()
+        callback._now = _Clock([0.0, 1.0, 3.0, 5.0])  # type: ignore[method-assign]
+
+        for batch_idx in (0, 1):
+            getattr(callback, start_hook)(trainer, module, batch=None, batch_idx=batch_idx)
+            getattr(callback, end_hook)(
+                trainer, module, outputs=None, batch=None, batch_idx=batch_idx
+            )
+
+        assert module.log.call_args_list == []
+
+    def test_the_epoch_summary_still_covers_every_iteration(self) -> None:
+        callback = IterationTimer(warmup_iters=0)
+        module = _module()
+        trainer = _trainer()
+        callback._now = _Clock([0.0, 1.0, 3.0, 5.0])  # type: ignore[method-assign]
+
+        for batch_idx in (0, 1):
+            callback.on_validation_batch_start(trainer, module, batch=None, batch_idx=batch_idx)
+            callback.on_validation_batch_end(
+                trainer, module, outputs=None, batch=None, batch_idx=batch_idx
+            )
+        callback.on_validation_epoch_end(trainer, module)
+
+        logged = _logged(module)
+        assert logged["val/batch_forward_time_mean"] == pytest.approx(1.5)
+        assert logged["val/batch_forward_time_max"] == pytest.approx(2.0)
+        assert logged["val/data_waiting_time_mean"] == pytest.approx(2.0)
+        assert logged["val/total_iter_time_mean"] == pytest.approx(4.0)
 
 
 class TestTotalIterationTime:
@@ -100,7 +146,7 @@ class TestTotalIterationTime:
         _run_train_iters(callback, _trainer(), module, [0.0, 1.0, 1.25, 2.0])
 
         logged = _logged(module)
-        assert logged["train/data_time"] == pytest.approx(0.25)
+        assert logged["train/data_waiting_time"] == pytest.approx(0.25)
         assert logged["train/batch_forward_time"] == pytest.approx(0.75)
         assert logged["train/total_iter_time"] == pytest.approx(1.0)
 
@@ -164,7 +210,7 @@ class TestEpochSummary:
 
         logged = _logged(module)
         # A stale batch-end timestamp would show up as a 99s data_time.
-        assert "train/data_time" not in logged
+        assert "train/data_waiting_time" not in logged
         assert logged["train/batch_forward_time_mean"] == pytest.approx(1.0)
 
 
@@ -193,8 +239,9 @@ class TestSanityCheck:
         callback._now = _Clock([0.0, 2.0])  # type: ignore[method-assign]
         callback.on_validation_batch_start(trainer, module, batch=None, batch_idx=0)
         callback.on_validation_batch_end(trainer, module, outputs=None, batch=None, batch_idx=0)
+        callback.on_validation_epoch_end(trainer, module)
 
-        assert _logged(module)["val/batch_forward_time"] == pytest.approx(2.0)
+        assert _logged(module)["val/batch_forward_time_mean"] == pytest.approx(2.0)
 
 
 class TestConstructorValidation:

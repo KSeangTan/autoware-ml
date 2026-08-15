@@ -50,7 +50,7 @@ def _logged(module: MagicMock) -> dict[str, float]:
 
 
 class TestStepMetric(unittest.TestCase):
-    """The per-batch IO time is logged for every loop stage."""
+    """The per-batch IO time is a step metric of the training loop only."""
 
     def test_batch_io_time_is_logged(self) -> None:
         """A training batch logs its IO time under the train-prefixed metric name."""
@@ -61,28 +61,24 @@ class TestStepMetric(unittest.TestCase):
 
         self.assertAlmostEqual(_logged(module)["train/data_processing_total_time"], 0.5)
 
-    def test_every_stage_is_recorded(self) -> None:
-        """Train, validation and test hooks each log under their own prefix."""
-        for stage in ("train", "val", "test"):
+    def test_evaluation_stages_log_no_step_metric(self) -> None:
+        """Lightning re-emits eval step metrics every batch, so they are not logged."""
+        hooks = (("val", "on_validation_batch_start"), ("test", "on_test_batch_start"))
+        for stage, hook_name in hooks:
             with self.subTest(stage=stage):
                 callback = DataProcessingTimer()
                 module = _module()
-                hook = {
-                    "train": callback.on_train_batch_start,
-                    "val": callback.on_validation_batch_start,
-                    "test": callback.on_test_batch_start,
-                }[stage]
 
-                hook(_trainer(), module, batch=_batch(0.25), batch_idx=0)
+                getattr(callback, hook_name)(_trainer(), module, batch=_batch(0.25), batch_idx=0)
 
-                self.assertAlmostEqual(_logged(module)[f"{stage}/data_processing_total_time"], 0.25)
+                self.assertEqual(module.log.call_args_list, [])
 
 
 class TestEpochSummary(unittest.TestCase):
     """The epoch hooks summarise and then reset the accumulated batch timings."""
 
-    def test_epoch_total_mean_and_max(self) -> None:
-        """The summary reports the sum, per-batch mean and slowest batch."""
+    def test_epoch_mean_and_max(self) -> None:
+        """The summary reports the per-batch mean and the slowest batch."""
         callback = DataProcessingTimer()
         module = _module()
         trainer = _trainer()
@@ -92,7 +88,6 @@ class TestEpochSummary(unittest.TestCase):
         callback.on_train_epoch_end(trainer, module)
 
         logged = _logged(module)
-        self.assertAlmostEqual(logged["train/data_processing_total_time_sum"], 6.0)
         self.assertAlmostEqual(logged["train/data_processing_total_time_mean"], 2.0)
         self.assertAlmostEqual(logged["train/data_processing_total_time_max"], 3.0)
 
@@ -109,7 +104,7 @@ class TestEpochSummary(unittest.TestCase):
         callback.on_train_batch_start(trainer, module, batch=_batch(1.0), batch_idx=0)
         callback.on_train_epoch_end(trainer, module)
 
-        self.assertAlmostEqual(_logged(module)["train/data_processing_total_time_sum"], 1.0)
+        self.assertAlmostEqual(_logged(module)["train/data_processing_total_time_mean"], 1.0)
 
     def test_stages_accumulate_independently(self) -> None:
         """A validation epoch summary does not consume the training timings."""
@@ -123,8 +118,8 @@ class TestEpochSummary(unittest.TestCase):
         callback.on_train_epoch_end(trainer, module)
 
         logged = _logged(module)
-        self.assertAlmostEqual(logged["val/data_processing_total_time_sum"], 1.0)
-        self.assertAlmostEqual(logged["train/data_processing_total_time_sum"], 4.0)
+        self.assertAlmostEqual(logged["val/data_processing_total_time_mean"], 1.0)
+        self.assertAlmostEqual(logged["train/data_processing_total_time_mean"], 4.0)
 
     def test_summary_is_skipped_without_batches(self) -> None:
         """An epoch that recorded no batches logs nothing."""
@@ -177,11 +172,13 @@ class TestLogInterval(unittest.TestCase):
         callback = DataProcessingTimer(log_interval=10)
         trainer, module = _trainer(), _module()
 
-        for batch_idx in range(3):
-            callback.on_train_batch_start(trainer, module, batch=_batch(1.0), batch_idx=batch_idx)
+        for batch_idx, io_time in enumerate((1.0, 2.0, 3.0)):
+            callback.on_train_batch_start(
+                trainer, module, batch=_batch(io_time), batch_idx=batch_idx
+            )
         callback.on_train_epoch_end(trainer, module)
 
-        self.assertAlmostEqual(_logged(module)["train/data_processing_total_time_sum"], 3.0)
+        self.assertAlmostEqual(_logged(module)["train/data_processing_total_time_mean"], 2.0)
 
     def test_non_positive_interval_is_rejected(self) -> None:
         """A zero interval would divide by zero, so it is refused."""
