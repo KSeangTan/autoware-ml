@@ -4,7 +4,7 @@ callbacks:
   rich_progress_bar:
     _target_: lightning.pytorch.callbacks.RichProgressBar
     refresh_rate: 100
-    leave: true
+    leave: false
 
   model_checkpoint:
     _target_: lightning.pytorch.callbacks.ModelCheckpoint

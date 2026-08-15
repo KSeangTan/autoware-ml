@@ -49,15 +49,17 @@ class Box3DLabelRemapper(Box3DPipeline):
     def __call__(self, boxes3d_data_model: Sequence[Box3DDataModel]) -> Sequence[Box3DDataModel]:
         """
         Remap the label names of the 3D bounding boxes to another label name.
+
+        The current label name is remapped, not the dataset label name, so that a pipeline can
+        run several remappers in a row: every pass builds on the label name the previous pass
+        assigned, and a box no pass remaps keeps the dataset label name it started with.
         """
         new_boxes3d_data_model = []
         for box3d_data_model in boxes3d_data_model:
-            if box3d_data_model.box3d_dataset_label_name in self.label_remapper:
-                new_box3d_label_name = self.label_remapper[
-                    box3d_data_model.box3d_dataset_label_name
-                ]
+            if box3d_data_model.box3d_label_name in self.label_remapper:
+                new_box3d_label_name = self.label_remapper[box3d_data_model.box3d_label_name]
             else:
-                new_box3d_label_name = box3d_data_model.box3d_dataset_label_name
+                new_box3d_label_name = box3d_data_model.box3d_label_name
 
             # Map the new label name to the new label index,
             # if the new label name is not in the target class names, map to the ignore label index
