@@ -47,7 +47,7 @@ pipeline:
   - _target_: autoware_ml.transforms.multi_task.bboxes_3d.loading.BBoxesLabelNameFilter
     _convert_: all
 
-    label_names_to_keep: ${database.class_names}
+    label_names_to_keep: ${database.database_task_configs.detection3d.label_names}
 
   - _target_: autoware_ml.transforms.multi_task.bboxes_3d.geometry.BBoxesBEVDistanceFilter
     _convert_: all

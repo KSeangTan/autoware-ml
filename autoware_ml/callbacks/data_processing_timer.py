@@ -109,10 +109,8 @@ class DataProcessingTimer(Callback):
             batch_times.clear()
             return
         if batch_times:
-            total = sum(batch_times)
             mean = statistics.fmean(batch_times)
             max_batch_time = max(batch_times)
-            self._log(pl_module, f"{stage}/{METRIC_NAME}_sum", total, on_step=False)
             self._log(pl_module, f"{stage}/{METRIC_NAME}_mean", mean, on_step=False)
             self._log(pl_module, f"{stage}/{METRIC_NAME}_max", max_batch_time, on_step=False)
         batch_times.clear()

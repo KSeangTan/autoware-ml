@@ -22,9 +22,11 @@ import unittest
 
 import yaml
 
+from autoware_ml.databases.database_task_config import DatabaseTaskConfig
 from autoware_ml.databases.scenarios import DatasetParams
 from autoware_ml.databases.t4dataset.t4dataset import T4Dataset
 from autoware_ml.databases.t4dataset.t4scenarios import T4Scenarios
+from autoware_ml.types.tasks import TaskType
 
 _SCENARIOS = {
     "train": ["db_scenario_a/0/tokyo/j6gen2/none", "db_scenario_b/1/tokyo/j6gen2/none"],
@@ -50,7 +52,7 @@ class TestDatabaseHash(unittest.TestCase):
         root_path: str = "/data/t4datasets",
         cache_path: str | None = None,
         version: str = "T4Dataset-test-v1.0.0",
-        class_names: tuple[str, ...] = ("car", "pedestrian"),
+        label_names: tuple[str, ...] = ("car", "pedestrian"),
         lidar_pointcloud_num_features: int = 5,
     ) -> T4Dataset:
         """Build a T4Dataset whose location and content settings can be varied independently."""
@@ -67,9 +69,14 @@ class TestDatabaseHash(unittest.TestCase):
             cache_path=cache_path or str(Path(self._tmp_dir.name) / "cache"),
             cache_file_prefix_name="database",
             num_workers=1,
-            class_names=list(class_names),
-            ignore_label_index=-1,
-            label_remapper={"bus": "car"},
+            database_task_configs={
+                TaskType.DETECTION3D: DatabaseTaskConfig(
+                    task_type=TaskType.DETECTION3D,
+                    label_names=list(label_names),
+                    ignore_label_index=-1,
+                    label_remapper={"bus": "car"},
+                )
+            },
             lidar_pointcloud_num_features=lidar_pointcloud_num_features,
             box3d_pipelines=[],
         )
@@ -107,7 +114,7 @@ class TestDatabaseHash(unittest.TestCase):
         self.assertNotEqual(
             reference, self._build_database(version="T4Dataset-test-v2.0.0").database_hash
         )
-        self.assertNotEqual(reference, self._build_database(class_names=("car",)).database_hash)
+        self.assertNotEqual(reference, self._build_database(label_names=("car",)).database_hash)
         self.assertNotEqual(
             reference, self._build_database(lidar_pointcloud_num_features=4).database_hash
         )

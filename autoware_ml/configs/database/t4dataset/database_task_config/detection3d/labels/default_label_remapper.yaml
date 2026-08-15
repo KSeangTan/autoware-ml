@@ -48,12 +48,12 @@ other_pedestrian: pedestrian
 movable_object.barrier: barrier
 movable_object.debris: barrier
 movable_object.pushable_pullable: barrier
+barrier: barrier
 
 movable_object.trafficcone: traffic_cone
 movable_object.traffic_cone: traffic_cone
 traffic_cone: traffic_cone
 trafficcone: traffic_cone
-barrier: barrier
 
 animal: animal
 static_object.bicycle_rack: bicycle_rack

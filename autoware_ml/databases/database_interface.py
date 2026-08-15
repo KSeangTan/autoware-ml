@@ -15,13 +15,15 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Mapping, Sequence, Protocol
+from typing import Sequence, Protocol
 from types import MappingProxyType
 
 import polars as pl
 
 from autoware_ml.databases.scenarios import Scenarios, ScenarioData
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
+from autoware_ml.databases.database_task_config import DatabaseTaskConfig
+from autoware_ml.types.tasks import TaskType
 
 
 class DatabaseInterface(Protocol):
@@ -59,6 +61,18 @@ class DatabaseInterface(Protocol):
         """
 
         raise NotImplementedError("Database must define __eq__!")
+
+    @property
+    @abstractmethod
+    def database_task_configs(self) -> MappingProxyType[TaskType, DatabaseTaskConfig]:
+        """
+        Get the database task configuration.
+
+        Returns:
+          MappingProxyType[TaskType, DatabaseTaskConfig]: Database task configuration.
+        """
+
+        raise NotImplementedError("Database must define database_task_configs!")
 
     @property
     @abstractmethod
@@ -116,30 +130,6 @@ class DatabaseInterface(Protocol):
         """
 
         raise NotImplementedError("Subclasses must define process_scenario_records method!")
-
-    @property
-    @abstractmethod
-    def label_remapper(self) -> Mapping[str, str] | None:
-        """
-        Get the label remapper in the database.
-
-        Returns:
-          Mapping[str, str] | None: Label remapper in the database.
-        """
-
-        raise NotImplementedError("Database must define label_remapper!")
-
-    @property
-    @abstractmethod
-    def ignore_label_index(self) -> int:
-        """
-        Get the ignore label index in the database.
-
-        Returns:
-          int: Ignore label index in the database.
-        """
-
-        raise NotImplementedError("Database must define ignore_label_index!")
 
     @property
     @abstractmethod

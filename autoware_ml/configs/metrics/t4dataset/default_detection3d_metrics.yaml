@@ -4,7 +4,7 @@
     - { _target_: autoware_ml.metrics.detection3d.heading_ap.HeadingAP, stages: [test] }
     - { _target_: autoware_ml.metrics.detection3d.nds.Nds, stages: [test] }
     - { _target_: autoware_ml.metrics.detection3d.tp_errors.TpErrors, stages: [test] }
-  class_names: ${database.class_names}
+  class_names: ${database.database_task_configs.detection3d.label_names}
   thresholds: [0.5, 1.0, 2.0, 4.0]
   min_num_points: 2
   eval_class_range: ${eval_class_range}
