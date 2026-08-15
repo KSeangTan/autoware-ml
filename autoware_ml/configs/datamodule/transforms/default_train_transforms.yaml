@@ -75,3 +75,12 @@ pipeline:
 
     min_points: 3
     bev_range: [-60.0, -60.0, 60.0, 60.0]
+
+  - _target_: autoware_ml.transforms.multi_task.bboxes_3d.loading.BBoxesAttributeFilter
+    _convert_: all
+
+    attributes_to_filter:
+      bicycle:
+        - vehicle_state.parked
+        - cycle_state.without_rider
+        - motorcycle_state.without_rider

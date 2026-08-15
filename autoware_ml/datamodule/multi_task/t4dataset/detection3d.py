@@ -112,6 +112,9 @@ class T4Detection3DTask(BaseDatasetTask):
             .to_numpy()
             .astype(np.int32, copy=False)
         )
+        gt_bboxes_attributes = selected_row.field(
+            Box3DDatasetSchema.BOX3D_ATTRIBUTES.name
+        ).to_list()
 
         if not len(gt_bboxes_3d):
             gt_bboxes_3d = np.zeros(
@@ -121,6 +124,7 @@ class T4Detection3DTask(BaseDatasetTask):
             gt_bboxes_label_names = []
             gt_bboxes_valid = np.zeros((0,), dtype=np.bool_)
             gt_bboxes_num_lidar_points = np.zeros((0,), dtype=np.int32)
+            gt_bboxes_attributes = []
 
         elif self.filter_valid_masks:
             # Filter out invalid bounding boxes based on the valid mask if filter_valid_masks is True
@@ -130,6 +134,11 @@ class T4Detection3DTask(BaseDatasetTask):
                 name for i, name in enumerate(gt_bboxes_label_names) if gt_bboxes_valid[i]
             ]
             gt_bboxes_num_lidar_points = gt_bboxes_num_lidar_points[gt_bboxes_valid]
+            gt_bboxes_attributes = [
+                attributes
+                for i, attributes in enumerate(gt_bboxes_attributes)
+                if gt_bboxes_valid[i]
+            ]
 
         detection3d_bboxes_3d = LidarBBoxes3D.from_numpy(
             bbox_params=gt_bboxes_3d,
@@ -137,6 +146,7 @@ class T4Detection3DTask(BaseDatasetTask):
             bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
             bbox_label_names=gt_bboxes_label_names,
             bbox_num_lidar_points=gt_bboxes_num_lidar_points,
+            bbox_attributes=gt_bboxes_attributes,
         )
 
         return MultiTaskGTSample(
