@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import logging
+from typing import Any
+from types import MappingProxyType
 
 from hydra.utils import instantiate
 from lightning.pytorch.loggers import Logger
@@ -35,6 +37,7 @@ def build_trainer_logger(
     stage: str,
     config_name: str,
     logger_enabled: bool,
+    extra_metadata: MappingProxyType[str, Any] | None = None,
 ) -> Logger | None:
     """
     Build an MLFlowRunContext from the Hydra configuration.
@@ -58,7 +61,13 @@ def build_trainer_logger(
     write_run_config_artifacts(cfg, ml_flow_run_context.artifact_dir)
     write_run_metadata(
         ml_flow_run_context.artifact_dir,
-        build_run_metadata(ml_flow_run_context, config_name, ml_flow_run_context.hydra_dir, stage),
+        build_run_metadata(
+            ml_flow_run_context,
+            config_name,
+            ml_flow_run_context.hydra_dir,
+            stage,
+            extra_metadata=extra_metadata,
+        ),
     )
     # Update cfg.logger with the run_id from ml_flow_run_context
     configure_logger(

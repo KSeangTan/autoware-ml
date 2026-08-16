@@ -19,6 +19,7 @@ integration, and trainer execution for model training.
 """
 
 import logging
+from pathlib import Path
 
 import hydra
 from hydra.core.hydra_config import HydraConfig
@@ -26,12 +27,12 @@ import lightning as L
 from lightning.pytorch.utilities.rank_zero import rank_zero_only
 from mlflow.system_metrics.system_metrics_monitor import SystemMetricsMonitor
 from omegaconf import DictConfig
-from pathlib import Path
+import torch
 
 from autoware_ml.builders.database_builder import build_database, build_datamodule
 from autoware_ml.builders.mlflow_builder import build_mlflow_run_context
 from autoware_ml.builders.model_builder import build_model, build_data_preprocessor
-from autoware_ml.builders.trainer_logger_builder import build_trainer_logger
+from autoware_ml.builders.logger_builder import build_trainer_logger
 from autoware_ml.datamodule.multi_task.multi_task_data_module import MultiTaskDataModule
 from autoware_ml.models.multi_task_base_model import MultiTaskBaseModel
 from autoware_ml.utils.runtime import (
@@ -141,9 +142,16 @@ def main(cfg: DictConfig):
 
     # Build model
     data_preprocessor = build_data_preprocessor(cfg)
+    weights_path = cfg.get("weights", None)
     resume_checkpoint_path = cfg.get("resume_checkpoint", None)
     model = build_model(
-        cfg, data_preprocessor=data_preprocessor, resume_checkpoint_path=resume_checkpoint_path
+        cfg,
+        data_preprocessor=data_preprocessor,
+        weights_path=weights_path,
+        resume_checkpoint_path=resume_checkpoint_path,
+        device=torch.device("cpu"),
+        set_eval=False,
+        enforce_full_coverage=False,
     )
 
     logger.info("Instantiating callbacks...")

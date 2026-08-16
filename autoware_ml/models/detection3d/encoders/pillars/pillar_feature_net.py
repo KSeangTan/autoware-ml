@@ -138,6 +138,26 @@ class PillarFeatureNet(nn.Module):
             )
         return decorated
 
+    def encode_decorated(
+        self,
+        input_features: Float32[torch.Tensor, "num_pillars max_num_points feature_channels"],
+    ) -> Float32[torch.Tensor, "num_pillars 1 num_output_channels"]:
+        """Run the PFN layers over already-decorated pillar features.
+
+        The singleton point dimension produced by the last PFN layer is kept so
+        deployment can export this stage with the runtime pillar-feature ABI.
+
+        Args:
+            input_features: Decorated pillar features produced by :meth:`encode`.
+
+        Returns:
+            Per-pillar feature tensor with the singleton point dimension kept.
+        """
+        features = input_features
+        for layer in self.pfn_layers:
+            features = layer(features)
+        return features
+
     def forward(
         self,
         voxels_data: VoxelsData,
@@ -151,7 +171,4 @@ class PillarFeatureNet(nn.Module):
         Returns:
             Encoded pillar feature tensor after sequence of PFN layers.
         """
-        features = self.encode(voxels_data)
-        for layer in self.pfn_layers:
-            features = layer(features)
-        return features.squeeze(1)
+        return self.encode_decorated(self.encode(voxels_data)).squeeze(1)

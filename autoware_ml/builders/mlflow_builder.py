@@ -15,6 +15,8 @@
 import logging
 from pathlib import Path
 import os
+from types import MappingProxyType
+from typing import Any
 
 from omegaconf import DictConfig
 
@@ -36,6 +38,8 @@ def build_mlflow_run_context(
     experiment_uid: str,
     config_name: str,
     logger_enabled: bool,
+    parent_run_id: str | None = None,
+    extra_tags: MappingProxyType[str, Any] | None = None,
 ) -> MlflowRunContext:
     """
     Build an MLFlowRunContext from the Hydra configuration.
@@ -72,7 +76,11 @@ def build_mlflow_run_context(
                 stage=stage,
                 experiment_name=experiment_name,
                 run_name=run_name,
+                parent_run_id=parent_run_id,
+                extra_tags=extra_tags,
             )
+    else:
+        run_context = None
 
     logger.info(f"MLflow run context built successfully with run context: {run_context}.")
     return run_context

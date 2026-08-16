@@ -38,6 +38,7 @@ from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.eval_mixin import MetricEvalMixin
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.types.dataset import SplitType
+from autoware_ml.utils.deploy import ExportSpec
 from autoware_ml.utils.optimizer import build_lightning_optimizer_config
 
 
@@ -345,3 +346,37 @@ class MultiTaskBaseModel(MetricEvalMixin, L.LightningModule):
             if self._trainer is not None
             else None,
         )
+
+    def build_export_spec(self, multi_task_batch_inputs: MultiTaskBatchInputs) -> ExportSpec:
+        """Build the single-module deployment export specification.
+
+        :meth:`forward` consumes a :class:`MultiTaskBatchInputs` and returns a
+        :class:`MultiTaskOutputs`, neither of which the ONNX exporter can trace, so
+        there is no generic signature-based default. Models that support deployment
+        must override this hook and flatten the batch into the tensor arguments of
+        the exported graph.
+
+        Args:
+            multi_task_batch_inputs: Example preprocessed batch used for export.
+
+        Returns:
+            Export specification for deployment.
+        """
+        raise NotImplementedError("Model must implement build_export_spec()")
+
+    def build_export_specs(
+        self, multi_task_batch_inputs: MultiTaskBatchInputs
+    ) -> dict[str, ExportSpec]:
+        """Build per-module deployment export specifications.
+
+        The default implementation wraps :meth:`build_export_spec` as a single
+        ``end_to_end`` module. Models with separate exportable sub-graphs
+        override this to return one spec per architectural component.
+
+        Args:
+            multi_task_batch_inputs: Example preprocessed batch used for export.
+
+        Returns:
+            Ordered mapping of module name to export specification.
+        """
+        return {"end_to_end": self.build_export_spec(multi_task_batch_inputs)}

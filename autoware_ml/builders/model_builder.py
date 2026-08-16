@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import logging
+from pathlib import Path
+from typing import Sequence
 
 from hydra.utils import instantiate
 from omegaconf import DictConfig
@@ -39,13 +41,25 @@ def build_data_preprocessor(cfg: DictConfig) -> DataPreprocessor:
 
 
 def build_model(
-    cfg: DictConfig, data_preprocessor: DataPreprocessor, resume_checkpoint_path: str | None
+    cfg: DictConfig,
+    data_preprocessor: DataPreprocessor,
+    device: torch.device,
+    weights_path: str | Path | Sequence[str | Path] | tuple[str | Path, ...] | None,
+    resume_checkpoint_path: str | None,
+    set_eval: bool = False,
+    enforce_full_coverage: bool = False,
 ) -> MultiTaskBaseModel:
     """
     Build a model from the Hydra configuration.
 
     Args:
         cfg: Hydra configuration.
+        data_preprocessor: Data preprocessor to be used with the model.
+        device: Device to load the model onto.
+        weights_path: Path(s) to the weights file(s) to load into the model.
+        resume_checkpoint_path: Path to the checkpoint file to resume training from.
+        set_eval: Whether to set the model to evaluation mode after loading weights.
+        enforce_full_coverage: Whether to enforce that all model parameters are covered by the weights.
 
     Returns:
         Pytorch-Lightning MultiTaskBaseModel for multi-task learning/inference.
@@ -54,16 +68,22 @@ def build_model(
     model = instantiate(cfg.model, data_preprocessor=data_preprocessor)
 
     # Resume checkpoint
-    weights_path = cfg.get("weights", None)
     if resume_checkpoint_path is not None and weights_path is not None:
         raise ValueError("'--resume-checkpoint' and '--weights' are mutually exclusive.")
 
     if weights_path is not None:
-        apply_matching_weights(model, weights_path, map_location="cpu", logger=logger)
+        apply_matching_weights(
+            model,
+            weights_path,
+            map_location=device,
+            logger=logger,
+            enforce_full_coverage=enforce_full_coverage,
+            set_eval=set_eval,
+        )
 
     if resume_checkpoint_path is not None:
         progress = torch.load(
-            resume_checkpoint_path, map_location="cpu", weights_only=False, mmap=True
+            resume_checkpoint_path, map_location=device, weights_only=False, mmap=True
         )
         logger.info(
             "Resuming from '%s': checkpoint saved at epoch %d (global step %d), "
@@ -75,3 +95,29 @@ def build_model(
         )
     logger.info(f"Model built successfully with {model}.")
     return model
+
+
+def build_weight_checkpoint_paths(cfg: DictConfig) -> tuple[Sequence[str | Path], Path]:
+    """
+    Build a list of weight checkpoint paths from the Hydra configuration.
+
+    Args:
+        cfg: Hydra configuration.
+    Returns:
+        Tuple containing a list of weight checkpoint paths and the last checkpoint path.
+    """
+    weights_arg = cfg.get("weights", None)
+    if weights_arg is None:
+        raise ValueError("--weights <path> (repeatable) must be specified.")
+
+    weight_paths = (
+        [Path(weights_arg)]
+        if isinstance(weights_arg, str)
+        else [Path(path) for path in weights_arg]
+    )
+    checkpoint_path = Path(weight_paths[-1])
+    for path in weight_paths:
+        if not path.exists():
+            raise FileNotFoundError(f"Weights file not found: {path}")
+
+    return weight_paths, checkpoint_path
