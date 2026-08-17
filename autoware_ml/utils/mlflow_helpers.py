@@ -437,10 +437,16 @@ def generate_hydra_run_dir(
         root_dir = REPO_ROOT / "mlruns"
     config_root = (root_dir / config_name).resolve()
     if run_id is not None:
-        return config_root / run_id / "hydra"
+        return config_root / run_id / "artifacts" / "hydra"
 
     timestamp = started_at or datetime.now().astimezone()
-    return config_root / "_hydra" / timestamp.strftime("%Y-%m-%d") / timestamp.strftime("%H-%M-%S")
+    return (
+        config_root
+        / "artifacts"
+        / "_hydra"
+        / timestamp.strftime("%Y-%m-%d")
+        / timestamp.strftime("%H-%M-%S")
+    )
 
 
 def artifact_uri_to_path(artifact_uri: str) -> Path:

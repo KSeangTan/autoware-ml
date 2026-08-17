@@ -252,15 +252,10 @@ def prepare_runtime_environment(
                 "source_run_id": parent_run_id or "",
             }
 
-        if "log_output_dir" in cfg and cfg.log_output_dir is not None:
-            hydra_dir = cfg.log_output_dir
-        else:
-            hydra_dir = None
-
         run_context = prepare_run_context(
             cfg.logger.tracking_uri,
             config_name,
-            hydra_dir=hydra_dir,
+            hydra_dir=None,
             stage=stage,
             parent_run_id=parent_run_id,
             experiment_name=experiment_name,
