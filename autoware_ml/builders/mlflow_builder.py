@@ -18,6 +18,7 @@ import os
 from types import MappingProxyType
 from typing import Any
 
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
 
 from autoware_ml.utils.mlflow_helpers import (
@@ -56,15 +57,16 @@ def build_mlflow_run_context(
         An MLFlowRunContext object containing the run ID, experiment name, and user config name.
     """
     logger.info("Building MLflow run context...")
-    experiment_group_dir = Path(cfg.experiment_group_dir)
+    work_dir = Path(HydraConfig.get().runtime.output_dir)
+    logger.info(f"Hydra work directory: {work_dir}")
     experiment_name = generate_experiment_name(experiment_name)
     if logger_enabled:
         pre_created_run_id = os.environ.get(AUTOWARE_ML_RUN_ID_ENV)
         if pre_created_run_id is not None:
             run_context = load_run_context(cfg.logger.tracking_uri, pre_created_run_id)
-            if experiment_group_dir != run_context.hydra_dir:
+            if work_dir != run_context.hydra_dir:
                 raise RuntimeError(
-                    f"Hydra work directory '{experiment_group_dir}' does not match the pre-created MLflow "
+                    f"Hydra work directory '{work_dir}' does not match the pre-created MLflow "
                     f"run directory '{run_context.hydra_dir}'."
                 )
         else:
@@ -72,7 +74,7 @@ def build_mlflow_run_context(
             run_context = prepare_run_context(
                 cfg.logger.tracking_uri,
                 config_name=config_name,
-                hydra_dir=experiment_group_dir,
+                hydra_dir=work_dir,
                 stage=stage,
                 experiment_name=experiment_name,
                 run_name=run_name,
