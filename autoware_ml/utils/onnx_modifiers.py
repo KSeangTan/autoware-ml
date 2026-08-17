@@ -242,9 +242,6 @@ class OutputChannelPermuteModifier:
     fail_if_missing: bool = True
     output_path: str | Path | None = None
 
-    def _gather_node_name(self) -> str:
-        return f"{self.output_name}_ChannelPermute"
-
     def _validate_permutation(self) -> tuple[int, ...]:
         permutation = tuple(int(index) for index in self.permutation)
         if sorted(permutation) != list(range(len(permutation))):
@@ -301,7 +298,7 @@ class OutputChannelPermuteModifier:
 
         self._check_channel_count(output, permutation)
 
-        gather_name = self._gather_node_name()
+        gather_name = f"{self.output_name}_ChannelPermute"
         producers = [node for node in graph.node if self.output_name in node.output]
         if not producers:
             raise RuntimeError(
