@@ -10,7 +10,7 @@ callbacks:
     _target_: lightning.pytorch.callbacks.ModelCheckpoint
     monitor: val/loss
     dirpath: ${hydra:run.dir}/checkpoints
-    filename: best_{epoch}
+    filename: best
     save_top_k: 1
     mode: min
     verbose: true
@@ -18,7 +18,7 @@ callbacks:
   model_checkpoint_last:
     _target_: lightning.pytorch.callbacks.ModelCheckpoint
     dirpath: ${hydra:run.dir}/checkpoints
-    filename: last_{epoch}
+    filename: last
     save_top_k: 1
     enable_version_counter: false
 
