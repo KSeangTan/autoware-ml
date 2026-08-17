@@ -252,11 +252,7 @@ def prepare_runtime_environment(
                 "source_run_id": parent_run_id or "",
             }
 
-        if "hydra_dir" in cfg and cfg.hydra_dir is not None:
-            hydra_dir = cfg.hydra_dir
-        else:
-            hydra_dir = None
-
+        hydra_dir = cfg.hydra.run.dir
         run_context = prepare_run_context(
             cfg.logger.tracking_uri,
             config_name,
