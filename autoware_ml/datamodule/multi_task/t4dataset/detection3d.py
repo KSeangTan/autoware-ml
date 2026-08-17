@@ -85,36 +85,27 @@ class T4Detection3DTask(BaseDatasetTask):
             raise ValueError("Dataset records dataframe is not available.")
 
         # Retrieve the specific row from the dataset records dataframe based on the given index
-        # and the bbox3d column.
-        selected_row = self.dataset_records_dataframe.item(
-            idx, DatasetTableSchema.BOXES_3D.name
-        ).struct
-        gt_bboxes_3d = (
-            selected_row.field(Box3DDatasetSchema.BOX3D_PARAMS.name)
-            .to_numpy()
-            .astype(np.float32, copy=False)
+        # and the bbox3d column, unnesting every bbox3d field in a single query.
+        selected_row = (
+            self.dataset_records_dataframe.item(idx, DatasetTableSchema.BOXES_3D.name)
+            .struct.unnest()
+            .select(
+                Box3DDatasetSchema.BOX3D_PARAMS.name,
+                Box3DDatasetSchema.BOX3D_LABEL_INDEX.name,
+                Box3DDatasetSchema.BOX3D_LABEL_NAME.name,
+                Box3DDatasetSchema.BOX3D_VALID.name,
+                Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTS.name,
+                Box3DDatasetSchema.BOX3D_ATTRIBUTES.name,
+            )
         )
-        gt_bboxes_labels = (
-            selected_row.field(Box3DDatasetSchema.BOX3D_LABEL_INDEX.name)
-            .to_numpy()
-            .astype(np.int32, copy=False)
-        )
-        gt_bboxes_label_names = selected_row.field(
-            Box3DDatasetSchema.BOX3D_LABEL_NAME.name
-        ).to_list()
-        gt_bboxes_valid = (
-            selected_row.field(Box3DDatasetSchema.BOX3D_VALID.name)
-            .to_numpy()
-            .astype(np.bool_, copy=False)
-        )
-        gt_bboxes_num_lidar_points = (
-            selected_row.field(Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTS.name)
-            .to_numpy()
-            .astype(np.int32, copy=False)
-        )
-        gt_bboxes_attributes = selected_row.field(
-            Box3DDatasetSchema.BOX3D_ATTRIBUTES.name
-        ).to_list()
+        gt_bboxes_3d = selected_row[Box3DDatasetSchema.BOX3D_PARAMS.name].to_numpy()
+        gt_bboxes_labels = selected_row[Box3DDatasetSchema.BOX3D_LABEL_INDEX.name].to_numpy()
+        gt_bboxes_label_names = selected_row[Box3DDatasetSchema.BOX3D_LABEL_NAME.name].to_list()
+        gt_bboxes_valid = selected_row[Box3DDatasetSchema.BOX3D_VALID.name].to_numpy()
+        gt_bboxes_num_lidar_points = selected_row[
+            Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTS.name
+        ].to_numpy()
+        gt_bboxes_attributes = selected_row[Box3DDatasetSchema.BOX3D_ATTRIBUTES.name].to_list()
 
         if not len(gt_bboxes_3d):
             gt_bboxes_3d = np.zeros(
@@ -184,17 +175,3 @@ class T4Detection3DTask(BaseDatasetTask):
 
         logger.info(f"Number of bboxes per class in the dataset: {total_counts}")
         logger.info(f"Number of bboxes per class in valid bboxes: {valid_counts}")
-        # Log the number of classes in the dataset after filtering valid bboxes if filter_valid_masks is True
-        # Log the number of each classes in the dataset without filtering valid bboxes
-        # class_counts = (
-        #     self.dataset_records_dataframe.select(DatasetTableSchema.BOXES_3D.name)
-        #     .explode(DatasetTableSchema.BOXES_3D.name)
-        #     .unnest(DatasetTableSchema.BOXES_3D.name)
-        #     .groupby(Box3DDatasetSchema.BOX3D_LABEL_NAME.name)
-        #     .agg(pl.count().alias("count"))
-        #     .sort("count", reverse=True)
-        # )
-        # num_samples = len(self.dataset_records_dataframe)
-        # logger.info(f"Number of samples in the dataset: {num_samples}")
-
-        # Log additional dataset information as needed
