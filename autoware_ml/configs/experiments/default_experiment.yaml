@@ -1,7 +1,9 @@
 # @package _global_
 hydra:
   run:
-    dir: ${log_output_dir}
+    dir: ${oc.env:AUTOWARE_ML_HYDRA_RUN_DIR,mlruns/${user_config_name:${hydra:job.config_name}}/_hydra/${experiment_group_dir}}
+  sweep:
+    dir: mlruns/optuna/${user_config_name:${hydra:job.config_name}}/_hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
   output_subdir: code/hydra # Store hydra's config breakdown here for debugging
   # Note: hydra.searchpath cannot be set here. Hydra only accepts it in the primary
   # config (the one passed to --config-name), and this file is always reached through a
@@ -40,6 +42,6 @@ date_format: "%Y.%m.%d.%H.%M.%S"
 experiment_uid: ${now:${date_format}} # Unique Id of the experiment, default to timestamp
 data_root_path: ${oc.env:AUTOWARE_ML_DATA_PATH}
 cache_root_path: ${data_root_path}/cache/
-experiment_group_dir: ${working_dir}/experiments/${experiment_group_name}/${experiment_name}
-experiment_run_dir: ${experiment_group_dir}/${experiment_uid}
+experiment_group_dir: ${experiment_group_name}/${experiment_name}
+experiment_run_dir: ${working_dir}/experiments/${experiment_group_dir}/${experiment_uid}
 log_output_dir: ${experiment_run_dir}/logs

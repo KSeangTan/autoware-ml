@@ -252,8 +252,8 @@ def prepare_runtime_environment(
                 "source_run_id": parent_run_id or "",
             }
 
-        if "experiment_group_dir" in cfg and cfg.experiment_group_dir is not None:
-            hydra_dir = cfg.experiment_group_dir
+        if "hydra_dir" in cfg and cfg.hydra_dir is not None:
+            hydra_dir = cfg.hydra_dir
         else:
             hydra_dir = None
 
