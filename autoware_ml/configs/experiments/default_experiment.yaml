@@ -1,7 +1,7 @@
 # @package _global_
 hydra:
   run:
-    dir: ${oc.env:AUTOWARE_ML_HYDRA_RUN_DIR,mlruns/${user_config_name:${hydra:job.config_name}}/_hydra/${experiment_group_dir}}
+    dir: ${oc.env:AUTOWARE_ML_HYDRA_RUN_DIR,mlruns/${user_config_name:${hydra:job.config_name}}/artifacts/_hydra/${experiment_group_dir}}
   sweep:
     dir: mlruns/optuna/${user_config_name:${hydra:job.config_name}}/_hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
   output_subdir: code/hydra # Store hydra's config breakdown here for debugging
