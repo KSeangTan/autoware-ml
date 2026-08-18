@@ -494,7 +494,7 @@ def multi_task_deploy(
         extra_args=ctx.args,
         hydra_overrides=hydra_overrides,
         checkpoints=weights,
-        config_prefix=TASK_CONFIG_PREFIX,
+        config_prefix=MULTI_TASK_CONFIG_PREFIX,
     )
 
 
