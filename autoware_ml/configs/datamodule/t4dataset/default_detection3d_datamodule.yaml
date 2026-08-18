@@ -11,5 +11,3 @@ defaults:
   - t4dataset/datasets@test_dataset: default_detection3d_test_dataset
   - t4dataset/datasets@validation_dataset: default_detection3d_val_dataset
   - t4dataset/datasets@predict_dataset: default_detection3d_predict_dataset
-
-predict_dataset: null
