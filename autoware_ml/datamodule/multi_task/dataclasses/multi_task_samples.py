@@ -64,6 +64,21 @@ class PointCloudGTBatch(NamedTuple):
             batch_indices=batch_indices,
         )
 
+    def to_device(self, device: torch.device) -> PointCloudGTBatch:
+        """
+        Move the PointCloudGTBatch to the specified device.
+
+        Args:
+          device: The target device to move the batch to.
+
+        Returns:
+          PointCloudGTBatch: The batch moved to the specified device.
+        """
+        return PointCloudGTBatch(
+            points=self.points.to(device),
+            batch_indices=self.batch_indices.to(device),
+        )
+
 
 class LiDARPointCloudSample(NamedTuple):
     """
@@ -118,6 +133,26 @@ class MultiTaskGTBatch(NamedTuple):
 
     # Summed io_processing_time of every sample collated into this batch.
     io_processing_time: float = 0.0
+
+    def to_device(self, device: torch.device) -> MultiTaskGTBatch:
+        """
+        Move the MultiTaskGTBatch to the specified device.
+
+        Args:
+          device: The target device to move the batch to.
+
+        Returns:
+          MultiTaskGTBatch: The batch moved to the specified device.
+        """
+        return MultiTaskGTBatch(
+            point_cloud_gt_batch=self.point_cloud_gt_batch.to_device(device)
+            if self.point_cloud_gt_batch is not None
+            else None,
+            detection3d_gt_batch=self.detection3d_gt_batch.to_device(device)
+            if self.detection3d_gt_batch is not None
+            else None,
+            io_processing_time=self.io_processing_time,
+        )
 
     def infer_batch_size(self) -> Int32:
         """

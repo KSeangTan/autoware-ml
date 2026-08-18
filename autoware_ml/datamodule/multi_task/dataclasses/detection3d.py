@@ -118,3 +118,20 @@ class Detection3DGTBatch(NamedTuple):
             gt_valid_bboxes=gt_valid_bboxes,
             gt_bboxes_num_points=gt_bboxes_num_points,
         )
+
+    def to_device(self, device: torch.device) -> Detection3DGTBatch:
+        """
+        Move the Detection3DGTBatch to the specified device.
+
+        Args:
+          device: The target device to move the batch to.
+
+        Returns:
+          Detection3DGTBatch: A new Detection3DGTBatch on the specified device.
+        """
+        return Detection3DGTBatch(
+            gt_bboxes_3d=self.gt_bboxes_3d.to(device),
+            gt_labels_3d=self.gt_labels_3d.to(device),
+            gt_valid_bboxes=self.gt_valid_bboxes.to(device),
+            gt_bboxes_num_points=self.gt_bboxes_num_points.to(device),
+        )
