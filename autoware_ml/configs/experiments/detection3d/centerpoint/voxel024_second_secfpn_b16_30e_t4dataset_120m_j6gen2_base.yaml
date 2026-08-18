@@ -140,3 +140,7 @@ datamodule:
 
   validation_dataset:
     max_num_3d_gt_bboxes: ${max_num_3d_gt_bboxes}
+
+  predict_dataset:
+    max_num_3d_gt_bboxes: ${max_num_3d_gt_bboxes}
+    batch_size: 1
