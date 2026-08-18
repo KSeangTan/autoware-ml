@@ -47,6 +47,7 @@ class DeploymentExport:
         self.datamodule = datamodule
         self.model = model
         self.device = self.model.device
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def prepare_export_specs(self) -> MappingProxyType[str, dict]:
         """Prepare export specifications for the model."""
