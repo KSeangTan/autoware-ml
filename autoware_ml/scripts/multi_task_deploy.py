@@ -35,7 +35,7 @@ from autoware_ml.builders.model_builder import (
     build_data_preprocessor,
     build_weight_checkpoint_paths,
 )
-from autoware_ml.builders.logger_builder import build_deployment_logger, build_trainer_logger
+from autoware_ml.builders.logger_builder import build_trainer_logger
 from autoware_ml.datamodule.multi_task.multi_task_data_module import MultiTaskDataModule
 from autoware_ml.deployment.deployment_export import DeploymentExport
 from autoware_ml.models.multi_task_base_model import MultiTaskBaseModel
@@ -131,15 +131,6 @@ def main(cfg: DictConfig):
 
     if run_context is not None:
         mlflow_client = MlflowClient(tracking_uri=run_context.tracking_uri)
-        build_deployment_logger(
-            cfg,
-            ml_flow_run_context=run_context,
-            stage="deploy",
-            config_name=config_name,
-            parent_run_id=parent_run_id,
-            checkpoint_path=str(checkpoint_path),
-            source_checkpoints=source_checkpoints,
-        )
     else:
         mlflow_client = None
 
