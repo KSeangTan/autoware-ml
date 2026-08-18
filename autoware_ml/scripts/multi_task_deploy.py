@@ -145,7 +145,8 @@ def main(cfg: DictConfig):
     output_dir = cfg.get("experiment_run_dir", None)
     if run_context is not None and output_dir is None:
         output_dir = str(run_context.exports_dir)
-    else:
+
+    if output_dir is None:
         raise ValueError(
             "Output directory must be specified in the configuration or obtained from MLflow run context."
         )
