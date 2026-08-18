@@ -143,7 +143,7 @@ def main(cfg: DictConfig):
     logger.info("CUDA device: %s", torch.cuda.get_device_name(0))
 
     output_dir = cfg.get("experiment_run_dir", None)
-    if run_context is not None and output_dir is None:
+    if run_context is not None:
         output_dir = str(run_context.exports_dir)
 
     if output_dir is None:
