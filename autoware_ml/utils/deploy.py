@@ -28,7 +28,6 @@ from pathlib import Path
 from typing import Any
 
 import lightning as L
-from lightning.fabric.utilities.apply_func import move_data_to_device
 from omegaconf import DictConfig, OmegaConf
 import torch
 from torch.export import Dim
@@ -121,7 +120,8 @@ def get_predict_batch(
     datamodule.setup("predict")
     predict_dataloader = datamodule.predict_dataloader()
     batch = next(iter(predict_dataloader))
-    batch = move_data_to_device(batch, device)
+    batch = batch.to_device(device)
+    # batch = move_data_to_device(batch, device)
     return model.on_after_batch_transfer(batch, dataloader_idx=0)
 
 
