@@ -43,6 +43,10 @@ datamodule:
   # Overwrite dataloader
   train_dataloader:
     shuffle: true
+  predict_dataloader:
+    shuffle: false
+    batch_size: 1
+
   # Overwrite transforms
   train_dataset:
     max_num_3d_gt_bboxes: ${max_num_3d_gt_bboxes}
@@ -143,4 +147,3 @@ datamodule:
 
   predict_dataset:
     max_num_3d_gt_bboxes: ${max_num_3d_gt_bboxes}
-    batch_size: 1
