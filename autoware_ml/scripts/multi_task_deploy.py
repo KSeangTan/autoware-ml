@@ -185,7 +185,7 @@ def main(cfg: DictConfig):
             logger_enabled=logger_enabled,
             extra_metadata={
                 "source_run_id": parent_run_id,
-                "checkpoint_path": checkpoint_path,
+                "checkpoint_path": str(checkpoint_path),
                 "source_checkpoints": source_checkpoints,
             },
         )
