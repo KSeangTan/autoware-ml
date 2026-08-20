@@ -18,6 +18,7 @@ This script wires Hydra configuration, Lightning runtime setup, MLflow
 integration, and model deployment execution.
 """
 
+import os
 import logging
 
 import hydra
@@ -96,6 +97,15 @@ def main(cfg: DictConfig):
         raise ValueError("Config must define a 'deploy' section.")
 
     log_configuration(cfg)
+    # Set POLARS_MAX_THREADS to 1 to avoid deadlocks when using polars with pytorch dataloader workers
+    if cfg.polars_max_threads > 0:
+        logger.warning(
+            f"POLARS_MAX_THREADS is set to {cfg.polars_max_threads}. "
+            "This may cause deadlocks when using polars with pytorch dataloader workers. "
+            "Consider setting it to 1 in the configuration."
+        )
+        os.environ["POLARS_MAX_THREADS"] = cfg.polars_max_threads
+
     config_name = HydraConfig.get().job.config_name
     if config_name is None:
         raise ValueError("Hydra config name is not available.")
