@@ -45,4 +45,3 @@ cache_root_path: ${data_root_path}/cache/
 experiment_group_dir: ${experiment_group_name}/${experiment_name}
 experiment_run_dir: ${working_dir}/experiments/${experiment_group_dir}/${experiment_uid}
 log_output_dir: ${hydra:run.dir}/logs
-polars_max_threads: 1 # Set POLARS_MAX_THREADS to 1 to avoid deadlocks when using polars with pytorch dataloader workers

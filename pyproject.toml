@@ -88,6 +88,12 @@ index-strategy = "unsafe-best-match"
 # cuBLAS is only deterministic with a fixed workspace size; the trainer's
 # `deterministic` mode (torch.use_deterministic_algorithms) depends on it.
 CUBLAS_WORKSPACE_CONFIG = ":4096:8"
+# Polars sizes its global thread pool once, when the extension module is first
+# imported, so this has to be in the environment before Python starts; setting
+# it from Python is too late. Keep the pool single-threaded: the dataloader
+# already parallelizes across worker processes, and a multi-threaded pool
+# forked into those workers can deadlock. Mirrored in docker/Dockerfile.
+POLARS_MAX_THREADS = "1"
 
 [tool.pixi.dependencies]
 # Pixi keeps a small conda-forge base for Python and installer tooling. The

@@ -18,7 +18,6 @@ This script wires Hydra configuration, Lightning runtime setup, MLflow
 integration, and trainer execution for model training.
 """
 
-import os
 import logging
 from pathlib import Path
 
@@ -104,15 +103,6 @@ def main(cfg: DictConfig):
     config_name = HydraConfig.get().job.config_name
     if config_name is None:
         raise ValueError("Hydra config name is not available.")
-
-    # Set POLARS_MAX_THREADS to 1 to avoid deadlocks when using polars with pytorch dataloader workers
-    if cfg.polars_max_threads > 0:
-        logger.warning(
-            f"POLARS_MAX_THREADS is set to {cfg.polars_max_threads}. "
-            "This may cause deadlocks when using polars with pytorch dataloader workers. "
-            "Consider setting it to 1 in the configuration."
-        )
-        os.environ["POLARS_MAX_THREADS"] = cfg.polars_max_threads
 
     logger_enabled = cfg.get("logger") is not None
     config_name = config_name.removeprefix(CONFIG_NAME_PREFIX)
