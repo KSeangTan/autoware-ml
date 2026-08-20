@@ -31,6 +31,7 @@ from lightning.fabric.utilities.logger import _convert_params, _flatten_dict
 from lightning.pytorch.loggers import Logger, MLFlowLogger
 from lightning.pytorch.utilities.rank_zero import rank_zero_only
 from omegaconf import DictConfig, OmegaConf, open_dict
+import polars as pl
 
 from autoware_ml.configs.paths import CONFIGS_ROOT
 from autoware_ml.configs.resolvers import register_config_resolvers
@@ -96,6 +97,8 @@ def log_configuration(cfg: DictConfig) -> None:
     logger.info("=" * 80)
     logger.info(OmegaConf.to_yaml(cfg))
     logger.info("=" * 80)
+    # Log polars number of threads
+    logger.info(f"POLARS_MAX_THREADS: {pl.thread_pool_size}")
 
 
 def resolve_work_dir() -> Path:
