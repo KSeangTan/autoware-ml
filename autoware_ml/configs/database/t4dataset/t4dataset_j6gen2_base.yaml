@@ -3,7 +3,7 @@ _convert_: all
 
 version: T4Dataset-j6gen2_base-v1.0.0
 # Root path of actual annotation files
-root_path: ${data_root_path}/t4datasets/
+root_path: ${data_root_path}/t4dataset/
 
 # Caches
 cache_path: ${cache_root_path}/detection3d/

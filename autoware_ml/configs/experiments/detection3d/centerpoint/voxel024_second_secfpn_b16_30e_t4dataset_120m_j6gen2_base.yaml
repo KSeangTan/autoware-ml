@@ -37,7 +37,7 @@ model:
     out_size_factor: 2
     nms_min_radius: 1.0
   scheduler:
-    max_lr_factor: 5.0
+    max_lr_factor: 10.0
 
 datamodule:
   # Overwrite dataloader
