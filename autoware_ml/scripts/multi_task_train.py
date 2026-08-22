@@ -48,7 +48,7 @@ from autoware_ml.utils.runtime import (
 logger = logging.getLogger(__name__)
 _CONFIG_PATH = get_config_path()
 CONFIG_NAME_PREFIX = "experiments/"
-os.environ["POLARS_MAX_THREADS"] =  "1"
+
 
 def train(
     trainer: L.Trainer,
