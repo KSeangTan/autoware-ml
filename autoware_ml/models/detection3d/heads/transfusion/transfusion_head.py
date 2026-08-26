@@ -761,10 +761,6 @@ class TransFusionHead(nn.Module):
             Dense training heatmap targets.
         """
         batch_size = len(gt_bboxes_3d)
-        height, width = feature_map_size
-
-        """Build heatmap and regression targets for one batch."""
-        batch_size = len(gt_bboxes_3d)
         max_num_bboxes = gt_bboxes_3d.shape[1]
         feature_height, feature_width = feature_map_size
 
