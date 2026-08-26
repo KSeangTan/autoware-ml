@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from jaxtyping import Float32, Int64, Bool
 import torch
 
 
@@ -23,20 +24,43 @@ class ClassificationCost:
     gamma: float = 2.0
     eps: float = 1e-12
 
-    def __call__(self, cls_logits: torch.Tensor, gt_labels: torch.Tensor) -> torch.Tensor:
-        """Compute pairwise classification cost between queries and labels.
+    def __call__(
+        self,
+        cls_logits: Float32[torch.Tensor, "batch_size num_queries num_classes"],
+        gt_labels: Int64[torch.Tensor, "batch_size max_num_gt_bboxes"],
+        valid_masks: Bool[torch.Tensor, "batch_size max_num_gt_bboxes"],
+    ) -> Float32[torch.Tensor, "batch_size num_queries max_num_gt_bboxes"]:
+        """
+        Compute pairwise classification cost between queries and labels. Since it's
+        batch-wise implemnatation, the cost is computed for invalid gt_bboxes, but the cost will be
+        highest for invalid gt_bboxes, so the assignment will not match to invalid gt_bboxes.dense_
 
         Args:
             cls_logits: Classification logits for each query.
             gt_labels: Ground-truth class labels.
+            valid_masks: Mask indicating valid ground-truth labels.
 
         Returns:
-            Pairwise classification cost matrix.
+            Pairwise classification cost matrix in:
+            [
+                [cost(pred_box_0, gt_box_0), cost(pred_box_0, gt_box_1), ...]
+                [cost(pred_box_1, gt_box_0), cost(pred_box_1, gt_box_1), ...]
+            ]
+            for every batch.
         """
+        num_queries = cls_logits.shape[1]
         probs = cls_logits.sigmoid().clamp(min=self.eps, max=1.0 - self.eps)
         neg_cost = -(1.0 - probs + self.eps).log() * (1.0 - self.alpha) * probs.pow(self.gamma)
         pos_cost = -(probs + self.eps).log() * self.alpha * (1.0 - probs).pow(self.gamma)
-        return (pos_cost[:, gt_labels] - neg_cost[:, gt_labels]) * self.weight
+
+        # (batch_size, max_num_bboxes) -> (batch_size, num_queries, max_num_gt_bboxes)
+        class_indices = gt_labels.unsqueeze(1).expand(-1, num_queries, -1)
+        cost = (pos_cost.gather(2, class_indices) - neg_cost.gather(2, class_indices)) * self.weight
+        cost = (pos_cost[:, gt_labels] - neg_cost[:, gt_labels]) * self.weight
+        # valid_mask: (batch_size, max_num_gt_bboxes) -> (batch_size, 1, max_num_gt_bboxes)
+        # Broadcast to every column (gt_bboxes)
+        cost = cost.masked_fill(~valid_masks.unsqueeze(1), torch.finfo(cost.dtype).max)
+        return cost
 
 
 @dataclass(frozen=True)

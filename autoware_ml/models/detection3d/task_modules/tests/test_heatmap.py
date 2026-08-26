@@ -14,16 +14,19 @@
 
 """Unit tests for heatmap utilities."""
 
+import math
 import unittest
 from typing import Sequence
 
-from jaxtyping import Float32, Bool
+from jaxtyping import Bool, Float32, Int64
 import torch
 
 from autoware_ml.models.detection3d.task_modules.heatmap import (
     _vectorize_gaussian2d,
     vectorize_gaussian_radii,
     create_gaussian_heatmaps,
+    create_oriented_gaussian_heatmaps,
+    draw_heatmap_gaussian_oriented,
     batch_circle_nms,
 )
 
@@ -612,6 +615,231 @@ class TestBatchCircleNMS(unittest.TestCase):
         expected_keep_masks = self._expected_keep_masks([True, False])
         self.assertTrue(torch.equal(keep_masks, expected_keep_masks))
         self.assertEqual(int(keep_masks.sum().item()), self.batch_size * self.num_classes)
+
+
+class TestCreateOrientedGaussianHeatmaps(unittest.TestCase):
+    """Unit tests for the create_oriented_gaussian_heatmaps function."""
+
+    def setUp(self) -> None:
+        """Set up a common heatmap geometry and a batch of oriented boxes for all tests."""
+        self.device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+        self.heatmap_width = 24
+        self.heatmap_height = 20
+        self.num_classes = 3
+        self.min_sigma = 1.0
+
+        # (batch_size, max_num_boxes, 2) as (x, y)
+        self.centers = torch.tensor(
+            [[[6, 5], [16, 12], [3, 15]], [[12, 10], [20, 3], [8, 8]]],
+            dtype=torch.int64,
+            device=self.device,
+        )
+        # A long rig, a compact box, and a mid-sized one per sample, in heatmap cells.
+        # (batch_size, max_num_boxes)
+        self.lengths_cells = torch.tensor(
+            [[18.0, 3.0, 9.0], [24.0, 4.5, 6.0]], dtype=torch.float32, device=self.device
+        )
+        self.widths_cells = torch.tensor(
+            [[4.0, 3.0, 5.0], [5.0, 4.5, 2.0]], dtype=torch.float32, device=self.device
+        )
+        self.yaws = torch.tensor(
+            [[0.0, 0.6, -1.2], [math.pi / 2, 2.5, 0.3]], dtype=torch.float32, device=self.device
+        )
+        self.gt_bboxes_labels = torch.tensor(
+            [[0, 1, 2], [2, 0, 1]], dtype=torch.int64, device=self.device
+        )
+
+    def _create_oriented_gaussian_heatmaps(
+        self,
+        valid_masks: Bool[torch.Tensor, "batch_size max_num_boxes"],
+        lengths_cells: Float32[torch.Tensor, "batch_size max_num_boxes"] | None = None,
+        widths_cells: Float32[torch.Tensor, "batch_size max_num_boxes"] | None = None,
+        gt_bboxes_labels: Int64[torch.Tensor, "batch_size max_num_boxes"] | None = None,
+    ) -> Float32[torch.Tensor, "batch_size num_classes heatmap_height heatmap_width"]:
+        """Run the vectorized oriented heatmap creation with the shared test geometry."""
+        return create_oriented_gaussian_heatmaps(
+            heatmap_width=self.heatmap_width,
+            heatmap_height=self.heatmap_height,
+            num_classes=self.num_classes,
+            centers=self.centers,
+            lengths_cells=self.lengths_cells if lengths_cells is None else lengths_cells,
+            widths_cells=self.widths_cells if widths_cells is None else widths_cells,
+            yaws=self.yaws,
+            gt_bboxes_labels=(
+                self.gt_bboxes_labels if gt_bboxes_labels is None else gt_bboxes_labels
+            ),
+            valid_masks=valid_masks,
+            device=self.device,
+            min_sigma=self.min_sigma,
+        )
+
+    def _expected_oriented_gaussian_heatmaps(
+        self,
+        valid_masks: Bool[torch.Tensor, "batch_size max_num_boxes"],
+        lengths_cells: Float32[torch.Tensor, "batch_size max_num_boxes"] | None = None,
+        widths_cells: Float32[torch.Tensor, "batch_size max_num_boxes"] | None = None,
+        gt_bboxes_labels: Int64[torch.Tensor, "batch_size max_num_boxes"] | None = None,
+    ) -> Float32[torch.Tensor, "batch_size num_classes heatmap_height heatmap_width"]:
+        """Build the reference heatmaps by looping the scalar draw_heatmap_gaussian_oriented."""
+        lengths_cells = self.lengths_cells if lengths_cells is None else lengths_cells
+        widths_cells = self.widths_cells if widths_cells is None else widths_cells
+        gt_bboxes_labels = self.gt_bboxes_labels if gt_bboxes_labels is None else gt_bboxes_labels
+
+        batch_size, max_num_boxes = gt_bboxes_labels.shape
+        heatmaps = torch.zeros(
+            (batch_size, self.num_classes, self.heatmap_height, self.heatmap_width),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        for batch_index in range(batch_size):
+            for box_index in range(max_num_boxes):
+                if not bool(valid_masks[batch_index, box_index]):
+                    continue
+                draw_heatmap_gaussian_oriented(
+                    heatmaps[batch_index, int(gt_bboxes_labels[batch_index, box_index])],
+                    (
+                        int(self.centers[batch_index, box_index, 0]),
+                        int(self.centers[batch_index, box_index, 1]),
+                    ),
+                    float(lengths_cells[batch_index, box_index]),
+                    float(widths_cells[batch_index, box_index]),
+                    float(self.yaws[batch_index, box_index]),
+                    min_sigma=self.min_sigma,
+                )
+        return heatmaps
+
+    def test_create_oriented_gaussian_heatmaps(self) -> None:
+        """Test that the vectorized oriented heatmaps match the scalar reference."""
+        valid_masks = torch.ones_like(self.gt_bboxes_labels, dtype=torch.bool)
+        oriented_heatmaps = self._create_oriented_gaussian_heatmaps(valid_masks)
+
+        self.assertEqual(
+            oriented_heatmaps.shape,
+            (
+                self.centers.shape[0],
+                self.num_classes,
+                self.heatmap_height,
+                self.heatmap_width,
+            ),
+        )
+        self.assertTrue(
+            torch.allclose(
+                oriented_heatmaps,
+                self._expected_oriented_gaussian_heatmaps(valid_masks),
+                atol=1e-5,
+            )
+        )
+
+    def test_create_oriented_gaussian_heatmaps_with_invalid_mask(self) -> None:
+        """Test that invalid bboxes contribute nothing to the oriented heatmaps."""
+        valid_masks = torch.tensor([[1, 0, 1], [0, 1, 1]], device=self.device, dtype=torch.bool)
+        oriented_heatmaps = self._create_oriented_gaussian_heatmaps(valid_masks)
+
+        self.assertTrue(
+            torch.allclose(
+                oriented_heatmaps,
+                self._expected_oriented_gaussian_heatmaps(valid_masks),
+                atol=1e-5,
+            )
+        )
+        # Batch 0 box 1 is the only source of class 1, and batch 1 box 0 the only source of
+        # class 2, so both channels must stay empty once those boxes are masked out.
+        self.assertTrue(torch.all(oriented_heatmaps[0, 1] == 0.0))
+        self.assertTrue(torch.all(oriented_heatmaps[1, 2] == 0.0))
+
+    def test_create_oriented_gaussian_heatmaps_ignores_padded_geometry(self) -> None:
+        """Test that padded box geometry changes neither the heatmap nor the kernel size."""
+        valid_masks = torch.tensor([[1, 0, 1], [0, 1, 1]], device=self.device, dtype=torch.bool)
+        # The padded boxes carry an absurd length, a negative width and an out-of-range label, so
+        # a leaking padded value would blow up the shared kernel size or corrupt the scatter.
+        padded_lengths_cells = self.lengths_cells.clone()
+        padded_lengths_cells[0, 1] = 5000.0
+        padded_widths_cells = self.widths_cells.clone()
+        padded_widths_cells[1, 0] = -13.0
+        padded_gt_bboxes_labels = self.gt_bboxes_labels.clone()
+        padded_gt_bboxes_labels[0, 1] = -1
+
+        oriented_heatmaps = self._create_oriented_gaussian_heatmaps(
+            valid_masks,
+            lengths_cells=padded_lengths_cells,
+            widths_cells=padded_widths_cells,
+            gt_bboxes_labels=padded_gt_bboxes_labels,
+        )
+        expected_heatmaps = self._create_oriented_gaussian_heatmaps(valid_masks)
+        self.assertTrue(torch.allclose(oriented_heatmaps, expected_heatmaps, atol=1e-5))
+
+    def test_create_oriented_gaussian_heatmaps_with_all_invalid_masks(self) -> None:
+        """Test that an all-invalid batch with padded geometry yields an empty heatmap."""
+        oriented_heatmaps = self._create_oriented_gaussian_heatmaps(
+            torch.zeros_like(self.gt_bboxes_labels, dtype=torch.bool),
+            lengths_cells=torch.full_like(self.lengths_cells, 9999.0),
+            widths_cells=torch.full_like(self.widths_cells, -1.0),
+        )
+
+        self.assertEqual(
+            oriented_heatmaps.shape,
+            (
+                self.centers.shape[0],
+                self.num_classes,
+                self.heatmap_height,
+                self.heatmap_width,
+            ),
+        )
+        self.assertTrue(torch.all(oriented_heatmaps == 0.0))
+        self.assertTrue(torch.all(oriented_heatmaps.isfinite()))
+
+    def test_create_oriented_gaussian_heatmaps_clips_border_tails(self) -> None:
+        """Test that blob tails of boxes near the border are clipped instead of wrapping."""
+        self.centers = torch.tensor(
+            [[[0, 0], [self.heatmap_width - 1, self.heatmap_height - 1], [1, 2]]],
+            dtype=torch.int64,
+            device=self.device,
+        )
+        self.lengths_cells = torch.tensor([[20.0, 20.0, 3.0]], device=self.device)
+        self.widths_cells = torch.tensor([[4.0, 4.0, 3.0]], device=self.device)
+        self.yaws = torch.tensor([[0.7, -1.9, 0.0]], device=self.device)
+        self.gt_bboxes_labels = torch.tensor([[0, 1, 2]], dtype=torch.int64, device=self.device)
+        valid_masks = torch.ones_like(self.gt_bboxes_labels, dtype=torch.bool)
+
+        oriented_heatmaps = self._create_oriented_gaussian_heatmaps(valid_masks)
+        self.assertTrue(
+            torch.allclose(
+                oriented_heatmaps,
+                self._expected_oriented_gaussian_heatmaps(valid_masks),
+                atol=1e-5,
+            )
+        )
+
+    def test_create_oriented_gaussian_heatmaps_elongates_along_yaw(self) -> None:
+        """Test that a long box spreads along the x axis at yaw 0 and the y axis at yaw pi/2."""
+        self.centers = torch.tensor(
+            [[[self.heatmap_width // 2, self.heatmap_height // 2]]],
+            dtype=torch.int64,
+            device=self.device,
+        )
+        self.lengths_cells = torch.tensor([[18.0]], device=self.device)
+        self.widths_cells = torch.tensor([[3.0]], device=self.device)
+        self.gt_bboxes_labels = torch.zeros((1, 1), dtype=torch.int64, device=self.device)
+        valid_masks = torch.ones((1, 1), dtype=torch.bool, device=self.device)
+
+        extents = []
+        for yaw in (0.0, math.pi / 2):
+            self.yaws = torch.tensor([[yaw]], device=self.device)
+            oriented_heatmap = self._create_oriented_gaussian_heatmaps(valid_masks)[0, 0]
+            # Column and row supports of the blob, in cells.
+            extents.append(
+                (
+                    int((oriented_heatmap.sum(dim=0) > 0.05).sum()),
+                    int((oriented_heatmap.sum(dim=1) > 0.05).sum()),
+                )
+            )
+
+        (x_extent_yaw_0, y_extent_yaw_0), (x_extent_yaw_90, y_extent_yaw_90) = extents
+        self.assertGreater(x_extent_yaw_0, y_extent_yaw_0)
+        self.assertGreater(y_extent_yaw_90, x_extent_yaw_90)
+        # Rotating the same box by 90 degrees swaps its support.
+        self.assertEqual(x_extent_yaw_0, y_extent_yaw_90)
+        self.assertEqual(y_extent_yaw_0, x_extent_yaw_90)
 
 
 if __name__ == "__main__":

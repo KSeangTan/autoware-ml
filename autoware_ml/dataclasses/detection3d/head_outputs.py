@@ -2,10 +2,70 @@
 Modules to save raw outputs from a detection3d head.
 """
 
+from __future__ import annotations
+
+from typing import Sequence
+from types import MappingProxyType
+
 from jaxtyping import Float32
 from pydantic import BaseModel, ConfigDict
 
 import torch
+
+
+class TransFusionSeparateHeadOutputs(BaseModel):
+    """
+    Dataclass to save the outputs (1D) from a separate head in a Transfusion-based 3D detection model.
+
+    Attributes:
+      heatmaps: Heatmap to save probability for each class in a BEV heatmap.
+      centers: Center_x and center_y translation from each cell in a BEV heatmap.
+      heights: Height value from each cell in a BEV heatmap.
+      dims: Dimension values (length, width, height) from each cell in a BEV heatmap.
+      rots: Rotation values (sin, cos) from each cell in a BEV heatmap
+      vels: Velocity values (vel_x, vel_y) from each cell in a BEV heatmap.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
+
+    heatmaps: Float32[torch.Tensor, "batch_size num_classes num_proposals"]
+    centers: Float32[torch.Tensor, "batch_size 2 num_proposals"]
+    heights: Float32[torch.Tensor, "batch_size 1 num_proposals"]
+    dims: Float32[torch.Tensor, "batch_size 3 num_proposals"]
+    rots: Float32[torch.Tensor, "batch_size 2 num_proposals"]
+    vels: Float32[torch.Tensor, "batch_size 2 num_proposals"] | None
+
+    @classmethod
+    def from_dict(
+        cls, data: MappingProxyType[str, Float32[torch.Tensor, "batch_size channels num_proposals"]]
+    ) -> TransFusionSeparateHeadOutputs:
+        """
+        Create a TransFusionSeparateHeadOutputs instance from a dictionary.
+
+        Args:
+            data: A dictionary containing the output tensors.
+        """
+        vels = None if "vels" not in data else data["vels"]
+        return cls(
+            heatmaps=data["heatmaps"],
+            centers=data["centers"],
+            heights=data["heights"],
+            dims=data["dims"],
+            rots=data["rots"],
+            vels=vels,
+        )
+
+    @property
+    def ordered_keys(self) -> Sequence[str]:
+        """
+        Get the ordered keys of the output tensors.
+
+        Returns:
+            A list of ordered keys.
+        """
+        if self.vels is not None:
+            return ["heatmaps", "centers", "heights", "dims", "rots", "vels"]
+        return ["heatmaps", "centers", "heights", "dims", "rots"]
 
 
 class TransFusionHeadOutputs(BaseModel):
@@ -21,9 +81,11 @@ class TransFusionHeadOutputs(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
 
-    dense_heatmap: Float32[torch.Tensor, "batch_size num_classes height width"]
+    dense_heatmaps: Float32[torch.Tensor, "batch_size num_classes height width"]
     query_heatmap_scores: Float32[torch.Tensor, "batch_size num_queries num_classes"]
     query_labels: Float32[torch.Tensor, "batch_size num_queries 1"]
+
+    separate_head_outputs: TransFusionSeparateHeadOutputs
 
 
 class CenterHeadOutputs(BaseModel):

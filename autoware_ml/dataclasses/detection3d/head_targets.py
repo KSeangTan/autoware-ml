@@ -27,3 +27,27 @@ class CenterHeadTargets(BaseModel):
     reg_targets: Float32[torch.Tensor, "batch_size max_num_boxes num_reg_targets"]
     reg_indices: Int64[torch.Tensor, "batch_size max_num_boxes"]
     valid_masks: Bool[torch.Tensor, "batch_size max_num_boxes"]
+
+
+class TransFusionHeadTargets(BaseModel):
+    """Store assignment targets for one TransFusion training batch.
+
+    Attributes:
+        labels: Target class labels for all decoder queries.
+        label_weights: Per-query classification weights.
+        bbox_targets: Encoded box regression targets.
+        bbox_weights: Per-query box regression weights.
+        num_pos: Number of matched positive queries.
+        matched_iou: Mean IoU of matched positive queries.
+        heatmap: Dense heatmap target used for query initialization.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
+
+    labels: Float32[torch.Tensor, "batch_size num_proposals"]
+    label_weights: Float32[torch.Tensor, "batch_size num_proposals"]
+    bbox_targets: Float32[torch.Tensor, "batch_size num_proposals code_size"]
+    bbox_weights: Float32[torch.Tensor, "batch_size num_proposals"]
+    num_pos: int
+    matched_iou: float
+    heatmaps: Float32[torch.Tensor, "batch_size num_classes height*width"]

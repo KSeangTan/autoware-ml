@@ -32,6 +32,7 @@ def batch_circle_nms(
         scores: Confidence scores for the boxes.
         min_radius: Minimum center distance for suppression.
         valid_bboxes_masks: Boolean mask indicating which boxes are valid and should be considered for NMS.
+        group_bboxes_masks: Integer mask indicating which group each box belongs to.
         post_max_size: Maximum number of boxes kept after suppression, counted per class.
 
     Returns:
@@ -210,6 +211,110 @@ def _vectorize_gaussian2d(
     return gaussian
 
 
+def _splat_gaussian_kernels(
+    heatmap_width: int,
+    heatmap_height: int,
+    num_classes: int,
+    centers: Int64[torch.Tensor, "batch_size max_num_boxes 2"],
+    radii: Int64[torch.Tensor, "batch_size max_num_boxes"],
+    kernels: Float32[torch.Tensor, "batch_size max_num_boxes max_diameter max_diameter"],
+    gt_bboxes_labels: Int64[torch.Tensor, "batch_size max_num_boxes"],
+    valid_masks: Bool[torch.Tensor, "batch_size max_num_boxes"],
+    device: torch.device,
+) -> Float32[torch.Tensor, "batch_size num_classes heatmap_height heatmap_width"]:
+    """
+    Splat pre-built per-box Gaussian kernels onto per-class heatmaps with a max reduction.
+
+    Each kernel occupies the top-left ``(2 * radius + 1)`` square of its padded slot, so cell
+    ``(i, j)`` of box ``b`` maps to heatmap position ``(center_y - radius_b + i,
+    center_x - radius_b + j)`` and the box center always lands on cell ``(radius_b, radius_b)``.
+    Cells that fall outside the heatmap, and every cell of an invalid box, are zeroed before the
+    scatter, so out-of-heatmap blob tails are clipped per cell while the in-heatmap remainder is
+    still drawn.
+
+    This is the shared splat step behind :func:`create_gaussian_heatmaps` (round kernels) and
+    :func:`create_oriented_gaussian_heatmaps` (oriented elliptical kernels); only the kernel
+    generation differs between them.
+
+    Args:
+        heatmap_width: Width of the heatmap.
+        heatmap_height: Height of the heatmap.
+        num_classes: Number of classes.
+        centers: Heatmap centers as ``(x, y)`` for each box.
+        radii: Kernel radius in cells for each box, matching the kernel layout in ``kernels``.
+            Radii of invalid boxes must already be normalized by the caller (see
+            :func:`create_gaussian_heatmaps`).
+        kernels: Padded per-box Gaussian kernels, zero outside each box's own square.
+        gt_bboxes_labels: Class labels for each bounding box.
+        valid_masks: Mask indicating valid bounding boxes.
+        device: Torch device.
+
+    Returns:
+        Heatmap tensor of shape ``(batch_size, num_classes, heatmap_height, heatmap_width)``.
+    """
+    batch_size, max_num_bboxes, max_diameter, _ = kernels.shape
+    heatmaps = torch.zeros(
+        (batch_size, num_classes, heatmap_height, heatmap_width), device=device, dtype=torch.float32
+    )
+
+    # global pixel coordinates of every kernel cell
+    # (0, 1, 2, ..., max_diameter-1)
+    idx = torch.arange(max_diameter, device=device)  # (max_diameter,)
+
+    # The normalized radii keep the coordinates of padded boxes in a sane range; their cells are
+    # dropped by valid_masks in in_bounds regardless.
+    # (B, max_num_bboxes, 1) - (B, max_num_bboxes, 1) + (1, 1, max_diameter) -> (B, N, max_diameter)
+    # From [center_y - radius, center_y + radius], for each box, broadcast to all boxes in the batch
+    ys = centers[..., 1].unsqueeze(-1) - radii.unsqueeze(-1) + idx
+    # From [center_x - radius, center_x + radius], for each box, broadcast to all boxes in the batch
+    xs = centers[..., 0].unsqueeze(-1) - radii.unsqueeze(-1) + idx
+
+    # meshgrid to get all combinations of (y, x) for each box in the batch
+    # (B, max_num_bboxes, max_diameter, 1) -> (B, max_num_bboxes, max_diameter, max_diameter)
+    # All y-coordinates of the kernel cells for each box in the batch, broadcast to all x-coordinates
+    yy = ys.unsqueeze(-1).expand(batch_size, max_num_bboxes, max_diameter, max_diameter)
+    # (B, max_num_bboxes, max_diameter, 1) -> (B, max_num_bboxes, max_diameter, max_diameter)
+    # All x-coordinates of the kernel cells for each box in the batch, broadcast to all y-coordinates
+    xx = xs.unsqueeze(-2).expand(batch_size, max_num_bboxes, max_diameter, max_diameter)
+
+    # (B, max_num_bboxes, max_diameter, max_diameter)
+    in_bounds = (
+        (yy >= 0)
+        & (yy < heatmap_height)
+        & (xx >= 0)
+        & (xx < heatmap_width)
+        & valid_masks.view(batch_size, max_num_bboxes, 1, 1)
+    )
+
+    # Set invalid heatmap positions to zero
+    kernel_values = torch.where(in_bounds, kernels, torch.zeros_like(kernels))
+
+    # Labels for each box, shape (B, N, 1, 1)
+    labels = gt_bboxes_labels.view(batch_size, max_num_bboxes, 1, 1)
+    # clamp invalid labels (e.g. -1 padding) so indexing stays legal;
+    clamp_labels = labels.clamp(min=0, max=num_classes - 1)
+
+    # (B, max_num_bboxes, 1, 1) + (B, max_num_bboxes, max_diameter, max_diameter) -> (B, max_num_bboxes, max_diameter, max_diameter)
+    flat_idx = (
+        clamp_labels * heatmap_height * heatmap_width
+        + yy.clamp(0, heatmap_height - 1) * heatmap_width
+        + xx.clamp(0, heatmap_width - 1)
+    )
+
+    # For the same pixel, it keeps the maximum value across all bboxes in the same batch,
+    # so it uses scatter_reduce with "amax"
+    # For invalid bboxes, they will not contribute to the heatmap since their valid_masks are False,
+    # and thus their kernel_values values are zero.
+    heatmaps.view(batch_size, -1).scatter_reduce_(
+        dim=1,
+        index=flat_idx.view(batch_size, -1),
+        src=kernel_values.view(batch_size, -1),
+        reduce="amax",
+        include_self=True,
+    )
+    return heatmaps
+
+
 def create_gaussian_heatmaps(
     heatmap_width: int,
     heatmap_height: int,
@@ -284,11 +389,8 @@ def create_gaussian_heatmaps(
         raise ValueError(
             "Batch size mismatch: centers, gaussian_radii, and gt_bboxes_labels must have the same batch size."
         )
-    heatmaps = torch.zeros(
-        (batch_size, num_classes, heatmap_height, heatmap_width), device=device, dtype=torch.float32
-    )
 
-    # _vectorize_gaussian2d sizes every kernel slot from the global maximum diameter, 
+    # _vectorize_gaussian2d sizes every kernel slot from the global maximum diameter,
     # so a single large padded radius would inflate the padded kernel
     # tensor for the whole batch (and a negative one could shrink it below the valid boxes' needs).
     # Normalize invalid radii to zero, the smallest safe radius, so only valid boxes drive the
@@ -301,7 +403,8 @@ def create_gaussian_heatmaps(
     # (batch_size, max_num_boxes)
     diameters = 2 * normalized_gaussian_radii + 1
 
-    # (batch_size, max_num_boxes, max_height, max_width)
+    # max_diameter == max_height == max_width since it uses the same diameters
+    # (batch_size, max_num_boxes, max_diameter, max_diameter)
     batch_gaussians_2d = _vectorize_gaussian2d(
         heights=diameters,
         widths=diameters,
@@ -311,67 +414,243 @@ def create_gaussian_heatmaps(
         dtype=torch.float32,
     )
 
-    # max_diameter == max_height == max_width since it uses the same diameters
-    _, max_num_bboxes, max_diameter, _ = batch_gaussians_2d.shape
-
-    # global pixel coordinates of every kernel cell
-    # (0, 1, 2, ..., max_diameter-1)
-    idx = torch.arange(max_diameter, device=device)  # (max_diameter,)
-
-    # The normalized radii keep the coordinates of padded boxes in a sane range; their cells are
-    # dropped by valid_masks in in_bounds regardless.
-    # (B, max_num_bboxes, 1) - (B, max_num_bboxes, 1) + (1, 1, max_diameter) -> (B, N, max_diameter)
-    # From [center_y - radius, center_y + radius], for each box, broadcast to all boxes in the batch
-    ys = centers[..., 1].unsqueeze(-1) - normalized_gaussian_radii.unsqueeze(-1) + idx
-    # From [center_x - radius, center_x + radius], for each box, broadcast to all boxes in the batch
-    xs = centers[..., 0].unsqueeze(-1) - normalized_gaussian_radii.unsqueeze(-1) + idx
-
-    # meshgrid to get all combinations of (y, x) for each box in the batch
-    # (B, max_num_bboxes, max_diameter, 1) -> (B, max_num_bboxes, max_diameter, max_diameter)
-    # All y-coordinates of the kernel cells for each box in the batch, broadcast to all x-coordinates
-    yy = ys.unsqueeze(-1).expand(batch_size, max_num_bboxes, max_diameter, max_diameter)
-    # (B, max_num_bboxes, max_diameter, 1) -> (B, max_num_bboxes, max_diameter, max_diameter)
-    # All x-coordinates of the kernel cells for each box in the batch, broadcast to all y-coordinates
-    xx = xs.unsqueeze(-2).expand(batch_size, max_num_bboxes, max_diameter, max_diameter)
-
-    # (B, max_num_bboxes, max_diameter, max_diameter)
-    in_bounds = (
-        (yy >= 0)
-        & (yy < heatmap_height)
-        & (xx >= 0)
-        & (xx < heatmap_width)
-        & valid_masks.view(batch_size, max_num_bboxes, 1, 1)
+    return _splat_gaussian_kernels(
+        heatmap_width=heatmap_width,
+        heatmap_height=heatmap_height,
+        num_classes=num_classes,
+        centers=centers,
+        radii=normalized_gaussian_radii,
+        kernels=batch_gaussians_2d,
+        gt_bboxes_labels=gt_bboxes_labels,
+        valid_masks=valid_masks,
+        device=device,
     )
 
-    # Set invalid heatmap positions to zero
-    updated_batch_gaussian_2d = torch.where(
-        in_bounds, batch_gaussians_2d, torch.zeros_like(batch_gaussians_2d)
+
+def _vectorize_oriented_gaussian2d(
+    radii: Int64[torch.Tensor, "batch_size max_num_boxes"],
+    sigma_lengths: Float32[torch.Tensor, "batch_size max_num_boxes"],
+    sigma_widths: Float32[torch.Tensor, "batch_size max_num_boxes"],
+    yaws: Float32[torch.Tensor, "batch_size max_num_boxes"],
+    valid_masks: Bool[torch.Tensor, "batch_size max_num_boxes"],
+    device: torch.device,
+    dtype: torch.dtype,
+) -> Float32[torch.Tensor, "batch_size max_num_boxes max_diameter max_diameter"]:
+    """
+    Create oriented elliptical 2D Gaussian kernels for a whole batch of boxes at once.
+
+    The kernel slot is sized from the maximum radius over the batch and boxes, and each box's own
+    ``(2 * radius + 1)`` square occupies the top-left corner of its slot, matching the layout
+    :func:`_vectorize_gaussian2d` produces and :func:`_splat_gaussian_kernels` expects. Padded
+    cells and invalid boxes are zero.
+
+    Args:
+        radii: Kernel radius in cells for each box. Must be non-negative; callers normalize the
+            radii of invalid boxes so they cannot drive the shared slot size.
+        sigma_lengths: Gaussian sigma along the box length (long) axis, in cells.
+        sigma_widths: Gaussian sigma along the box width (short) axis, in cells.
+        yaws: Box yaw in radians, measured from the heatmap x axis.
+        valid_masks: Mask indicating valid bounding boxes.
+        device: Torch device.
+        dtype: Floating point dtype of the produced kernels.
+
+    Returns:
+        Kernel tensor of shape ``(batch_size, max_num_boxes, max_diameter, max_diameter)``.
+    """
+    batch_size, max_num_boxes = radii.shape
+    max_radius = int(radii.max()) if radii.numel() > 0 else 0
+    max_diameter = 2 * max_radius + 1
+
+    # (max_diameter,) cell indices within a slot, shared by both axes since slots are square.
+    cell_indices = torch.arange(max_diameter, device=device)
+    # (batch_size, max_num_boxes, 1, 1)
+    batch_radii = radii.view(batch_size, max_num_boxes, 1, 1)
+
+    # Per-box centered offsets: cell index i maps to offset i - radius, so the box center always
+    # lands on cell (radius, radius) and the `center - radius + cell_index` mapping in
+    # _splat_gaussian_kernels puts it back on the box center.
+    # (1, 1, max_diameter, 1) - (B, M, 1, 1) -> (B, M, max_diameter, 1)
+    offset_y = (cell_indices.view(1, 1, max_diameter, 1) - batch_radii).to(dtype)
+    # (1, 1, 1, max_diameter) - (B, M, 1, 1) -> (B, M, 1, max_diameter)
+    offset_x = (cell_indices.view(1, 1, 1, max_diameter) - batch_radii).to(dtype)
+
+    # Rotate the grid offsets into the box frame so x_box runs along the length (long) axis.
+    # (B, M) -> (B, M, 1, 1)
+    cos_yaws = torch.cos(yaws).view(batch_size, max_num_boxes, 1, 1).to(dtype)
+    sin_yaws = torch.sin(yaws).view(batch_size, max_num_boxes, 1, 1).to(dtype)
+    # (B, M, max_diameter, 1) and (B, M, 1, max_diameter) broadcast to
+    # (B, M, max_diameter, max_diameter)
+    x_box = offset_x * cos_yaws + offset_y * sin_yaws
+    y_box = -offset_x * sin_yaws + offset_y * cos_yaws
+
+    # Invalid boxes carry arbitrary (possibly zero or negative) sigmas, so replace them with 1.0
+    # to keep the exponent finite. NaNs would survive the masking below, zeros do not.
+    # (B, M) -> (B, M, 1, 1)
+    valid_bboxes_masks = valid_masks.bool()
+    updated_sigma_lengths = (
+        torch.where(valid_bboxes_masks, sigma_lengths, torch.ones_like(sigma_lengths))
+        .view(batch_size, max_num_boxes, 1, 1)
+        .to(dtype)
+    )
+    updated_sigma_widths = (
+        torch.where(valid_bboxes_masks, sigma_widths, torch.ones_like(sigma_widths))
+        .view(batch_size, max_num_boxes, 1, 1)
+        .to(dtype)
     )
 
-    # Labels for each box, shape (B, N, 1, 1)
-    labels = gt_bboxes_labels.view(batch_size, max_num_bboxes, 1, 1)
-    # clamp invalid labels (e.g. -1 padding) so indexing stays legal;
-    clamp_labels = labels.clamp(min=0, max=num_classes - 1)
-
-    # (B, max_num_bboxes, 1, 1) + (B, max_num_bboxes, max_diameter, max_diameter) -> (B, max_num_bboxes, max_diameter, max_diameter)
-    flat_idx = (
-        clamp_labels * heatmap_height * heatmap_width
-        + yy.clamp(0, heatmap_height - 1) * heatmap_width
-        + xx.clamp(0, heatmap_width - 1)
+    # (B, M, max_diameter, max_diameter)
+    gaussian = torch.exp(
+        -(
+            x_box * x_box / (2 * updated_sigma_lengths * updated_sigma_lengths)
+            + y_box * y_box / (2 * updated_sigma_widths * updated_sigma_widths)
+        )
     )
 
-    # For the same pixel, it keeps the maximum value across all bboxes in the same batch,
-    # so it uses scatter_reduce with "amax"
-    # For invalid bboxes, they will not contribute to the heatmap since their valid_masks are False,
-    # and thus their updated_batch_gaussian_2d values are zero.
-    heatmaps.view(batch_size, -1).scatter_reduce_(
-        dim=1,
-        index=flat_idx.view(batch_size, -1),
-        src=updated_batch_gaussian_2d.view(batch_size, -1),
-        reduce="amax",
-        include_self=True,
+    # Zero the padding outside each box's own (2 * radius + 1) square, so a box with a small radius
+    # does not leak values into the slot padding that the splat step would then scatter.
+    # (B, M, 1, 1)
+    diameters = 2 * batch_radii + 1
+    # (B, M, max_diameter, 1) & (B, M, 1, max_diameter) -> (B, M, max_diameter, max_diameter)
+    inside_size = (cell_indices.view(1, 1, max_diameter, 1) < diameters) & (
+        cell_indices.view(1, 1, 1, max_diameter) < diameters
     )
-    return heatmaps
+    gaussian = gaussian * inside_size
+
+    # Set gaussian for invalid boxes to zero
+    gaussian = gaussian * valid_bboxes_masks.view(batch_size, max_num_boxes, 1, 1)
+
+    # threshold against each kernel's own max (not the global max), matching the scalar reference
+    # (B, M, max_diameter, max_diameter) -> (B, M, max_diameter*max_diameter) -> (B, M, 1, 1)
+    kernel_max = gaussian.flatten(2).amax(dim=-1).view(batch_size, max_num_boxes, 1, 1)
+    return torch.where(
+        gaussian < torch.finfo(dtype).eps * kernel_max,
+        torch.zeros_like(gaussian),
+        gaussian,
+    )
+
+
+def create_oriented_gaussian_heatmaps(
+    heatmap_width: int,
+    heatmap_height: int,
+    num_classes: int,
+    centers: Int64[torch.Tensor, "batch_size max_num_boxes 2"],
+    lengths_cells: Float32[torch.Tensor, "batch_size max_num_boxes"],
+    widths_cells: Float32[torch.Tensor, "batch_size max_num_boxes"],
+    yaws: Float32[torch.Tensor, "batch_size max_num_boxes"],
+    gt_bboxes_labels: Int64[torch.Tensor, "batch_size max_num_boxes"],
+    valid_masks: Bool[torch.Tensor, "batch_size max_num_boxes"],
+    device: torch.device,
+    min_sigma: float = 1.0,
+) -> Float32[torch.Tensor, "batch_size num_classes heatmap_height heatmap_width"]:
+    """
+    Create per-class heatmaps with oriented elliptical Gaussian blobs for all valid boxes, fully
+    vectorized in a batch.
+
+    This is the batched counterpart of :func:`draw_heatmap_gaussian_oriented`, in the same way
+    :func:`create_gaussian_heatmaps` is the batched counterpart of :func:`draw_heatmap_gaussian`.
+    Unlike the round version, each blob is stretched along the box length and rotated by ``yaw``,
+    so elongated objects (for example a tractor and trailer rig) receive a single connected
+    positive region covering the whole body instead of a small round blob at the geometric center,
+    which for a long rig falls in the low-density gap at the coupling.
+
+    Algorithm:
+      1. Per-axis sigmas: ``sigma_length = max(length_cells / 6, min_sigma)`` and
+         ``sigma_width = max(width_cells / 6, min_sigma)``, matching the scalar reference.
+      2. Per-box radius: ``ceil(3 * max(sigma_length, sigma_width))``, which covers roughly three
+         sigma of the wider axis. Boxes whose radius collapses below one cell are dropped, as the
+         scalar reference returns early for them.
+      3. Batched kernel generation: :func:`_vectorize_oriented_gaussian2d` builds all rotated
+         elliptical kernels at once, padded to a common
+         ``(batch_size, max_num_boxes, max_diameter, max_diameter)`` shape.
+      4. Splat: :func:`_splat_gaussian_kernels` maps every kernel cell to its heatmap position,
+         clips out-of-heatmap cells, and resolves overlaps by maximum.
+
+    Notes:
+        - Invalid boxes (``valid_masks == 0``) contribute nothing, and their ``lengths_cells``,
+          ``widths_cells`` and ``yaws`` may hold arbitrary padding values: their radii are
+          normalized to zero before the shared slot size is computed, so a large padded length
+          cannot inflate the kernel tensor for the whole batch.
+        - Memory scales with ``B * N * max_diameter**2``, and ``max_diameter`` is driven by the
+          longest *valid* box in the batch. Oriented kernels are sized from the box extent rather
+          than from :func:`gaussian_radius`, so they are typically larger than the round ones.
+        - A box whose center lies outside the heatmap is expected to be marked invalid in
+          ``valid_masks`` (the caller filters these via a center-in-bounds check), matching the
+          scalar reference which returns early in that case. The per-cell in-bounds clipping in
+          the splat step then only handles blob *tails* of valid boxes that extend past the border.
+
+    Args:
+        heatmap_width: Width of the heatmap.
+        heatmap_height: Height of the heatmap.
+        num_classes: Number of classes.
+        centers: Heatmap centers as ``(x, y)`` for each box.
+        lengths_cells: Box length (long axis) in heatmap cells.
+        widths_cells: Box width (short axis) in heatmap cells.
+        yaws: Box yaw in radians, measured from the heatmap x axis.
+        gt_bboxes_labels: Class labels for each bounding box.
+        valid_masks: Mask indicating valid bounding boxes.
+        device: Torch device.
+        min_sigma: Lower bound on each Gaussian sigma in cells. The default matches the effective
+            sigma of a ``min_radius`` round blob.
+
+    Returns:
+        Heatmap tensor of shape ``(batch_size, num_classes, heatmap_height, heatmap_width)``.
+    """
+    batch_size = centers.shape[0]
+    if (
+        batch_size != lengths_cells.shape[0]
+        or batch_size != widths_cells.shape[0]
+        or batch_size != yaws.shape[0]
+        or batch_size != gt_bboxes_labels.shape[0]
+    ):
+        raise ValueError(
+            "Batch size mismatch: centers, lengths_cells, widths_cells, yaws, and "
+            "gt_bboxes_labels must have the same batch size."
+        )
+
+    # Per-axis sigmas, floored at min_sigma so a box thinner than 6 * min_sigma cells still gets a
+    # blob wide enough to supervise. (batch_size, max_num_boxes)
+    sigma_lengths = torch.clamp(lengths_cells / 6.0, min=min_sigma)
+    sigma_widths = torch.clamp(widths_cells / 6.0, min=min_sigma)
+
+    # Cover roughly three sigma of the wider axis, which is where the kernel threshold in
+    # _vectorize_oriented_gaussian2d has already driven the values to zero.
+    # (batch_size, max_num_boxes)
+    radii = torch.ceil(3.0 * torch.maximum(sigma_lengths, sigma_widths)).to(torch.int64)
+
+    # The scalar reference draws nothing when the radius collapses below a single cell, which can
+    # only happen for a non-positive min_sigma. Fold that into the valid mask so those boxes are
+    # dropped everywhere at once. (batch_size, max_num_boxes)
+    updated_valid_masks = valid_masks.bool() & (radii >= 1)
+
+    # _vectorize_oriented_gaussian2d sizes every kernel slot from the global maximum radius, so a
+    # single large padded length would inflate the padded kernel tensor for the whole batch.
+    # Normalize invalid radii to zero, the smallest safe radius, so only valid boxes drive the
+    # kernel size. Invalid boxes still contribute nothing, because updated_valid_masks zeroes them
+    # out. (batch_size, max_num_boxes)
+    normalized_radii = torch.where(updated_valid_masks, radii, torch.zeros_like(radii))
+
+    # (batch_size, max_num_boxes, max_diameter, max_diameter)
+    batch_oriented_gaussians_2d = _vectorize_oriented_gaussian2d(
+        radii=normalized_radii,
+        sigma_lengths=sigma_lengths,
+        sigma_widths=sigma_widths,
+        yaws=yaws,
+        valid_masks=updated_valid_masks,
+        device=device,
+        dtype=torch.float32,
+    )
+
+    return _splat_gaussian_kernels(
+        heatmap_width=heatmap_width,
+        heatmap_height=heatmap_height,
+        num_classes=num_classes,
+        centers=centers,
+        radii=normalized_radii,
+        kernels=batch_oriented_gaussians_2d,
+        gt_bboxes_labels=gt_bboxes_labels,
+        valid_masks=updated_valid_masks,
+        device=device,
+    )
 
 
 def gaussian_radius(box_size: tuple[float, float], min_overlap: float = 0.1) -> int:

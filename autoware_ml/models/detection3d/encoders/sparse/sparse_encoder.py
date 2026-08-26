@@ -28,6 +28,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from copy import deepcopy
 
+from jaxtyping import Float32
 import torch
 import torch.nn as nn
 from spconv.pytorch import SparseConvTensor, SparseSequential, SubMConv3d, SparseConv3d
@@ -252,23 +253,24 @@ class SparseEncoder(nn.Module):
 
     def forward(
         self,
-        voxel_features: torch.Tensor,
-        coords: torch.Tensor,
+        voxel_features: Float32[torch.Tensor, "num_voxels num_voxel_channels"],
+        coords: Float32[torch.Tensor, "num_voxels 4"],
         batch_size: int,
     ) -> torch.Tensor:
         """Encode voxel features into a dense BEV map.
 
         Args:
-            voxel_features: Per-voxel features of shape ``(N, in_channels)``.
-            coords: Voxel coordinates of shape ``(N, 4)`` in ``[batch, z, y, x]``.
+            voxel_features: Per-voxel features, where num_voxel_channels can be 4
+            (without intensity) or 5 (both intensity and time_lag).
+            coords: Voxel coordinates of shape in `[batch, x, y, z]`.
             batch_size: Number of samples in the batch.
 
         Returns:
             Dense BEV feature map of shape
             ``(batch_size, output_channels * Z, Y, X)``.
         """
-        # Reorder [batch, z, y, x] -> [batch, y, x, z] to match sparse_shape (Y, X, Z).
-        coords = coords[:, [0, 2, 3, 1]].contiguous().int()
+        # Reorder [batch, x, y, z] -> [batch, y, x, z] to match sparse_shape (Y, X, Z).
+        coords = coords[:, [0, 2, 1, 3]].contiguous().int()
         sp_tensor = SparseConvTensor(voxel_features, coords, self.sparse_shape, batch_size)
         x = self.conv_input(sp_tensor)
         x = self.encoder_layers(x)
