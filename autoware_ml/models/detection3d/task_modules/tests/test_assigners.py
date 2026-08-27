@@ -110,9 +110,9 @@ class TestBEVIoUAligned(unittest.TestCase):
     def _expected_bev_iou(
         self,
         boxes: Float32[torch.Tensor, "batch_size num_bboxes code_size"],
-        gt_boxes: Float32[torch.Tensor, "batch_size num_gt_bboxes code_size"],
-        valid_masks: Bool[torch.Tensor, "batch_size num_gt_bboxes"],
-    ) -> Float32[torch.Tensor, "batch_size num_bboxes num_gt_bboxes"]:
+        gt_boxes: Float32[torch.Tensor, "batch_size max_num_gt_bboxes code_size"],
+        valid_masks: Bool[torch.Tensor, "batch_size max_num_gt_bboxes"],
+    ) -> Float32[torch.Tensor, "batch_size num_bboxes max_num_gt_bboxes"]:
         """Build the reference IoU with an explicit per-sample, per-pair Python loop."""
         batch_size, num_bboxes, _ = boxes.shape
         num_gt_bboxes = gt_boxes.shape[1]

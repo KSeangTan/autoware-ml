@@ -47,7 +47,7 @@ class TransFusionHeadTargets(BaseModel):
     labels: Float32[torch.Tensor, "batch_size num_proposals"]
     label_weights: Float32[torch.Tensor, "batch_size num_proposals"]
     bbox_targets: Float32[torch.Tensor, "batch_size num_proposals code_size"]
-    bbox_weights: Float32[torch.Tensor, "batch_size num_proposals"]
+    bbox_weights: Float32[torch.Tensor, "batch_size num_proposals code_size"]
     num_pos: int
     matched_iou: float
-    heatmaps: Float32[torch.Tensor, "batch_size num_classes height*width"]
+    dense_heatmaps: Float32[torch.Tensor, "batch_size num_classes height*width"]

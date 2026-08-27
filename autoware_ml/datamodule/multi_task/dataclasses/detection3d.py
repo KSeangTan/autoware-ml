@@ -34,9 +34,9 @@ class Detection3DGTBatch(NamedTuple):
     """
 
     # (batch_size, maximum number of bboxes, num_Box3DFieldIndex)
-    gt_bboxes_3d: Float32[Tensor, "batch_size max_num_3d_gt_bboxes num_Box3DFieldIndex"]
+    gt_bboxes_3d: Float32[Tensor, "batch_size max_num_gt_bboxes num_Box3DFieldIndex"]
     # (batch_size, maximum number of bboxes)
-    gt_labels_3d: Int32[Tensor, "batch_size max_num_3d_gt_bboxes"]
+    gt_labels_3d: Int32[Tensor, "batch_size max_num_gt_bboxes"]
     # (batch_size, ), number of valid bboxes for each sample in the batch
     gt_valid_bboxes: Int32[
         Tensor, " batch_size"

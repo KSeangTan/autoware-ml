@@ -28,9 +28,9 @@ class ClassificationCost:
     def __call__(
         self,
         cls_logits: Float32[torch.Tensor, "batch_size num_bboxes num_classes"],
-        gt_labels: Int64[torch.Tensor, "batch_size num_gt_bboxes"],
-        valid_masks: Bool[torch.Tensor, "batch_size num_gt_bboxes"],
-    ) -> Float32[torch.Tensor, "batch_size num_bboxes num_gt_bboxes"]:
+        gt_labels: Int64[torch.Tensor, "batch_size max_num_gt_bboxes"],
+        valid_masks: Bool[torch.Tensor, "batch_size max_num_gt_bboxes"],
+    ) -> Float32[torch.Tensor, "batch_size num_bboxes max_num_gt_bboxes"]:
         """
         Compute pairwise classification cost between queries and labels. Since it's
         batch-wise implemnatation, the cost is computed for invalid gt_bboxes, but the cost will be
@@ -82,10 +82,10 @@ class BBoxBEVL1Cost:
     def __call__(
         self,
         bboxes_centers: Float32[torch.Tensor, "batch_size num_bboxes 2"],
-        gt_bboxes_centers: Float32[torch.Tensor, "batch_size num_gt_bboxes 2"],
-        valid_masks: Bool[torch.Tensor, "batch_size num_gt_bboxes"],
+        gt_bboxes_centers: Float32[torch.Tensor, "batch_size max_num_gt_bboxes 2"],
+        valid_masks: Bool[torch.Tensor, "batch_size max_num_gt_bboxes"],
         point_cloud_range: Sequence[float],
-    ) -> Float32[torch.Tensor, "batch_size num_bboxes num_gt_bboxes"]:
+    ) -> Float32[torch.Tensor, "batch_size num_bboxes max_num_gt_bboxes"]:
         """Compute pairwise BEV L1 cost in normalized coordinates.
 
         Like ClassificationCost, this is a batch-wise implementation: the cost is computed for

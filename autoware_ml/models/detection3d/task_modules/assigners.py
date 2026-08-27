@@ -21,7 +21,7 @@ from autoware_ml.models.detection3d.task_modules.match_costs import (
 from autoware_ml.types.geometry import Box3DFieldIndex
 
 
-@dataclass
+@dataclass(frozen=True)
 class AssignResult:
     """Store the output of proposal-to-ground-truth assignment.
 
@@ -41,9 +41,9 @@ class AssignResult:
 
 def _bev_iou_aligned(
     boxes: Float32[torch.Tensor, "batch_size num_bboxes code_size"],
-    gt_boxes: Float32[torch.Tensor, "batch_size num_gt_bboxes code_size"],
-    valid_masks: Bool[torch.Tensor, "batch_size num_gt_bboxes"],
-) -> Float32[torch.Tensor, "batch_size num_bboxes num_gt_bboxes"]:
+    gt_boxes: Float32[torch.Tensor, "batch_size max_num_gt_bboxes code_size"],
+    valid_masks: Bool[torch.Tensor, "batch_size max_num_gt_bboxes"],
+) -> Float32[torch.Tensor, "batch_size num_bboxes max_num_gt_bboxes"]:
     """Compute axis-aligned BEV IoU for matching. For invalid gt bboxes, it returns 0.
 
     The IoU is axis aligned, so yaw is ignored: LENGTH is the extent along x and WIDTH the extent
@@ -95,7 +95,7 @@ def _bev_iou_aligned(
     return ious.masked_fill(~valid_masks.unsqueeze(1), 0.0)
 
 
-@dataclass
+@dataclass(frozen=True)
 class HungarianAssigner3D:
     """Assign proposals to targets with weighted Hungarian matching.
 

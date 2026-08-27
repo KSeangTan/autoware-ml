@@ -22,31 +22,36 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from copy import deepcopy
-from typing import Any, NamedTuple, Mapping
+from typing import NamedTuple, Mapping
 from types import MappingProxyType
 
-from jaxtyping import Float32, Int32
+from jaxtyping import Bool, Float32, Int32, Int64
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from autoware_ml.dataclasses.multi_task_outputs import MultiTaskOutputs
+from autoware_ml.dataclasses.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.dataclasses.detection3d.head_targets import TransFusionHeadTargets
 from autoware_ml.dataclasses.detection3d.head_outputs import (
     Detection3DHeadOutputs,
     TransFusionHeadOutputs,
     TransFusionSeparateHeadOutputs,
 )
+from autoware_ml.dataclasses.multi_task_predictions import MultiTaskPredictions
 from autoware_ml.losses.detection3d.focal import SigmoidFocalLoss
 from autoware_ml.losses.detection3d.gaussian_focal import GaussianFocalLoss
 from autoware_ml.models.common.layers.conv import ConvModule
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
-from autoware_ml.models.detection3d.task_modules.bbox_coders import TransFusionBBoxCoder
+from autoware_ml.models.detection3d.task_modules.bbox_coders import (
+    TransFusionBBoxCoder,
+    ScoreThresholdGroup,
+    ScoreThresholdConfig,
+)
 from autoware_ml.models.detection3d.task_modules.heatmap import (
-    circle_nms,
     create_oriented_gaussian_heatmaps,
     vectorize_gaussian_radii,
     create_gaussian_heatmaps,
+    batch_circle_nms,
 )
 from autoware_ml.models.detection3d.heads.transfusion.transfusion_decoder_layer import (
     TransFusionDecoderLayer,
@@ -62,8 +67,6 @@ class NMSGroupConfig(NamedTuple):
     Config for each NMS group.
     Args:
         class_names: Names of classes for this group.
-        class_ids: Optional class indices for this group.
-            If not provided, class_names will be used to resolve indices.
         nms_radius: Optional NMS radius threshold for this group.
             If not provided, the default nms_radius will be used.
         max_size: Optional maximum number of predictions to keep for this group.
@@ -87,6 +90,41 @@ class NMSGroup(NamedTuple):
     class_ids: Sequence[int]
     nms_radius: float
     max_size: int
+
+
+class LayerTargets(NamedTuple):
+    """
+    Assignment targets produced for a single decoder layer.
+
+    Args:
+        labels: Target class labels, where num_classes marks a negative (unmatched) proposal.
+        label_weights: Per-proposal classification weights.
+        bbox_targets: Encoded box regression targets, zero for negatives.
+        bbox_weights: Per-proposal box regression weights, one for positives and zero elsewhere.
+        num_pos: Number of proposals this layer matched to a real gt box.
+        matched_iou_sum: Sum of the matched proposals' IoUs. The caller sums this over layers and
+            divides by the total number of positives to get the mean matched IoU.
+    """
+
+    labels: Int64[torch.Tensor, "batch_size num_proposals"]
+    label_weights: Float32[torch.Tensor, "batch_size num_proposals"]
+    bbox_targets: Float32[torch.Tensor, "batch_size num_proposals code_size"]
+    bbox_weights: Float32[torch.Tensor, "batch_size num_proposals code_size"]
+    num_pos: int
+    matched_iou_sum: float
+
+
+class LayerLosses(NamedTuple):
+    """
+    Losses computed for a single decoder layer.
+
+    Args:
+        loss_cls: Weighted classification loss over this layer's proposals.
+        loss_bbox: Weighted box regression loss over this layer's positive proposals.
+    """
+
+    loss_cls: torch.Tensor
+    loss_bbox: torch.Tensor
 
 
 class SeparateHead1D(nn.Module):
@@ -161,7 +199,7 @@ class TransFusionHead(nn.Module):
         code_weights: list[float],
         min_radius: int,
         gaussian_overlap: float,
-        score_threshold: float,
+        score_threshold_group_configs: Sequence[ScoreThresholdConfig] | None,
         post_max_size: int,
         nms_min_radius: float,
         dense_heatmap_pooling_class_names: Sequence[str],
@@ -197,7 +235,8 @@ class TransFusionHead(nn.Module):
             min_radius: Minimum heatmap Gaussian radius.
             gaussian_overlap: Required overlap for Gaussian radius computation.
                 Only used by the ``"round"`` heatmap target.
-            score_threshold: Prediction score threshold used during decoding.
+            score_threshold_group_configs: Prediction score threshold used
+                to filter out predictions.
             post_max_size: Maximum number of predictions kept after NMS.
             nms_min_radius: Minimum center distance used by circle NMS.
             dense_heatmap_pooling_class_names: Optional class names that should use local max
@@ -237,7 +276,6 @@ class TransFusionHead(nn.Module):
         if heatmap_target not in {"round", "oriented"}:
             raise ValueError(f"Unsupported TransFusion heatmap_target: {heatmap_target!r}")
         self.heatmap_target = heatmap_target
-        self.score_threshold = score_threshold
         self.post_max_size = post_max_size
         self.nms_min_radius = nms_min_radius
         self.nms_kernel_size = nms_kernel_size
@@ -255,7 +293,10 @@ class TransFusionHead(nn.Module):
             dense_heatmap_pooling_class_names
         )
         self.nms_groups = self._resolve_nms_groups(nms_group_configs)
-
+        # Assign score_threshold_groups
+        self.bbox_coder.score_threshold_groups = self._resolve_score_threshold_groups(
+            score_threshold_group_configs
+        )
         self.shared_block = nn.Sequential(
             nn.Conv2d(in_channels, hidden_channel, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(hidden_channel, eps=1e-3, momentum=0.01),
@@ -351,16 +392,61 @@ class TransFusionHead(nn.Module):
             return None
 
         resolved_groups: list[NMSGroup] = []
-        for nms_config_group in nms_config_groups:
+        # A class may appear in at most one group, otherwise it would be suppressed against two
+        # different radii. Maps each claimed class id to the group that claimed it, so the error
+        # can name both groups.
+        claimed_classes: dict[int, int] = {}
+        for group_index, nms_config_group in enumerate(nms_config_groups):
             class_ids = self._resolve_class_ids(nms_config_group.class_names)
             if class_ids is None:
                 raise ValueError("TransFusionHead NMS group must define class_names.")
+
+            for class_id in class_ids:
+                if class_id in claimed_classes:
+                    raise ValueError(
+                        f"TransFusionHead class id {class_id} appears in NMS groups "
+                        f"{claimed_classes[class_id]} and {group_index}, so it would be "
+                        "suppressed against two different radii."
+                    )
+                claimed_classes[class_id] = group_index
 
             resolved_groups.append(
                 NMSGroup(
                     class_ids=class_ids,
                     nms_radius=nms_config_group.nms_radius or self.nms_min_radius,
                     max_size=nms_config_group.max_size or self.post_max_size,
+                )
+            )
+        return resolved_groups
+
+    def _resolve_score_threshold_groups(
+        self, score_threshold_config_groups: Sequence[ScoreThresholdConfig] | None
+    ) -> Sequence[ScoreThresholdGroup] | None:
+        """Resolve grouped NMS configuration into class-id form."""
+        if score_threshold_config_groups is None:
+            return None
+
+        resolved_groups: list[ScoreThresholdGroup] = []
+        # A class may appear in at most one group, otherwise its threshold is ambiguous. Maps each
+        # claimed class id to the group that claimed it, so the error can name both groups.
+        claimed_classes: dict[int, int] = {}
+        for group_index, score_threshold_config_group in enumerate(score_threshold_config_groups):
+            class_ids = self._resolve_class_ids(score_threshold_config_group.class_names)
+            if class_ids is None:
+                raise ValueError("TransFusionHead Score threshold group must define class_names.")
+
+            for class_id in class_ids:
+                if class_id in claimed_classes:
+                    raise ValueError(
+                        f"TransFusionHead class id {class_id} appears in score threshold groups "
+                        f"{claimed_classes[class_id]} and {group_index}, so its threshold is "
+                        "ambiguous."
+                    )
+                claimed_classes[class_id] = group_index
+
+            resolved_groups.append(
+                ScoreThresholdGroup(
+                    class_ids=class_ids, score_thresold=score_threshold_config_group.score_threshold
                 )
             )
         return resolved_groups
@@ -398,54 +484,6 @@ class TransFusionHead(nn.Module):
                 padding:-padding,
             ] = pooled
         return heatmaps * (local_max == heatmaps)
-
-    def _circle_nms_groups(self) -> list[dict[str, Any]]:
-        """Build grouped circle-NMS rules for prediction."""
-        if self.nms_groups is not None:
-            return list(self.nms_groups)
-        return [
-            {
-                "class_ids": [class_id],
-                "nms_radius": self.nms_min_radius,
-                "post_max_size": self.post_max_size,
-            }
-            for class_id in range(self.num_classes)
-        ]
-
-    def _apply_circle_nms(
-        self,
-        boxes: torch.Tensor,
-        scores: torch.Tensor,
-        labels: torch.Tensor,
-    ) -> torch.Tensor:
-        """Apply grouped circle NMS and return kept indices."""
-
-        keep_mask = torch.zeros(scores.shape[0], dtype=torch.bool, device=scores.device)
-        covered_mask = torch.zeros(scores.shape[0], dtype=torch.bool, device=scores.device)
-
-        for group in self._circle_nms_groups():
-            group_mask = torch.zeros(scores.shape[0], dtype=torch.bool, device=scores.device)
-            for class_id in group["class_ids"]:
-                group_mask |= labels == class_id
-            if not group_mask.any():
-                continue
-            covered_mask |= group_mask
-            group_indices = group_mask.nonzero(as_tuple=False).squeeze(1)
-            group_post_max_size = group["post_max_size"]
-            if group["nms_radius"] <= 0:
-                # No suppression: keep the group's highest-scoring predictions.
-                keep = scores[group_mask].argsort(descending=True)[:group_post_max_size]
-            else:
-                keep = circle_nms(
-                    boxes[group_mask],
-                    scores[group_mask],
-                    group["nms_radius"],
-                    group_post_max_size,
-                )
-            keep_mask[group_indices[keep]] = True
-
-        keep_mask |= ~covered_mask
-        return keep_mask.nonzero(as_tuple=False).squeeze(1)
 
     def _create_2d_grid(
         self, width: int, height: int, device: torch.device
@@ -634,52 +672,142 @@ class TransFusionHead(nn.Module):
             top_positions=top_positions,
         )
 
-    def decode_outputs(self, outputs: Detection3DHeadOutputs) -> MultiTaskOutputs:
+    def _filter_bboxes_nms_groups(
+        self,
+        bbox_centers: Float32[torch.Tensor, "batch_size num_proposals 2"],
+        bbox_scores: Float32[torch.Tensor, "batch_size num_proposals"],
+        bbox_classes: Int64[torch.Tensor, "batch_size num_proposals"],
+        keep_masks: Bool[torch.Tensor, "batch_size num_proposals"],
+    ) -> Bool[torch.Tensor, "batch_size num_proposals"]:
         """
-        Decode TransFusion outputs into Detection3DSamplePredictions
-        for each batch element.
+        Refine a keep mask with grouped center-distance NMS.
+
+        Each NMS group becomes one channel of :func:`batch_circle_nms`, so all classes in a group
+        land in the same channel and therefore compete with each other, while classes in different
+        groups never suppress one another. No box is moved: a proposal simply appears as invalid in
+        the channels of the groups that do not claim its class, which batch_circle_nms already
+        handles, so the returned mask stays aligned with the input proposal axis.
+
+        ``keep_masks`` is consumed as well as refined: a proposal already rejected by the score or
+        center-range filters takes no part in the suppression, so it can never remove a survivor.
+
+        A class no group claims is not subject to NMS at all and keeps its incoming mask value.
+        Groups are disjoint, which _resolve_nms_groups enforces, so no class is ever weighed
+        against two different radii.
+
+        Args:
+            bbox_centers: BEV box centers as (center_x, center_y).
+            bbox_scores: Confidence score for each proposal.
+            bbox_classes: Predicted class id for each proposal. Must be a valid class index in
+                [0, num_classes), since it indexes the group membership table.
+            keep_masks: Keep mask from the earlier score and center-range filters.
+
+        Returns:
+            The keep mask with grouped NMS applied.
         """
-        return
-        # if outputs.transfusion_head_outputs is None:
-        #     raise ValueError(
-        #         "TransFusionHead decode_outputs requires TransFusionHeadOutputs from forward()."
-        #     )
+        if self.nms_groups is None:
+            return keep_masks
 
-        # transfusion_head_outputs = outputs.transfusion_head_outputs
-        # batch_scores = transfusion_head_outputs.separate_head_outputs.heatmaps[
-        #     ..., -self.num_proposals :
-        # ].sigmoid()
-        # query_labels = transfusion_head_outputs.query_labels
+        batch_size, num_proposals = bbox_scores.shape
+        num_groups = len(self.nms_groups)
+        device = bbox_scores.device
 
-        # one_hot = (
-        #     F.one_hot(query_labels, num_classes=self.num_classes)
-        #     .permute(0, 2, 1)
-        #     .to(batch_scores.dtype)
-        # )
-        # batch_scores = batch_scores * transfusion_head_outputs.query_heatmap_scores * one_hot
-        # batch_centers = transfusion_head_outputs.separate_head_outputs.centers[
-        #     ..., -self.num_proposals :
-        # ]
-        # batch_heights = transfusion_head_outputs.separate_head_outputs.heights[
-        #     ..., -self.num_proposals :
-        # ]
-        # batch_dims = transfusion_head_outputs.separate_head_outputs.dims[..., -self.num_proposals :]
-        # batch_rots = transfusion_head_outputs.separate_head_outputs.rots[..., -self.num_proposals :]
-        # batch_vels = transfusion_head_outputs.separate_head_outputs.vels
-        # if batch_vels is not None:
-        #     batch_vels = batch_vels[..., -self.num_proposals :]
+        # (num_groups, num_classes) membership table: True where a group claims that class.
+        group_class_masks = torch.zeros(
+            (num_groups, self.num_classes), dtype=torch.bool, device=device
+        )
+        for group_index, group in enumerate(self.nms_groups):
+            class_ids = list(group.class_ids)
+            if not class_ids:
+                raise ValueError(f"TransFusionHead NMS group {group_index} has no class ids.")
+            if min(class_ids) < 0 or max(class_ids) >= self.num_classes:
+                raise ValueError(
+                    f"TransFusionHead NMS group {group_index} class ids {class_ids} are out of "
+                    f"range for {self.num_classes} classes."
+                )
+            group_class_masks[group_index, class_ids] = True
 
-        # _ = self.bbox_coder.decode(
-        #     batch_scores,
-        #     batch_rots,
-        #     batch_dims,
-        #     batch_centers,
-        #     batch_heights,
-        #     batch_vels,
-        #     filter_predictions=True,
-        # )
+        # A proposal takes part in a group's channel only when that group claims its class and it
+        # survived the earlier filters.
+        # (num_groups, num_classes)[:, (batch_size, num_proposals)] & (batch_size, num_proposals)
+        # -> (num_groups, batch_size, num_proposals) -> (batch_size, num_groups, num_proposals)
+        group_masks = (group_class_masks[:, bbox_classes] & keep_masks).permute(1, 0, 2)
 
-    def predict(self, outputs: TransFusionHeadOutputs) -> list[dict[str, torch.Tensor]]:
+        # Every channel sees the same boxes; only the validity mask differs, so these are views.
+        # (batch_size, num_groups, num_proposals, 2) and (batch_size, num_groups, num_proposals)
+        group_centers = bbox_centers.unsqueeze(1).expand(
+            batch_size, num_groups, num_proposals, bbox_centers.shape[-1]
+        )
+        group_scores = bbox_scores.unsqueeze(1).expand(batch_size, num_groups, num_proposals)
+
+        # One radius and one cap per channel, so all groups suppress in a single call.
+        # (batch_size, num_groups, num_proposals)
+        group_keep_masks = batch_circle_nms(
+            bboxes_centers=group_centers,
+            scores=group_scores,
+            min_radius=[float(group.nms_radius) for group in self.nms_groups],
+            valid_bboxes_masks=group_masks,
+            post_max_size=[int(group.max_size) for group in self.nms_groups],
+        )
+
+        # Groups are disjoint, so a proposal enters at most one channel and is kept exactly when
+        # that channel kept it. batch_circle_nms never keeps an invalid entry, so a proposal is
+        # already False in every channel that does not claim its class.
+        # (batch_size, num_groups, num_proposals) -> (batch_size, num_proposals)
+        nms_keep_masks = group_keep_masks.any(dim=1)
+
+        # Classes no group claims skip NMS and keep whatever the earlier filters decided.
+        # (num_classes,)[(batch_size, num_proposals)] -> (batch_size, num_proposals)
+        class_covered_masks = group_class_masks.any(dim=0)[bbox_classes]
+        return nms_keep_masks | (keep_masks & ~class_covered_masks)
+
+    def _filter_bbox_predictions(
+        self,
+        bbox_predictions: Float32[torch.Tensor, "batch_size num_proposals box_code_size"],
+        scores: Float32[torch.Tensor, "batch_size num_proposals"],
+        class_ids: Int64[torch.Tensor, "batch_size num_proposals"],
+        keep_masks: Bool[torch.Tensor, "batch_size num_proposals"],
+    ) -> MultiTaskPredictions:
+        """
+        Apply the keep mask and repackage the batched proposals as per-sample predictions.
+
+        Everything upstream of this point stays rectangular: every sample carries the same
+        num_proposals slots and the filters only flip bits in ``keep_masks``. This is where that
+        padding is finally dropped, so the result is ragged, one entry per sample holding only its
+        own survivors. Each sample keeps a different number of boxes, which is why the output is a
+        sequence of per-sample dataclasses rather than one batched tensor.
+
+        Survivors stay in proposal order rather than being re-ranked by score, and a sample whose
+        boxes were all suppressed still gets an entry, with empty tensors.
+
+        Args:
+            bbox_predictions: Decoded boxes for every proposal, in metric coordinates.
+            scores: Confidence score for each proposal.
+            class_ids: Predicted class id for each proposal.
+            keep_masks: Keep mask accumulated by the score, center-range and NMS filters. True
+                marks a proposal to emit as a detection.
+
+        Returns:
+            One Detection3DSamplePredictions per batch element, wrapped in MultiTaskPredictions.
+        """
+        batch_size = bbox_predictions.shape[0]
+        # Iterate over the batch and create a list of Detection3dPredictions for each sample.
+        # The ragged padding is dropped here, where per-sample tensors are allowed to differ.
+        detection3d_predictions = []
+        for batch_index in range(batch_size):
+            sample_keep_masks = keep_masks[batch_index]
+
+            detection3d_predictions.append(
+                Detection3DSamplePredictions(
+                    bboxes_3d=bbox_predictions[batch_index][sample_keep_masks],
+                    scores_3d=scores[batch_index][sample_keep_masks],
+                    labels_3d=class_ids[batch_index][sample_keep_masks],
+                )
+            )
+
+        return MultiTaskPredictions(detection3d_predictions=detection3d_predictions)
+
+    def decode_outputs(self, outputs: TransFusionHeadOutputs) -> MultiTaskPredictions:
         """Decode predictions into metric-space boxes.
 
         Args:
@@ -688,63 +816,64 @@ class TransFusionHead(nn.Module):
         Returns:
             List of decoded prediction dictionaries, one per batch element.
         """
-        batch_score = outputs["heatmap"][..., -self.num_proposals :].sigmoid()
-        query_labels = outputs.get("query_labels")
-        if query_labels is None:
-            raise ValueError("TransFusion prediction requires query_labels from forward().")
+        separate_head_outputs = outputs.separate_head_outputs
+        batch_scores = separate_head_outputs.heatmaps[..., -self.num_proposals :].sigmoid()
         one_hot = (
-            F.one_hot(query_labels, num_classes=self.num_classes)
-            .permute(0, 2, 1)
-            .to(batch_score.dtype)
+            F.one_hot(outputs.query_labels, num_classes=self.num_classes)
+            .permute(
+                0, 2, 1
+            )  # (batch_size, num_proposal, num_classes) -> (batch_size, num_classes, num_proposals)
+            .to(batch_scores.dtype)
         )
-        batch_score = batch_score * outputs["query_heatmap_score"] * one_hot
-        batch_center = outputs["center"][..., -self.num_proposals :]
-        batch_height = outputs["height"][..., -self.num_proposals :]
-        batch_dim = outputs["dim"][..., -self.num_proposals :]
-        batch_rot = outputs["rot"][..., -self.num_proposals :]
-        batch_vel = outputs.get("vel")
-        if batch_vel is not None:
-            batch_vel = batch_vel[..., -self.num_proposals :]
+        # Use proposals from the dense heatmap to calibrate the final scores, where they are only
+        # valid when both of them align
+        batch_scores = batch_scores * outputs.query_heatmap_scores * one_hot
+        batch_centers = separate_head_outputs.centers[..., -self.num_proposals :]
+        batch_heights = separate_head_outputs.heights[..., -self.num_proposals :]
+        batch_dims = separate_head_outputs.dims[..., -self.num_proposals :]
+        batch_rots = separate_head_outputs.rots[..., -self.num_proposals :]
+        batch_vels = separate_head_outputs.vels
+        if batch_vels is not None:
+            batch_vels = batch_vels[..., -self.num_proposals :]
 
-        decoded = self.bbox_coder.decode(
-            batch_score,
-            batch_rot,
-            batch_dim,
-            batch_center,
-            batch_height,
-            batch_vel,
-            filter_predictions=True,
+        bbox_scores, bbox_classes = self.bbox_coder.decode_heatmaps(heatmaps=batch_scores)
+        pred_bboxes = self.bbox_coder.decode_boxes(
+            rots=batch_rots,
+            dims=batch_dims,
+            centers=batch_centers,
+            heights=batch_heights,
+            vels=batch_vels,
         )
 
-        results = []
-        for prediction in decoded:
-            boxes = prediction["bboxes"]
-            scores = prediction["scores"]
-            labels = prediction["labels"]
-            if boxes.numel() == 0:
-                results.append({"bboxes_3d": boxes, "scores_3d": scores, "labels_3d": labels})
-                continue
-            if self.nms_type is None:
-                kept_indices = torch.arange(scores.shape[0], device=scores.device)
-            elif self.nms_type == "circle":
-                kept_indices = self._apply_circle_nms(boxes, scores, labels)
-            else:
-                raise RuntimeError(
-                    f"Unsupported TransFusion NMS type at runtime: {self.nms_type!r}"
-                )
-            results.append(
-                {
-                    "bboxes_3d": boxes[kept_indices],
-                    "scores_3d": scores[kept_indices],
-                    "labels_3d": labels[kept_indices],
-                }
+        # Create keep_masks based on score_thresholds and post_center_range
+        keep_masks = self.bbox_coder.filter_bboxes_score(
+            bbox_scores=bbox_scores, bbox_classes=bbox_classes, num_classes=self.num_classes
+        )
+        keep_masks &= self.bbox_coder.filter_bboxes_center_range(
+            bbox_centers=pred_bboxes[..., Box3DFieldIndex.X : Box3DFieldIndex.Z + 1]
+        )
+
+        # TODO (KokSeang): Group-based vectorization circle_nms
+        # For each batch, it groups the same classes based on nms groups ids first
+        if self.nms_groups is not None:
+            keep_masks = self._filter_bboxes_nms_groups(
+                bbox_centers=pred_bboxes[..., Box3DFieldIndex.X : Box3DFieldIndex.Y + 1],
+                bbox_scores=bbox_scores,
+                bbox_classes=bbox_classes,
+                keep_masks=keep_masks,
             )
-        return results
+
+        return self._filter_bbox_predictions(
+            bbox_predictions=pred_bboxes,
+            scores=bbox_scores,
+            class_ids=bbox_classes,
+            keep_masks=keep_masks,
+        )
 
     def _build_dense_heatmap_targets(
         self,
-        gt_bboxes_3d: Float32[torch.Tensor, "batch_size max_num_3d_gt_bboxes num_Box3DFieldIndex"],
-        gt_labels_3d: Float32[torch.Tensor, "batch_size max_num_3d_gt_bboxes"],
+        gt_bboxes_3d: Float32[torch.Tensor, "batch_size max_num_gt_bboxes num_Box3DFieldIndex"],
+        gt_labels_3d: Float32[torch.Tensor, "batch_size max_num_gt_bboxes"],
         gt_valid_bboxes: Int32[torch.Tensor, " batch_size"],
         feature_map_size: tuple[int, int],
         device: torch.device,
@@ -769,8 +898,6 @@ class TransFusionHead(nn.Module):
         gt_bboxes_3d[:, :, : self.box_code_size] = gt_bboxes_3d[:, :, : self.box_code_size].to(
             device=device
         )
-        gt_labels_3d = gt_labels_3d.to(device=device, dtype=torch.long)
-        gt_valid_bboxes = gt_valid_bboxes.to(device=device)
 
         # Vectorization implementation instead of for-loops
         center_x = (
@@ -852,11 +979,11 @@ class TransFusionHead(nn.Module):
 
     def get_targets(
         self,
-        gt_bboxes_3d: Float32[torch.Tensor, "batch_size max_num_3d_gt_bboxes num_Box3DFieldIndex"],
-        gt_labels_3d: Float32[torch.Tensor, "batch_size max_num_3d_gt_bboxes"],
+        outputs: TransFusionHeadOutputs,
+        gt_bboxes_3d: Float32[torch.Tensor, "batch_size max_num_gt_bboxes num_Box3DFieldIndex"],
+        gt_labels_3d: Float32[torch.Tensor, "batch_size max_num_gt_bboxes"],
         gt_valid_bboxes: Int32[torch.Tensor, " batch_size"],
         feature_map_size: tuple[int, int],
-        device: torch.device,
     ) -> TransFusionHeadTargets:
         """Build TransFusion training targets.
 
@@ -868,8 +995,11 @@ class TransFusionHead(nn.Module):
         Returns:
             Structured training targets for classification, boxes, and heatmaps.
         """
-        # batch_size = len(gt_valid_bboxes)
-        _ = self._build_dense_heatmap_targets(
+        batch_size = len(gt_valid_bboxes)
+        device = outputs.dense_heatmaps.device
+        gt_labels_3d = gt_labels_3d.to(device=device, dtype=torch.long)
+        gt_valid_bboxes = gt_valid_bboxes.to(device=device)
+        dense_heatmap_targets = self._build_dense_heatmap_targets(
             gt_bboxes_3d=gt_bboxes_3d,
             gt_labels_3d=gt_labels_3d,
             gt_valid_bboxes=gt_valid_bboxes,
@@ -877,91 +1007,149 @@ class TransFusionHead(nn.Module):
             device=device,
         )
 
-        # batch_size = len(gt_boxes)
-        # num_layers = outputs["center"].shape[-1] // self.num_proposals
-        # all_labels = []
-        # all_label_weights = []
-        # all_bbox_targets = []
-        # all_bbox_weights = []
-        # num_pos = 0
-        # matched_ious = 0.0
+        # (batch_size, max_num_bboxes) boolean mask for valid boxes based on the number of valid boxes per sample
+        # (max_num_bboxes) -> (1, max_num_bboxes) -> (batch_size, max_num_bboxes) < gt_valid_bboxes.unsqueeze(1) (batch_size, 1)
+        # -> (batch_size, max_num_bboxes)
+        max_num_gt_bboxes = gt_bboxes_3d.shape[1]
+        valid_masks = torch.arange(max_num_gt_bboxes, device=device).unsqueeze(0).expand(
+            batch_size, -1
+        ) < gt_valid_bboxes.unsqueeze(1)
 
-        # score = outputs["heatmap"].detach()
-        # center = outputs["center"].detach()
-        # height = outputs["height"].detach()
-        # dim = outputs["dim"].detach()
-        # rot = outputs["rot"].detach()
-        # vel = outputs.get("vel")
-        # if vel is not None:
-        #     vel = vel.detach()
+        separate_head_outputs = outputs.separate_head_outputs
+        num_layers = separate_head_outputs.centers.shape[-1] // self.num_proposals
+        scores = separate_head_outputs.heatmaps.detach()
+        centers = separate_head_outputs.centers.detach()
+        heights = separate_head_outputs.heights.detach()
+        dims = separate_head_outputs.dims.detach()
+        rots = separate_head_outputs.rots.detach()
+        vels = separate_head_outputs.vels
+        if vels is not None:
+            vels = vels.detach()
 
-        # for batch_index in range(batch_size):
-        #     batch_labels = []
-        #     batch_label_weights = []
-        #     batch_bbox_targets = []
-        #     batch_bbox_weights = []
-        #     gt_boxes_tensor = gt_boxes[batch_index].to(score.device, dtype=torch.float32)
-        #     gt_labels_tensor = gt_labels[batch_index].to(score.device, dtype=torch.long)
-        #     for layer_index in range(num_layers):
-        #         start = layer_index * self.num_proposals
-        #         end = (layer_index + 1) * self.num_proposals
-        #         decoded = self.bbox_coder.decode(
-        #             score[batch_index : batch_index + 1, :, start:end],
-        #             rot[batch_index : batch_index + 1, :, start:end],
-        #             dim[batch_index : batch_index + 1, :, start:end],
-        #             center[batch_index : batch_index + 1, :, start:end],
-        #             height[batch_index : batch_index + 1, :, start:end],
-        #             vel[batch_index : batch_index + 1, :, start:end] if vel is not None else None,
-        #             filter_predictions=False,
-        #         )[0]["bboxes"]
-        #         assign_result = self.assigner.assign(
-        #             bboxes=decoded,
-        #             gt_bboxes=gt_boxes_tensor[:, :7],
-        #             gt_labels=gt_labels_tensor,
-        #             cls_pred=score[batch_index, :, start:end],
-        #             point_cloud_range=self.point_cloud_range,
-        #         )
-        #         labels = decoded.new_full((self.num_proposals,), self.num_classes, dtype=torch.long)
-        #         label_weights = decoded.new_ones((self.num_proposals,))
-        #         bbox_targets = decoded.new_zeros((self.num_proposals, self.bbox_coder.code_size))
-        #         bbox_weights = decoded.new_zeros((self.num_proposals, self.bbox_coder.code_size))
+        # The gt boxes are the same for every decoder layer, so encode the whole batch once.
+        # encode() also encodes the padded boxes, but only matched rows are ever read below.
+        # (batch_size, max_num_gt_bboxes, code_size)
+        encoded_gt_bboxes = self.bbox_coder.encode(gt_bboxes_3d)
 
-        #         pos_mask = assign_result.gt_inds > 0
-        #         if pos_mask.any():
-        #             pos_gt_inds = assign_result.gt_inds[pos_mask] - 1
-        #             labels[pos_mask] = gt_labels_tensor[pos_gt_inds]
-        #             bbox_targets[pos_mask] = self.bbox_coder.encode(gt_boxes_tensor[pos_gt_inds])
-        #             bbox_weights[pos_mask] = 1.0
-        #             num_pos += int(pos_mask.sum().item())
-        #             if assign_result.max_overlaps is not None:
-        #                 matched_ious += float(assign_result.max_overlaps[pos_mask].sum().item())
+        # One LayerTargets per decoder layer, concatenated along the proposal axis. That is the
+        # same layout the per-query predictions use (forward() cats the auxiliary layers along the
+        # query axis), so loss() can take a single layer as the same [start:end] slice of both.
+        layer_targets = []
+        for layer_index in range(num_layers):
+            start = layer_index * self.num_proposals
+            end = (layer_index + 1) * self.num_proposals
+            layer_targets.append(
+                self._build_layer_targets(
+                    # (batch_size, num_proposals, code_size)
+                    pred_bboxes=self.bbox_coder.decode_boxes(
+                        rots=rots[..., start:end],
+                        dims=dims[..., start:end],
+                        centers=centers[..., start:end],
+                        heights=heights[..., start:end],
+                        vels=vels[..., start:end] if vels is not None else None,
+                    ),
+                    # (batch_size, num_classes, num_proposals) ->
+                    # (batch_size, num_proposals, num_classes)
+                    cls_logits=scores[..., start:end].transpose(2, 1),
+                    gt_bboxes_3d=gt_bboxes_3d,
+                    gt_labels_3d=gt_labels_3d,
+                    encoded_gt_bboxes=encoded_gt_bboxes,
+                    valid_masks=valid_masks,
+                )
+            )
 
-        #         batch_labels.append(labels)
-        #         batch_label_weights.append(label_weights)
-        #         batch_bbox_targets.append(bbox_targets)
-        #         batch_bbox_weights.append(bbox_weights)
+        num_pos = sum(layer.num_pos for layer in layer_targets)
+        matched_iou_sum = sum(layer.matched_iou_sum for layer in layer_targets)
+        return TransFusionHeadTargets(
+            dense_heatmaps=dense_heatmap_targets,
+            labels=torch.cat([layer.labels for layer in layer_targets], dim=1),
+            label_weights=torch.cat([layer.label_weights for layer in layer_targets], dim=1),
+            bbox_targets=torch.cat([layer.bbox_targets for layer in layer_targets], dim=1),
+            bbox_weights=torch.cat([layer.bbox_weights for layer in layer_targets], dim=1),
+            num_pos=num_pos,
+            matched_iou=matched_iou_sum / max(num_pos, 1),
+        )
 
-        #     all_labels.append(torch.cat(batch_labels, dim=0))
-        #     all_label_weights.append(torch.cat(batch_label_weights, dim=0))
-        #     all_bbox_targets.append(torch.cat(batch_bbox_targets, dim=0))
-        #     all_bbox_weights.append(torch.cat(batch_bbox_weights, dim=0))
+    def _build_layer_targets(
+        self,
+        pred_bboxes: Float32[torch.Tensor, "batch_size num_proposals num_Box3DFieldIndex"],
+        cls_logits: Float32[torch.Tensor, "batch_size num_proposals num_classes"],
+        gt_bboxes_3d: Float32[torch.Tensor, "batch_size max_num_gt_bboxes num_Box3DFieldIndex"],
+        gt_labels_3d: Int64[torch.Tensor, "batch_size max_num_gt_bboxes"],
+        encoded_gt_bboxes: Float32[torch.Tensor, "batch_size max_num_gt_bboxes code_size"],
+        valid_masks: Bool[torch.Tensor, "batch_size max_num_gt_bboxes"],
+    ) -> LayerTargets:
+        """
+        Assign one decoder layer's proposals to ground truth and encode that layer's targets.
 
-        # dense_heatmap = self._build_heatmap_targets(
-        #     gt_boxes,
-        #     gt_labels,
-        #     outputs["dense_heatmap"].shape[-2:],
-        #     outputs["dense_heatmap"].device,
-        # )
-        # return TransFusionTargets(
-        #     labels=torch.stack(all_labels, dim=0),
-        #     label_weights=torch.stack(all_label_weights, dim=0),
-        #     bbox_targets=torch.stack(all_bbox_targets, dim=0),
-        #     bbox_weights=torch.stack(all_bbox_weights, dim=0),
-        #     num_pos=num_pos,
-        #     matched_iou=matched_ious / max(num_pos, 1),
-        #     heatmap=dense_heatmap,
-        # )
-        return
+        The assignment is one-to-one per sample: every proposal is either matched to a single real
+        gt box (a positive) or left as background (a negative). Unmatched proposals keep the
+        background label and zero regression weight, so they contribute to the classification loss
+        only.
+
+        Args:
+            pred_bboxes: Decoded proposal boxes for this layer, in metric coordinates.
+            cls_logits: Class logits for this layer's proposals.
+            gt_bboxes_3d: Ground-truth boxes in metric coordinates, padded per sample.
+            gt_labels_3d: Ground-truth class labels, padded per sample.
+            encoded_gt_bboxes: Ground-truth boxes already encoded into regression targets. Passed
+                in rather than encoded here because it does not vary across decoder layers.
+            valid_masks: Mask indicating which padded gt entries are real boxes.
+
+        Returns:
+            This layer's classification and regression targets, plus its positive count and
+            matched-IoU sum.
+        """
+        batch_size = pred_bboxes.shape[0]
+        assign_results = self.assigner.assign(
+            bboxes=pred_bboxes,
+            gt_bboxes=gt_bboxes_3d,
+            gt_labels=gt_labels_3d,
+            cls_pred=cls_logits,
+            valid_masks=valid_masks,
+        )
+        labels = pred_bboxes.new_full(
+            (batch_size, self.num_proposals), self.num_classes, dtype=torch.long
+        )
+        label_weights = pred_bboxes.new_ones((batch_size, self.num_proposals))
+        bbox_targets = pred_bboxes.new_zeros(
+            (batch_size, self.num_proposals, self.bbox_coder.code_size)
+        )
+        bbox_weights = pred_bboxes.new_zeros(
+            (batch_size, self.num_proposals, self.bbox_coder.code_size)
+        )
+
+        # Positives are the proposals the assigner matched to a real gt. gt_inds is
+        # one-based: 0 means negative and -1 means ignore.
+        # (batch_size, num_proposals)
+        pos_masks = assign_results.gt_inds > 0
+        # gt_inds holds a *per-sample* gt index, so it cannot index the batched gt tensors on
+        # its own. Pair every positive with the sample it belongs to and use both axes.
+        # (num_positives,) each
+        pos_batch_indices, pos_proposal_indices = pos_masks.nonzero(as_tuple=True)
+        pos_gt_indices = assign_results.gt_inds[pos_batch_indices, pos_proposal_indices] - 1
+
+        # Empty index tensors make every write below a no-op, so a batch with no positives
+        # needs no separate branch.
+        labels[pos_batch_indices, pos_proposal_indices] = gt_labels_3d[
+            pos_batch_indices, pos_gt_indices
+        ]
+        bbox_targets[pos_batch_indices, pos_proposal_indices] = encoded_gt_bboxes[
+            pos_batch_indices, pos_gt_indices
+        ]
+        bbox_weights[pos_batch_indices, pos_proposal_indices] = 1.0
+
+        matched_iou_sum = 0.0
+        if assign_results.max_overlaps is not None:
+            matched_iou_sum = float(assign_results.max_overlaps[pos_masks].sum())
+        return LayerTargets(
+            labels=labels,
+            label_weights=label_weights,
+            bbox_targets=bbox_targets,
+            bbox_weights=bbox_weights,
+            num_pos=int(pos_masks.sum()),
+            matched_iou_sum=matched_iou_sum,
+        )
 
     def loss(
         self,
@@ -969,7 +1157,7 @@ class TransFusionHead(nn.Module):
         gt_bboxes_3d: Float32[torch.Tensor, "batch_size max_num_3d_gt_bboxes num_Box3DFieldIndex"],
         gt_labels_3d: Float32[torch.Tensor, "batch_size max_num_3d_gt_bboxes"],
         gt_valid_bboxes: Int32[torch.Tensor, " batch_size"],
-    ) -> MappingProxyType[str, torch.Tensor]:
+    ) -> MappingProxyType[str, Float32[torch.Tensor, " num_losses"] | float]:
         """
         Compute TransFusionHead losses. It will decode raw outputs and assign predictions to
         ground-truth boxes (1-to-1) for each decoder layer, and obtain positive and negative pairs.
@@ -980,123 +1168,122 @@ class TransFusionHead(nn.Module):
           from queries. For negative queries, the target label is set to the background class.
           3) bbox_loss: L1Loss between the predicted box parameters and the target box parameters.
         """
-        _ = self.get_targets(
-            gt_bboxes_3d,
-            gt_labels_3d,
-            gt_valid_bboxes,
-            outputs["dense_heatmap"].shape[-2:],
-            outputs["dense_heatmap"].device,
+        loss_dict: dict[str, torch.Tensor | float] = {}
+        transfusion_head_outputs = outputs.transfusion_head_outputs
+        if transfusion_head_outputs is None:
+            raise ValueError(
+                "TransFusionHead: transfusion_head_outputs must exist from the forward outputs!"
+            )
+        feature_map_size = transfusion_head_outputs.dense_heatmaps.shape[-2:]
+        targets = self.get_targets(
+            gt_bboxes_3d=gt_bboxes_3d,
+            gt_labels_3d=gt_labels_3d,
+            gt_valid_bboxes=gt_valid_bboxes,
+            feature_map_size=(feature_map_size[0], feature_map_size[1]),
+            outputs=transfusion_head_outputs,
         )
-        return {}
-        # loss_dict: dict[str, torch.Tensor] = {}
-        # loss_heatmap = self.loss_heatmap(outputs["dense_heatmap"], targets.heatmap)
-        # loss_dict["loss_heatmap"] = self.loss_heatmap_weight * loss_heatmap
 
-        # num_layers = outputs["center"].shape[-1] // self.num_proposals
-        # for layer_index in range(num_layers):
-        #     start = layer_index * self.num_proposals
-        #     end = (layer_index + 1) * self.num_proposals
-        #     prefix = "layer_-1" if layer_index == num_layers - 1 else f"layer_{layer_index}"
+        loss_heatmap = self.loss_heatmap(
+            transfusion_head_outputs.dense_heatmaps, targets.dense_heatmaps
+        )
+        loss_dict["loss_heatmap"] = self.loss_heatmap_weight * loss_heatmap
+        separate_head_outputs = transfusion_head_outputs.separate_head_outputs
+        num_layers = separate_head_outputs.centers.shape[-1] // self.num_proposals
 
-        #     layer_logits = (
-        #         outputs["heatmap"][..., start:end].permute(0, 2, 1).reshape(-1, self.num_classes)
-        #     )
-        #     layer_labels = targets.labels[:, start:end].reshape(-1)
-        #     cls_targets = layer_logits.new_zeros((layer_labels.shape[0], self.num_classes))
-        #     valid_mask = layer_labels < self.num_classes
-        #     cls_targets[valid_mask, layer_labels[valid_mask]] = 1.0
-        #     layer_label_weights = targets.label_weights[:, start:end].reshape(-1)
-        #     loss_cls = self.loss_cls(
-        #         layer_logits, cls_targets, layer_label_weights, avg_factor=max(targets.num_pos, 1)
-        #     )
+        for layer_index in range(num_layers):
+            # The last layer keeps the "layer_-1" prefix the original TransFusion logs use.
+            prefix = "layer_-1" if layer_index == num_layers - 1 else f"layer_{layer_index}"
+            layer_losses = self._build_layer_losses(
+                separate_head_outputs=separate_head_outputs,
+                targets=targets,
+                start=layer_index * self.num_proposals,
+                end=(layer_index + 1) * self.num_proposals,
+            )
+            loss_dict[f"{prefix}_loss_cls"] = layer_losses.loss_cls
+            loss_dict[f"{prefix}_loss_bbox"] = layer_losses.loss_bbox
 
-        #     preds = torch.cat(
-        #         [
-        #             outputs["center"][..., start:end],
-        #             outputs["height"][..., start:end],
-        #             outputs["dim"][..., start:end],
-        #             outputs["rot"][..., start:end],
-        #             outputs["vel"][..., start:end]
-        #             if "vel" in outputs
-        #             else outputs["center"].new_zeros(
-        #                 outputs["center"].shape[0], 0, self.num_proposals
-        #             ),
-        #         ],
-        #         dim=1,
-        #     ).permute(0, 2, 1)
-        #     layer_bbox_targets = targets.bbox_targets[:, start:end, :]
-        #     layer_bbox_weights = targets.bbox_weights[:, start:end, :] * preds.new_tensor(
-        #         self.code_weights
-        #     )
-        #     loss_bbox = self.loss_bbox(preds, layer_bbox_targets)
-        #     loss_bbox = (loss_bbox * layer_bbox_weights).
+        loss_dict["matched_ious"] = transfusion_head_outputs.dense_heatmaps.new_tensor(
+            targets.matched_iou
+        )
+        loss_dict["loss"] = sum(value for key, value in loss_dict.items() if "loss" in key)
+        return MappingProxyType(loss_dict)
 
-    # def loss(
-    #     self,
-    #     outputs: dict[str, torch.Tensor],
-    #     gt_boxes: list[torch.Tensor],
-    #     gt_labels: list[torch.Tensor],
-    # ) -> dict[str, torch.Tensor]:
-    #     """Compute TransFusion losses.
+    def _build_layer_losses(
+        self,
+        separate_head_outputs: TransFusionSeparateHeadOutputs,
+        targets: TransFusionHeadTargets,
+        start: int,
+        end: int,
+    ) -> LayerLosses:
+        """
+        Compute one decoder layer's classification and box regression losses.
 
-    #     Args:
-    #         outputs: Raw prediction tensors produced by the head.
-    #         gt_boxes: Ground-truth boxes for each batch element.
-    #         gt_labels: Ground-truth labels for each batch element.
+        Both the per-query predictions and the assignment targets carry every decoder layer
+        concatenated along the proposal axis, so a single layer is the ``[start:end]`` slice of
+        each. Losses are normalized by the total number of positives across all layers, matching
+        the reference TransFusion implementation.
 
-    #     Returns:
-    #         Loss dictionary consumed by the training loop.
-    #     """
-    #     targets = self.get_targets(gt_boxes, gt_labels, outputs)
-    #     loss_dict: dict[str, torch.Tensor] = {}
-    #     loss_heatmap = self.loss_heatmap(outputs["dense_heatmap"], targets.heatmap)
-    #     loss_dict["loss_heatmap"] = self.loss_heatmap_weight * loss_heatmap
+        Args:
+            separate_head_outputs: Per-query predictions for every decoder layer.
+            targets: Assignment targets for every decoder layer.
+            start: First proposal index belonging to this layer.
+            end: One past the last proposal index belonging to this layer.
 
-    #     num_layers = outputs["center"].shape[-1] // self.num_proposals
-    #     for layer_index in range(num_layers):
-    #         start = layer_index * self.num_proposals
-    #         end = (layer_index + 1) * self.num_proposals
-    #         prefix = "layer_-1" if layer_index == num_layers - 1 else f"layer_{layer_index}"
+        Returns:
+            This layer's weighted classification and box regression losses.
+        """
+        # SigmoidFocalLoss works on flattened (N, num_classes) logits.
+        # (batch_size, num_classes, num_proposals) -> (batch_size, num_proposals, num_classes)
+        # -> (batch_size * num_proposals, num_classes)
+        layer_logits = (
+            separate_head_outputs.heatmaps[..., start:end]
+            .permute(0, 2, 1)
+            .reshape(-1, self.num_classes)
+        )
+        # (batch_size, num_proposals) -> (batch_size * num_proposals,)
+        layer_labels = targets.labels[:, start:end].reshape(-1)
+        # One-hot the positives; background proposals (label == num_classes) stay all-zero rows,
+        # which is what the focal loss expects for a negative.
+        cls_targets = layer_logits.new_zeros((layer_labels.shape[0], self.num_classes))
+        pos_masks = layer_labels < self.num_classes
+        cls_targets[pos_masks, layer_labels[pos_masks]] = 1.0
+        layer_label_weights = targets.label_weights[:, start:end].reshape(-1)
+        loss_cls = self.loss_cls(
+            layer_logits, cls_targets, layer_label_weights, avg_factor=max(targets.num_pos, 1)
+        )
 
-    #         layer_logits = (
-    #             outputs["heatmap"][..., start:end].permute(0, 2, 1).reshape(-1, self.num_classes)
-    #         )
-    #         layer_labels = targets.labels[:, start:end].reshape(-1)
-    #         cls_targets = layer_logits.new_zeros((layer_labels.shape[0], self.num_classes))
-    #         valid_mask = layer_labels < self.num_classes
-    #         cls_targets[valid_mask, layer_labels[valid_mask]] = 1.0
-    #         layer_label_weights = targets.label_weights[:, start:end].reshape(-1)
-    #         loss_cls = self.loss_cls(
-    #             layer_logits, cls_targets, layer_label_weights, avg_factor=max(targets.num_pos, 1)
-    #         )
+        # A head without velocity channels contributes no columns to the regression vector.
+        if separate_head_outputs.vels is not None:
+            vels = separate_head_outputs.vels[..., start:end]
+        else:
+            vels = separate_head_outputs.centers.new_zeros(
+                separate_head_outputs.centers.shape[0], 0, self.num_proposals
+            )
 
-    #         preds = torch.cat(
-    #             [
-    #                 outputs["center"][..., start:end],
-    #                 outputs["height"][..., start:end],
-    #                 outputs["dim"][..., start:end],
-    #                 outputs["rot"][..., start:end],
-    #                 outputs["vel"][..., start:end]
-    #                 if "vel" in outputs
-    #                 else outputs["center"].new_zeros(
-    #                     outputs["center"].shape[0], 0, self.num_proposals
-    #                 ),
-    #             ],
-    #             dim=1,
-    #         ).permute(0, 2, 1)
-    #         layer_bbox_targets = targets.bbox_targets[:, start:end, :]
-    #         layer_bbox_weights = targets.bbox_weights[:, start:end, :] * preds.new_tensor(
-    #             self.code_weights
-    #         )
-    #         loss_bbox = self.loss_bbox(preds, layer_bbox_targets)
-    #         loss_bbox = (loss_bbox * layer_bbox_weights).sum() / max(targets.num_pos, 1)
+        # (batch_size, code_size, num_proposals) -> (batch_size, num_proposals, code_size)
+        preds = torch.cat(
+            [
+                separate_head_outputs.centers[..., start:end],
+                separate_head_outputs.heights[..., start:end],
+                separate_head_outputs.dims[..., start:end],
+                separate_head_outputs.rots[..., start:end],
+                vels,
+            ],
+            dim=1,
+        ).permute(0, 2, 1)
+        layer_bbox_targets = targets.bbox_targets[:, start:end, :]
+        # code_weights rescale each regression channel; negatives already carry zero weight, so
+        # the masking and the channel weighting fold into one multiply.
+        layer_bbox_weights = targets.bbox_weights[:, start:end, :] * preds.new_tensor(
+            self.code_weights
+        )
+        loss_bbox = self.loss_bbox(preds, layer_bbox_targets)
+        loss_bbox = (loss_bbox * layer_bbox_weights).sum() / max(targets.num_pos, 1)
 
-    #         loss_dict[f"{prefix}_loss_cls"] = self.loss_cls_weight * loss_cls
-    #         loss_dict[f"{prefix}_loss_bbox"] = self.loss_bbox_weight * loss_bbox
-
-    #     loss_dict["matched_ious"] = outputs["dense_heatmap"].new_tensor(targets.matched_iou)
-    #     loss_dict["loss"] = sum(value for key, value in loss_dict.items() if "loss" in key)
-    #     return loss_dict
+        return LayerLosses(
+            loss_cls=self.loss_cls_weight * loss_cls,
+            loss_bbox=self.loss_bbox_weight * loss_bbox,
+        )
 
     def prepare_for_export(self) -> "TransFusionHead":
         """Return an export-ready copy with attention replaced by exportable equivalents.

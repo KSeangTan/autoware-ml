@@ -7,9 +7,34 @@ detection heads and deployment paths.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import NamedTuple, Sequence
 
-from jaxtyping import Float32
+from jaxtyping import Bool, Float32, Int64
 import torch
+
+
+class ScoreThresholdConfig(NamedTuple):
+    """
+    Config for score threshold to each class group.
+    Args:
+        class_names: Names of classes for this group.
+        score_threshold: Score thresold to keep bboxes in this group.
+    """
+
+    class_names: Sequence[str]
+    score_threshold: float
+
+
+class ScoreThresholdGroup(NamedTuple):
+    """
+    Resolved config for each score thresold group.
+    Args:
+        class_ids: Class indices for this group.
+        score_threshold: Score threshold to keep bboxes in this group.
+    """
+
+    class_ids: Sequence[int]
+    score_thresold: float
 
 
 @dataclass
@@ -30,7 +55,8 @@ class TransFusionBBoxCoder:
     pc_range: list[float]
     out_size_factor: int
     voxel_size: list[float]
-    # post_center_range: list[float] | None = None
+    score_threshold_groups: Sequence[ScoreThresholdGroup] | None
+    post_center_range: Sequence[float] | None = None
     # score_threshold: float | Sequence[float] | None = None
     code_size: int = 8
 
@@ -88,6 +114,90 @@ class TransFusionBBoxCoder:
         final_scores, final_preds = heatmaps.max(dim=1)
         return final_scores, final_preds
 
+    def filter_bboxes_center_range(
+        self,
+        bbox_centers: Float32[torch.Tensor, "batch_size num_proposals 3"],
+    ) -> Bool[torch.Tensor, "batch_size num_proposals"]:
+        """
+        Build a per-proposal keep mask from the detector's post-processing center range.
+
+        The test is axis aligned rather than a distance: a proposal is kept when its center lies
+        inside the (x_min, y_min, z_min, x_max, y_max, z_max) box, inclusive at both ends.
+
+        Args:
+            bbox_centers: Box centers as (center_x, center_y, center_z).
+
+        Returns:
+            True where the proposal's center is inside post_center_range, False otherwise. All
+            True when no range is configured.
+        """
+        batch_size, num_bboxes, _ = bbox_centers.shape
+        if self.post_center_range is None:
+            return torch.ones(
+                (batch_size, num_bboxes), device=bbox_centers.device, dtype=torch.bool
+            )
+        if len(self.post_center_range) != 6:
+            raise ValueError(
+                "TransFusionBBoxCoder post_center_range must hold 6 values "
+                f"(x_min, y_min, z_min, x_max, y_max, z_max), got {len(self.post_center_range)}."
+            )
+
+        # (6,) -> (1, 1, 6) so the mins and maxs broadcast over batch and proposals.
+        center_range = torch.tensor(
+            self.post_center_range,
+            dtype=bbox_centers.dtype,
+            device=bbox_centers.device,
+        ).view(1, 1, 6)
+
+        # Reduce over the trailing coordinate axis: x, y and z must all be inside.
+        # (batch_size, num_proposals, 3) -> (batch_size, num_proposals)
+        keep_masks = (bbox_centers >= center_range[..., :3]).all(dim=-1)
+        keep_masks &= (bbox_centers <= center_range[..., 3:]).all(dim=-1)
+        return keep_masks
+
+    def filter_bboxes_score(
+        self,
+        bbox_scores: Float32[torch.Tensor, "batch_size num_proposals"],
+        bbox_classes: Int64[torch.Tensor, "batch_size num_proposals"],
+        num_classes: int,
+    ) -> Bool[torch.Tensor, "batch_size num_proposals"]:
+        """
+        Build a per-proposal keep mask by comparing each score against its class group's threshold.
+
+        The groups carry class ids, so they are first flattened into a per-class threshold vector
+        and then looked up by each proposal's predicted class. That keeps the comparison a single
+        elementwise op over the whole batch, with no loop over samples or proposals, and exports as
+        a constant Gather plus a Greater.
+
+        Args:
+            bbox_scores: Confidence score for each proposal.
+            bbox_classes: Predicted class id for each proposal. Must be a valid class index in
+                [0, num_classes), since it indexes the per-class threshold vector.
+            num_classes: Total number of classes.
+
+        Returns:
+            True where the proposal's score clears its class threshold, False otherwise.
+        """
+        if self.score_threshold_groups is None:
+            return torch.ones_like(bbox_scores, dtype=torch.bool)
+
+        # (num_classes,) threshold per class. Classes no group claims stay at zero.
+        class_thresholds = torch.zeros(
+            num_classes, dtype=bbox_scores.dtype, device=bbox_scores.device
+        )
+        for group_index, group in enumerate(self.score_threshold_groups):
+            for class_id in group.class_ids:
+                class_id = int(class_id)
+                if not 0 <= class_id < num_classes:
+                    raise ValueError(
+                        f"TransFusionBBoxCoder score threshold group {group_index} class id "
+                        f"{class_id} is out of range for {num_classes} classes."
+                    )
+                class_thresholds[class_id] = group.score_thresold
+
+        # (num_classes,)[(batch_size, num_proposals)] -> (batch_size, num_proposals)
+        return bbox_scores > class_thresholds[bbox_classes]
+
     def decode_boxes(
         self,
         rots: Float32[torch.Tensor, "batch_size 2 num_proposals"],
@@ -95,7 +205,7 @@ class TransFusionBBoxCoder:
         centers: Float32[torch.Tensor, "batch_size 2 num_proposals"],
         heights: Float32[torch.Tensor, "batch_size 1 num_proposals"],
         vels: Float32[torch.Tensor, "batch_size 2 num_proposals"] | None,
-    ) -> Float32[torch.Tensor, "batch_size code_size num_proposals"]:
+    ) -> Float32[torch.Tensor, "batch_size num_proposals code_size"]:
         """
         Decode regression channels into metric-space boxes, where each box is represented as
         (center_x, center_y, center_z, length, width, height, yaw,  velocity_x, velocity_y).
@@ -127,4 +237,4 @@ class TransFusionBBoxCoder:
             final_boxes = torch.cat([centers, heights, dims, yaw], dim=1)
         else:
             final_boxes = torch.cat([centers, heights, dims, yaw, vels], dim=1)
-        return final_boxes
+        return final_boxes.permute(0, 2, 1).contiguous()

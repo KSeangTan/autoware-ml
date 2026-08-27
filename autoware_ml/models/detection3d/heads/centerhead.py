@@ -158,15 +158,15 @@ class CenterHead(nn.Module):
 
     def get_targets(
         self,
-        gt_bboxes_3d: Float32[torch.Tensor, "batch_size max_num_3d_gt_bboxes num_Box3DFieldIndex"],
-        gt_labels_3d: Float32[torch.Tensor, "batch_size max_num_3d_gt_bboxes"],
+        gt_bboxes_3d: Float32[torch.Tensor, "batch_size max_num_gt_bboxes num_Box3DFieldIndex"],
+        gt_labels_3d: Float32[torch.Tensor, "batch_size max_num_gt_bboxes"],
         gt_valid_bboxes: Int32[torch.Tensor, " batch_size"],
         feature_map_size: tuple[int, int],
         device: torch.device,
     ) -> CenterHeadTargets:
         """Build heatmap and regression targets for one batch."""
         batch_size = len(gt_bboxes_3d)
-        max_num_bboxes = gt_bboxes_3d.shape[1]
+        max_num_gt_bboxes = gt_bboxes_3d.shape[1]
         feature_height, feature_width = feature_map_size
 
         # Movement of tensors to the correct device and type
@@ -200,7 +200,7 @@ class CenterHead(nn.Module):
         # (batch_size, max_num_bboxes) boolean mask for valid boxes based on the number of valid boxes per sample
         # (max_num_bboxes) -> (1, max_num_bboxes) -> (batch_size, max_num_bboxes) < gt_valid_bboxes.unsqueeze(1) (batch_size, 1)
         # -> (batch_size, max_num_bboxes)
-        valid_num_bboxes_masks = torch.arange(max_num_bboxes, device=device).unsqueeze(0).expand(
+        valid_num_bboxes_masks = torch.arange(max_num_gt_bboxes, device=device).unsqueeze(0).expand(
             batch_size, -1
         ) < gt_valid_bboxes.unsqueeze(1)
         # (batch_size, max_num_bboxes) boolean mask for valid boxes based on both distance and number of valid boxes
@@ -281,8 +281,8 @@ class CenterHead(nn.Module):
     def loss(
         self,
         outputs: Detection3DHeadOutputs,
-        gt_bboxes_3d: Float32[torch.Tensor, "batch_size max_num_3d_gt_bboxes num_Box3DFieldIndex"],
-        gt_labels_3d: Float32[torch.Tensor, "batch_size max_num_3d_gt_bboxes"],
+        gt_bboxes_3d: Float32[torch.Tensor, "batch_size max_num_gt_bboxes num_Box3DFieldIndex"],
+        gt_labels_3d: Float32[torch.Tensor, "batch_size max_num_gt_bboxes"],
         gt_valid_bboxes: Int32[torch.Tensor, " batch_size"],
     ) -> MappingProxyType[str, torch.Tensor]:
         """
