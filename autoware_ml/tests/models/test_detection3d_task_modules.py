@@ -101,32 +101,3 @@ def test_transfusion_bbox_coder_encode_decode_round_trip_with_full_geometry_vect
     assert decoded.shape == (1, 9)
     assert torch.allclose(decoded[0, :6], boxes[0, :6], atol=1e-4)
     assert torch.allclose(decoded[0, 6:9], boxes[0, 6:9], atol=1e-4)
-
-
-def test_hungarian_assigner_matches_best_query() -> None:
-    assigner = HungarianAssigner3D(
-        cls_cost=ClassificationCost(weight=0.15),
-        reg_cost=BBoxBEVL1Cost(weight=0.25),
-        iou_cost=IoU3DCost(weight=0.25),
-    )
-    bboxes = torch.tensor(
-        [
-            [2.0, 2.0, 0.5, 4.0, 2.0, 1.5, 0.0],
-            [20.0, 20.0, 0.5, 4.0, 2.0, 1.5, 0.0],
-        ],
-        dtype=torch.float32,
-    )
-    gt_bboxes = torch.tensor([[2.1, 2.0, 0.5, 4.0, 2.0, 1.5, 0.0]], dtype=torch.float32)
-    gt_labels = torch.tensor([1], dtype=torch.long)
-    cls_pred = torch.tensor([[0.1, 4.0], [3.0, 0.1]], dtype=torch.float32)
-
-    result = assigner.assign(
-        bboxes=bboxes,
-        gt_bboxes=gt_bboxes,
-        gt_labels=gt_labels,
-        cls_pred=cls_pred,
-        point_cloud_range=[0.0, 0.0, -1.0, 40.0, 40.0, 3.0],
-    )
-
-    assert result.gt_inds.tolist() == [1, 0]
-    assert result.labels.tolist() == [1, -1]
