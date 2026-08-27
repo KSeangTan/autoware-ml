@@ -351,7 +351,7 @@ class TestHungarianAssigner3D(unittest.TestCase):
 
         self.assertEqual(result.gt_inds.shape, (self.batch_size, self.num_bboxes))
         self.assertEqual(result.labels.shape, (self.batch_size, self.num_bboxes))
-        self.assertIsNotNone(result.max_overlaps)
+        assert result.max_overlaps is not None
         self.assertEqual(result.max_overlaps.shape, (self.batch_size, self.num_bboxes))
         self.assertEqual(result.gt_inds.dtype, torch.int64)
         self.assertEqual(result.labels.dtype, torch.int64)
@@ -380,6 +380,8 @@ class TestHungarianAssigner3D(unittest.TestCase):
             self.assertEqual(
                 single_result.labels[0].tolist(), batched_result.labels[batch_index].tolist()
             )
+            assert single_result.max_overlaps is not None
+            assert batched_result.max_overlaps is not None
             self.assertTrue(
                 torch.allclose(
                     single_result.max_overlaps[0],
@@ -432,6 +434,7 @@ class TestHungarianAssigner3D(unittest.TestCase):
         negative_masks = result.gt_inds == 0
         self.assertTrue(negative_masks.any())
         self.assertTrue(torch.all(result.labels[negative_masks] == -1))
+        assert result.max_overlaps is not None
         self.assertTrue(torch.all(result.max_overlaps[negative_masks] == 0.0))
         # -1 (ignore) is never produced by this assigner: every proposal is positive or negative.
         self.assertFalse(torch.any(result.gt_inds == -1))
@@ -447,12 +450,14 @@ class TestHungarianAssigner3D(unittest.TestCase):
                 expected_iou = (
                     0.0 if gt_index < 0 else float(ious[batch_index, proposal_index, gt_index])
                 )
+                assert result.max_overlaps is not None
                 self.assertAlmostEqual(
                     float(result.max_overlaps[batch_index, proposal_index]),
                     expected_iou,
                     places=5,
                 )
         # The proposals sitting on a gt overlap it almost exactly.
+        assert result.max_overlaps is not None
         self.assertGreater(float(result.max_overlaps[0, 0]), 0.9)
         self.assertGreater(float(result.max_overlaps[1, 0]), 0.9)
 
