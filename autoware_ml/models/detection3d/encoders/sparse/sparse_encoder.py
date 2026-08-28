@@ -292,7 +292,7 @@ class SparseEncoder(nn.Module):
         dense = dense.permute(0, 4, 3, 1, 2).contiguous()
         return dense.view(batch_size, channels * depth, height, width)
 
-    def prepare_for_export(self) -> "SparseEncoder":
+    def prepare_for_export(self) -> SparseEncoder:
         """Return an export-ready copy with sparse convolution wrappers.
 
         Returns:
