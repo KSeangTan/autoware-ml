@@ -295,73 +295,73 @@ class TestTransFusionHead(unittest.TestCase):
         )
         return bbox_predictions, scores, class_ids
 
-    # def test_transfusion_head_weight_init(self) -> None:
-    #     """
-    #     Test that the head weights are initialized around zero and that the dense heatmap head
-    #     keeps its negative bias, which is what stops the untrained heatmap from saturating.
-    #     """
-    #     weights = torch.cat(
-    #         [
-    #             parameter.detach().flatten()
-    #             for name, parameter in self.transfusion_head.named_parameters()
-    #             if "weight" in name
-    #         ]
-    #     )
+    def test_transfusion_head_weight_init(self) -> None:
+        """
+        Test that the head weights are initialized around zero and that the dense heatmap head
+        keeps its negative bias, which is what stops the untrained heatmap from saturating.
+        """
+        weights = torch.cat(
+            [
+                parameter.detach().flatten()
+                for name, parameter in self.transfusion_head.named_parameters()
+                if "weight" in name
+            ]
+        )
 
-    #     # Normalization layers initialize their weight to 1.0, so the mean sits slightly above
-    #     # zero rather than at it; the bound only has to catch a grossly wrong init.
-    #     self.assertLess(abs(float(weights.mean())), 0.1)
-    #     self.assertLess(float(weights.std()), 0.5)
-    #     # The last conv of the dense heatmap head carries the configured init bias.
-    #     dense_heatmap_bias = self.transfusion_head.dense_heatmap_head[-1].bias # type: ignore
-    #     self.assertTrue(
-    #         torch.allclose(
-    #             dense_heatmap_bias.detach(),
-    #             torch.full_like(dense_heatmap_bias, self.transfusion_head.heatmap_init_bias),
-    #         )
-    #     )
+        # Normalization layers initialize their weight to 1.0, so the mean sits slightly above
+        # zero rather than at it; the bound only has to catch a grossly wrong init.
+        self.assertLess(abs(float(weights.mean())), 0.1)
+        self.assertLess(float(weights.std()), 0.5)
+        # The last conv of the dense heatmap head carries the configured init bias.
+        dense_heatmap_bias = self.transfusion_head.dense_heatmap_head[-1].bias  # type: ignore
+        self.assertTrue(
+            torch.allclose(
+                dense_heatmap_bias.detach(),
+                torch.full_like(dense_heatmap_bias, self.transfusion_head.heatmap_init_bias),
+            )
+        )
 
-    # def test_forward_returns_outputs_of_expected_shape(self) -> None:
-    #     """Test that a forward pass returns every output of TransFusionHeadOutputs correctly shaped."""
-    #     outputs = self._build_head_outputs()
-    #     separate_head_outputs = outputs.separate_head_outputs
-    #     height, width = self.feature_map_size
-    #     # An auxiliary head concatenates every decoder layer along the query axis.
-    #     num_queries = self.num_decoder_layers * self.num_proposals
+    def test_forward_returns_outputs_of_expected_shape(self) -> None:
+        """Test that a forward pass returns every output of TransFusionHeadOutputs correctly shaped."""
+        outputs = self._build_head_outputs()
+        separate_head_outputs = outputs.separate_head_outputs
+        height, width = self.feature_map_size
+        # An auxiliary head concatenates every decoder layer along the query axis.
+        num_queries = self.num_decoder_layers * self.num_proposals
 
-    #     self.assertEqual(
-    #         outputs.dense_heatmaps.shape, (self.batch_size, self.num_classes, height, width)
-    #     )
-    #     self.assertEqual(outputs.query_labels.shape, (self.batch_size, self.num_proposals))
-    #     self.assertEqual(
-    #         outputs.query_heatmap_scores.shape,
-    #         (self.batch_size, self.num_classes, self.num_proposals),
-    #     )
-    #     self.assertEqual(
-    #         separate_head_outputs.heatmaps.shape,
-    #         (self.batch_size, self.num_classes, num_queries),
-    #     )
-    #     self.assertEqual(separate_head_outputs.centers.shape, (self.batch_size, 2, num_queries))
-    #     self.assertEqual(separate_head_outputs.heights.shape, (self.batch_size, 1, num_queries))
-    #     self.assertEqual(separate_head_outputs.dims.shape, (self.batch_size, 3, num_queries))
-    #     self.assertEqual(separate_head_outputs.rots.shape, (self.batch_size, 2, num_queries))
-    #     assert separate_head_outputs.vels is not None
-    #     self.assertEqual(separate_head_outputs.vels.shape, (self.batch_size, 2, num_queries))
-    #     self.assertTrue(torch.isfinite(separate_head_outputs.centers).all())
+        self.assertEqual(
+            outputs.dense_heatmaps.shape, (self.batch_size, self.num_classes, height, width)
+        )
+        self.assertEqual(outputs.query_labels.shape, (self.batch_size, self.num_proposals))
+        self.assertEqual(
+            outputs.query_heatmap_scores.shape,
+            (self.batch_size, self.num_classes, self.num_proposals),
+        )
+        self.assertEqual(
+            separate_head_outputs.heatmaps.shape,
+            (self.batch_size, self.num_classes, num_queries),
+        )
+        self.assertEqual(separate_head_outputs.centers.shape, (self.batch_size, 2, num_queries))
+        self.assertEqual(separate_head_outputs.heights.shape, (self.batch_size, 1, num_queries))
+        self.assertEqual(separate_head_outputs.dims.shape, (self.batch_size, 3, num_queries))
+        self.assertEqual(separate_head_outputs.rots.shape, (self.batch_size, 2, num_queries))
+        assert separate_head_outputs.vels is not None
+        self.assertEqual(separate_head_outputs.vels.shape, (self.batch_size, 2, num_queries))
+        self.assertTrue(torch.isfinite(separate_head_outputs.centers).all())
 
-    # def test_forward_without_auxiliary_returns_only_the_last_layer(self) -> None:
-    #     """
-    #     Test that a head built without auxiliary supervision emits one layer's worth of queries,
-    #     while the auxiliary head emits one per decoder layer.
-    #     """
-    #     transfusion_head = self._build_transfusion_head(auxiliary=False)
+    def test_forward_without_auxiliary_returns_only_the_last_layer(self) -> None:
+        """
+        Test that a head built without auxiliary supervision emits one layer's worth of queries,
+        while the auxiliary head emits one per decoder layer.
+        """
+        transfusion_head = self._build_transfusion_head(auxiliary=False)
 
-    #     outputs = self._build_head_outputs(transfusion_head)
+        outputs = self._build_head_outputs(transfusion_head)
 
-    #     self.assertEqual(
-    #         outputs.separate_head_outputs.heatmaps.shape,
-    #         (self.batch_size, self.num_classes, self.num_proposals),
-    #     )
+        self.assertEqual(
+            outputs.separate_head_outputs.heatmaps.shape,
+            (self.batch_size, self.num_classes, self.num_proposals),
+        )
 
     def test_forward_query_labels_are_valid_class_ids(self) -> None:
         """Test that the proposals selected from the dense heatmap carry in-range class ids."""
@@ -378,8 +378,6 @@ class TestTransFusionHead(unittest.TestCase):
         outputs = self._build_head_outputs(transfusion_head)
 
         self.assertIsNone(outputs.separate_head_outputs.vels)
-
-    # -------------------------------------------------------------------- dense heatmap targets
 
     def test_build_dense_heatmap_targets_peaks_at_the_box_center(self) -> None:
         """
