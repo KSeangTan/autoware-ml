@@ -1,0 +1,223 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Lidar branch of the native BEVFusion detector."""
+
+from __future__ import annotations
+
+from typing import Sequence, Any
+
+from jaxtyping import Float32, Int32, Int64
+import torch
+import torch.nn as nn
+
+from autoware_ml.dataclasses.multi_task_batch_inputs import MultiTaskBatchInputs
+from autoware_ml.models.detection3d.main_modules.bevfusion_modules.export_outputs import (
+    export_detection_outputs,
+)
+from autoware_ml.models.detection3d.main_modules.bevfusion_modules.fuser import ConvFuser
+
+
+class BEVFusionLidar(nn.Module):
+    """Encode voxelized lidar points into the BEV feature map BEVFusion fuses.
+
+    The branch owns the whole lidar path: the voxel encoder, the BEV middle encoder, and the BEV
+    backbone and neck that refine the resulting map. That mirrors the image branch, which carries
+    its own backbone and neck, so each modality is complete before the two are fused.
+
+    Both encoders are required, while the backbone and neck are optional. A BEVFusion model may be
+    configured without lidar, but that is the model's business: it simply holds no branch, rather
+    than holding a branch that cannot run.
+    """
+
+    def __init__(
+        self,
+        pts_voxel_encoder: nn.Module,
+        pts_middle_encoder: nn.Module,
+        pts_backbone: nn.Module,
+        pts_neck: nn.Module,
+        fuser: ConvFuser | None,
+    ) -> None:
+        """Initialize the lidar branch.
+
+        Args:
+            pts_voxel_encoder: Lidar voxel encoder.
+            pts_middle_encoder: Lidar BEV middle encoder.
+            pts_backbone: BEV backbone applied to the encoded map.
+            pts_neck: BEV neck applied after the backbone.
+            fuser: Optional fuser to fuse bev features from other modality.
+        """
+        super().__init__()
+        self.pts_voxel_encoder = pts_voxel_encoder
+        self.pts_middle_encoder = pts_middle_encoder
+        self.pts_backbone = pts_backbone
+        self.pts_neck = pts_neck
+        self.fuser = fuser
+
+    def forward(
+        self,
+        multi_task_batch_inputs: MultiTaskBatchInputs,
+        batch_size: int | None,
+        other_bev_features: Sequence[Float32[torch.Tensor, "batch_size num_channels height width"]]
+        | None,
+    ) -> Float32[torch.Tensor, "batch_size channels height width"]:
+        """Encode lidar voxels into a BEV feature map.
+
+        Args:
+            voxels: Lidar voxel features.
+            num_points: Number of points in each voxel.
+            voxel_coords: Voxel coordinates in ``(batch, x, y, z)`` order.
+            batch_size: Explicit batch size.
+            other_bev_features: Optional bev features from other modalities.
+
+        Returns:
+            BEV feature maps from lidar if fusion is disable, otherwise, BEV feature maps fused
+            with other modalities.
+        """
+        if multi_task_batch_inputs.voxels_data is None:
+            raise ValueError(
+                "MultiTaskBatchInputs must contain voxels_data for BEvFusionLidar forward pass."
+            )
+
+        if batch_size is None:
+            batch_size = multi_task_batch_inputs.multi_task_gt_batch.infer_batch_size()
+
+        voxel_features = self.pts_voxel_encoder(
+            voxels=multi_task_batch_inputs.voxels_data.voxels,
+            num_points=multi_task_batch_inputs.voxels_data.num_points,
+            coords=multi_task_batch_inputs.voxels_data.coords,
+        )
+        # Concat with batch_idx to make it (batch_idx, x, y, z)
+        batch_coords = torch.cat(
+            [
+                # (num_voxels,) -> (num_voxels, 1)
+                multi_task_batch_inputs.voxels_data.batch_indices.unsqueeze(1),
+                multi_task_batch_inputs.voxels_data.coords,
+            ],
+            dim=1,
+        )
+
+        bev_features = self.pts_middle_encoder(
+            voxel_features=voxel_features, coords=batch_coords, batch_size=batch_size
+        )
+
+        if other_bev_features is not None and self.fuser is not None:
+            concat_bev_features = [other_bev_features, bev_features]
+            bev_features = self.fuser(concat_bev_features)
+
+        bev_features = self.pts_neck(self.pts_backbone(bev_features))
+        return bev_features
+
+    def prepare_for_export(self) -> nn.Module:
+        """Swap the middle encoder for its ONNX-exportable variant, in place.
+
+        Returns:
+            The exportable middle encoder that replaced the original, or None when the encoder has
+            no exportable variant.
+        """
+        self.pts_middle_encoder = self.pts_middle_encoder.prepare_for_export()
+        return self.pts_middle_encoder
+
+    @staticmethod
+    def runtime_coors_to_voxel_coords(
+        coors: Int32[torch.Tensor, "num_voxels 3"],
+    ) -> Int32[torch.Tensor, "num_voxels 4"]:
+        """Convert runtime voxel coordinates into the internal layout.
+
+        The deployment runtime (``autoware_bevfusion`` voxelizes with spconv's ``Point2Voxel``)
+        provides per-voxel coordinates as ``(z, y, x)`` without a batch column; the sparse encoder
+        consumes ``(batch, z, y, x)``.
+
+        Args:
+            coors: Runtime voxel coordinates in ``(z, y, x)`` order.
+
+        Returns:
+            Voxel coordinates in ``(batch, z, y, x)`` order with a zero batch column.
+        """
+        batch_column = torch.zeros((coors.shape[0], 1), dtype=coors.dtype, device=coors.device)
+        return torch.cat((batch_column, coors), dim=1)
+
+    @staticmethod
+    def first_sample_voxel_inputs(
+        batch_inputs_dict: dict[str, Any],
+    ) -> tuple[
+        Float32[torch.Tensor, "num_voxels max_num_points num_point_features"],
+        Int32[torch.Tensor, "num_voxels 3"],
+        Int32[torch.Tensor, " num_voxels"],
+    ]:
+        """Extract single-sample voxel export inputs in the runtime layout.
+
+        The exported main body is a single-sample graph, so only voxels of the first batch sample
+        are kept. Coordinates are converted from the internal ``(batch, z, y, x)`` layout to the
+        runtime ``(z, y, x)`` layout without the batch column.
+
+        Args:
+            batch_inputs_dict: Batched model inputs used to derive export tensors.
+
+        Returns:
+            Tuple of voxels, runtime-ordered coordinates, and per-voxel point counts for the first
+            sample.
+        """
+        voxel_coords = batch_inputs_dict["voxel_coords"]
+        first_sample = voxel_coords[:, 0] == 0
+        voxels = batch_inputs_dict["voxels"][first_sample]
+        coors = voxel_coords[first_sample][:, 1:].int().contiguous()
+        num_points_per_voxel = batch_inputs_dict["num_points"][first_sample].int()
+        return voxels, coors, num_points_per_voxel
+
+
+class BEVFusionLidarExportWrapper(nn.Module):
+    """Wrap the lidar-only BEVFusion main body export.
+
+    Used when the image branch is disabled. The wrapper exposes the same
+    single-sample tensor interface as the camera-lidar main body without the
+    image inputs.
+    """
+
+    def __init__(self, model: BEVFusionLidar) -> None:
+        """Initialize the lidar export wrapper.
+
+        Args:
+            model: BEVFusion model instance.
+        """
+        super().__init__()
+        self.model = model
+
+    def forward(
+        self,
+        voxels: Float32[torch.Tensor, "num_voxels max_num_points num_point_features"],
+        coors: Int32[torch.Tensor, "num_voxels 3"],
+        num_points_per_voxel: Int32[torch.Tensor, " num_voxels"],
+    ) -> tuple[
+        Float32[torch.Tensor, "num_box_code num_proposals"],
+        Float32[torch.Tensor, " num_proposals"],
+        Int64[torch.Tensor, " num_proposals"],
+    ]:
+        """Run export-time inference on lidar voxel inputs.
+
+        Args:
+            voxels: Voxel features.
+            coors: Voxel coordinates in ``(z, y, x)`` order without batch column.
+            num_points_per_voxel: Number of points in each voxel.
+
+        Returns:
+            Tuple of ``bbox_pred``, ``score``, and ``label_pred``.
+        """
+        outputs = self.model._forward_with_batch_size(
+            voxels=voxels,
+            num_points=num_points_per_voxel,
+            voxel_coords=BEVFusionLidar.runtime_coors_to_voxel_coords(coors),
+            batch_size=1,
+        )
+        return export_detection_outputs(self.model.bbox_head, outputs)
