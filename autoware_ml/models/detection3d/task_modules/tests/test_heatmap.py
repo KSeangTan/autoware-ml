@@ -443,8 +443,10 @@ class TestBatchCircleNMS(unittest.TestCase):
         self.device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
         self.batch_size = 2
         self.num_classes = 3
-        self.min_radius = 1.0
-        self.post_max_size = 10
+        # batch_circle_nms takes one value per class channel, never a scalar, so the shared
+        # defaults are spelled out per class here.
+        self.min_radii = [1.0] * self.num_classes
+        self.post_max_sizes = [10] * self.num_classes
 
     def _build_inputs(
         self,
@@ -521,9 +523,9 @@ class TestBatchCircleNMS(unittest.TestCase):
         keep_masks = batch_circle_nms(
             bboxes_centers=centers,
             scores=scores,
-            min_radius=self.min_radius,
+            min_radii=self.min_radii,
             valid_bboxes_masks=valid_masks,
-            post_max_size=self.post_max_size,
+            post_max_sizes=self.post_max_sizes,
         )
 
         # Second and fourth boxes are suppressed by the first and third boxes in each
@@ -545,9 +547,9 @@ class TestBatchCircleNMS(unittest.TestCase):
         keep_masks = batch_circle_nms(
             bboxes_centers=centers,
             scores=scores,
-            min_radius=2.0,
+            min_radii=[2.0] * self.num_classes,
             valid_bboxes_masks=valid_masks,
-            post_max_size=self.post_max_size,
+            post_max_sizes=self.post_max_sizes,
         )
 
         # The middle box is suppressed by the first box, but the last box survives because it is
@@ -570,9 +572,9 @@ class TestBatchCircleNMS(unittest.TestCase):
         keep_masks = batch_circle_nms(
             bboxes_centers=centers,
             scores=scores,
-            min_radius=self.min_radius,
+            min_radii=self.min_radii,
             valid_bboxes_masks=valid_masks,
-            post_max_size=self.post_max_size,
+            post_max_sizes=self.post_max_sizes,
         )
 
         # The first box is invalid and dropped, so the second box survives even though they overlap
@@ -592,9 +594,9 @@ class TestBatchCircleNMS(unittest.TestCase):
         keep_masks = batch_circle_nms(
             bboxes_centers=centers,
             scores=scores,
-            min_radius=self.min_radius,
+            min_radii=self.min_radii,
             valid_bboxes_masks=valid_masks,
-            post_max_size=2,
+            post_max_sizes=[2] * self.num_classes,
         )
 
         # Only the 0.9 and 0.8 boxes fit under the post_max_size cap, so the 0.6 and 0.7
@@ -617,9 +619,9 @@ class TestBatchCircleNMS(unittest.TestCase):
         keep_masks = batch_circle_nms(
             bboxes_centers=centers,
             scores=scores,
-            min_radius=self.min_radius,
+            min_radii=self.min_radii,
             valid_bboxes_masks=valid_masks,
-            post_max_size=self.post_max_size,
+            post_max_sizes=self.post_max_sizes,
         )
 
         # Each row independently keeps its own top box, for all num_classes*batch_size rows
@@ -641,9 +643,9 @@ class TestBatchCircleNMS(unittest.TestCase):
         keep_masks = batch_circle_nms(
             bboxes_centers=centers,
             scores=scores,
-            min_radius=[0.45, 1.0, 6.0],
+            min_radii=[0.45, 1.0, 6.0],
             valid_bboxes_masks=valid_masks,
-            post_max_size=self.post_max_size,
+            post_max_sizes=self.post_max_sizes,
         )
 
         expected_keep_masks = self._expected_keep_masks_per_class(
@@ -671,9 +673,9 @@ class TestBatchCircleNMS(unittest.TestCase):
         keep_masks = batch_circle_nms(
             bboxes_centers=centers,
             scores=scores,
-            min_radius=self.min_radius,
+            min_radii=self.min_radii,
             valid_bboxes_masks=valid_masks,
-            post_max_size=[1, 2, 10],
+            post_max_sizes=[1, 2, 10],
         )
 
         expected_keep_masks = self._expected_keep_masks_per_class(
@@ -701,9 +703,9 @@ class TestBatchCircleNMS(unittest.TestCase):
         keep_masks = batch_circle_nms(
             bboxes_centers=centers,
             scores=scores,
-            min_radius=[6.0, 1.0, 0.45],
+            min_radii=[6.0, 1.0, 0.45],
             valid_bboxes_masks=valid_masks,
-            post_max_size=[10, 1, 2],
+            post_max_sizes=[10, 1, 2],
         )
 
         expected_keep_masks = self._expected_keep_masks_per_class(
@@ -718,29 +720,33 @@ class TestBatchCircleNMS(unittest.TestCase):
         )
         self.assertTrue(torch.equal(keep_masks, expected_keep_masks))
 
-    def test_batch_circle_nms_scalar_parameters_match_uniform_sequences(self) -> None:
-        """Test that a scalar parameter behaves exactly like the equivalent uniform sequence."""
+    def test_batch_circle_nms_rejects_scalar_parameters(self) -> None:
+        """
+        Test that a scalar is rejected rather than broadcast, so a caller always states the
+        per-class length explicitly and cannot silently apply one class's radius to all of them.
+        """
         centers, scores, valid_masks = self._build_inputs(
-            centers=[[0.0, 0.0], [0.5, 0.0], [5.0, 0.0], [5.4, 0.0]],
-            scores=[0.9, 0.8, 0.7, 0.6],
+            centers=[[0.0, 0.0], [0.5, 0.0]],
+            scores=[0.9, 0.8],
         )
 
-        scalar_keep_masks = batch_circle_nms(
-            bboxes_centers=centers,
-            scores=scores,
-            min_radius=1.0,
-            valid_bboxes_masks=valid_masks,
-            post_max_size=2,
-        )
-        sequence_keep_masks = batch_circle_nms(
-            bboxes_centers=centers,
-            scores=scores,
-            min_radius=[1.0] * self.num_classes,
-            valid_bboxes_masks=valid_masks,
-            post_max_size=[2] * self.num_classes,
-        )
+        with self.assertRaises(TypeError):
+            batch_circle_nms(
+                bboxes_centers=centers,
+                scores=scores,
+                min_radii=1.0,
+                valid_bboxes_masks=valid_masks,
+                post_max_sizes=self.post_max_sizes,
+            )
 
-        self.assertTrue(torch.equal(scalar_keep_masks, sequence_keep_masks))
+        with self.assertRaises(TypeError):
+            batch_circle_nms(
+                bboxes_centers=centers,
+                scores=scores,
+                min_radii=self.min_radii,
+                valid_bboxes_masks=valid_masks,
+                post_max_sizes=2,
+            )
 
     def test_batch_circle_nms_per_class_matches_per_class_scalar_calls(self) -> None:
         """
@@ -757,9 +763,9 @@ class TestBatchCircleNMS(unittest.TestCase):
         per_class_keep_masks = batch_circle_nms(
             bboxes_centers=centers,
             scores=scores,
-            min_radius=min_radii,
+            min_radii=min_radii,
             valid_bboxes_masks=valid_masks,
-            post_max_size=post_max_sizes,
+            post_max_sizes=post_max_sizes,
         )
 
         for class_id in range(self.num_classes):
@@ -767,9 +773,9 @@ class TestBatchCircleNMS(unittest.TestCase):
             scalar_keep_masks = batch_circle_nms(
                 bboxes_centers=centers[:, class_slice],
                 scores=scores[:, class_slice],
-                min_radius=min_radii[class_id],
+                min_radii=[min_radii[class_id]],
                 valid_bboxes_masks=valid_masks[:, class_slice],
-                post_max_size=post_max_sizes[class_id],
+                post_max_sizes=[post_max_sizes[class_id]],
             )
             self.assertTrue(
                 torch.equal(per_class_keep_masks[:, class_slice], scalar_keep_masks),
@@ -787,18 +793,18 @@ class TestBatchCircleNMS(unittest.TestCase):
             batch_circle_nms(
                 bboxes_centers=centers,
                 scores=scores,
-                min_radius=[1.0] * (self.num_classes - 1),
+                min_radii=[1.0] * (self.num_classes - 1),
                 valid_bboxes_masks=valid_masks,
-                post_max_size=self.post_max_size,
+                post_max_sizes=self.post_max_sizes,
             )
 
         with self.assertRaises(ValueError):
             batch_circle_nms(
                 bboxes_centers=centers,
                 scores=scores,
-                min_radius=self.min_radius,
+                min_radii=self.min_radii,
                 valid_bboxes_masks=valid_masks,
-                post_max_size=[2] * (self.num_classes + 1),
+                post_max_sizes=[2] * (self.num_classes + 1),
             )
 
 

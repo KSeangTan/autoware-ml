@@ -154,9 +154,9 @@ class SeparateHead1D(nn.Module):
             layers.append(nn.Conv1d(current_channels, out_channels, kernel_size=1))
             self.heads[name] = nn.Sequential(*layers)
 
-        heatmaps = self.heads.get("heatmap", None)  # type: ignore
-        if heatmaps is not None:
-            nn.init.constant(heatmaps[-1].bias, -2.19)
+        # nn.ModuleDict has no .get, so membership has to be tested explicitly.
+        if "heatmaps" in self.heads:
+            nn.init.constant_(self.heads["heatmaps"][-1].bias, -2.19)  # type: ignore
 
     def forward(
         self, query_feats: Float32[torch.Tensor, "batch_size num_channels num_queries"]
@@ -335,15 +335,15 @@ class TransFusionHead(nn.Module):
         """
         prediction_head_configs = dict(prediction_head_configs)
         if (
-            "heatmap" in prediction_head_configs
-            and prediction_head_configs["heatmap"][0] != self.num_classes
+            "heatmaps" in prediction_head_configs
+            and prediction_head_configs["heatmaps"][0] != self.num_classes
         ):
             raise ValueError(
                 "TransFusionHead prediction heatmap head is not compatible "
                 "with the number of classes."
             )
         else:
-            prediction_head_configs["heatmap"] = (self.num_classes, 2)
+            prediction_head_configs["heatmaps"] = (self.num_classes, 2)
 
         if not self.use_velocity and "vels" in prediction_head_configs:
             prediction_head_configs.pop("vels")
@@ -567,7 +567,7 @@ class TransFusionHead(nn.Module):
         predictions: list[TransFusionSeparateHeadOutputs] = []
         for decoder_layer, prediction_head in zip(self.decoder, self.prediction_heads):
             query_feat = decoder_layer(
-                query=query_feats, key=flatten_bev_features, query_pos=query_pos, bev_pos=bev_pos
+                query=query_feats, key=flatten_bev_features, query_pos=query_pos, key_pos=bev_pos
             )
             prediction: TransFusionSeparateHeadOutputs = prediction_head(query_feat)
             centers = prediction.centers + query_pos.permute(0, 2, 1)
@@ -733,7 +733,8 @@ class TransFusionHead(nn.Module):
         # -> (num_groups, batch_size, num_proposals) -> (batch_size, num_groups, num_proposals)
         group_masks = (group_class_masks[:, bbox_classes] & keep_masks).permute(1, 0, 2)
 
-        # Every channel sees the same boxes; only the validity mask differs, so these are views.
+        # Every channel sees the same boxes. Only the validity mask differs, so these are views
+        # even they expand same bboxes across groups.
         # (batch_size, num_groups, num_proposals, 2) and (batch_size, num_groups, num_proposals)
         group_centers = bbox_centers.unsqueeze(1).expand(
             batch_size, num_groups, num_proposals, bbox_centers.shape[-1]
@@ -745,9 +746,9 @@ class TransFusionHead(nn.Module):
         group_keep_masks = batch_circle_nms(
             bboxes_centers=group_centers,
             scores=group_scores,
-            min_radius=[float(group.nms_radius) for group in self.nms_groups],
+            min_radii=[float(group.nms_radius) for group in self.nms_groups],
             valid_bboxes_masks=group_masks,
-            post_max_size=[int(group.max_size) for group in self.nms_groups],
+            post_max_sizes=[int(group.max_size) for group in self.nms_groups],
         )
 
         # Groups are disjoint, so a proposal enters at most one channel and is kept exactly when
@@ -893,11 +894,8 @@ class TransFusionHead(nn.Module):
         max_num_bboxes = gt_bboxes_3d.shape[1]
         feature_height, feature_width = feature_map_size
 
-        # Movement of tensors to the correct device and type
-        # Get only the first K params for ground truths
-        gt_bboxes_3d[:, :, : self.box_code_size] = gt_bboxes_3d[:, :, : self.box_code_size].to(
-            device=device
-        )
+        # Movement of tensors to the correct device
+        gt_bboxes_3d = gt_bboxes_3d.to(device=device)
 
         # Vectorization implementation instead of for-loops
         center_x = (
@@ -1060,6 +1058,7 @@ class TransFusionHead(nn.Module):
 
         num_pos = sum(layer.num_pos for layer in layer_targets)
         matched_iou_sum = sum(layer.matched_iou_sum for layer in layer_targets)
+
         return TransFusionHeadTargets(
             dense_heatmaps=dense_heatmap_targets,
             labels=torch.cat([layer.labels for layer in layer_targets], dim=1),

@@ -561,8 +561,11 @@ class CenterHead(nn.Module):
             bboxes_centers=bboxes_centers,
             scores=top_scores,
             valid_bboxes_masks=valid_bboxes_masks,
-            post_max_size=self.post_max_size,
-            min_radius=self.nms_min_radius,
+            # One radius and one cap per class channel; this head applies the same to every class.
+            # The length comes from the channel count of the outputs being decoded, which is what
+            # batch_circle_nms sees, rather than from self.num_classes.
+            post_max_sizes=[self.post_max_size] * num_classes,
+            min_radii=[self.nms_min_radius] * num_classes,
         )
         # Filter the predictions based on the keep_masks and return MultiTaskPredictions
         multi_task_predictions = self._filter_bbox_predictions(

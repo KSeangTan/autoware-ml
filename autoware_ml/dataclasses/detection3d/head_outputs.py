@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Sequence
 from types import MappingProxyType
 
-from jaxtyping import Float32
+from jaxtyping import Float32, Int64
 from pydantic import BaseModel, ConfigDict
 
 import torch
@@ -82,8 +82,8 @@ class TransFusionHeadOutputs(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
 
     dense_heatmaps: Float32[torch.Tensor, "batch_size num_classes height width"]
-    query_heatmap_scores: Float32[torch.Tensor, "batch_size num_queries num_classes"]
-    query_labels: Float32[torch.Tensor, "batch_size num_queries 1"]
+    query_heatmap_scores: Float32[torch.Tensor, "batch_size num_classes num_queries"]
+    query_labels: Int64[torch.Tensor, "batch_size num_queries"]
 
     separate_head_outputs: TransFusionSeparateHeadOutputs
 

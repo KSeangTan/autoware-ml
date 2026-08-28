@@ -14,44 +14,12 @@ import math
 import torch
 
 
-def _broadcast_per_class(
-    value: float | int | Sequence[float] | Sequence[int],
-    num_classes: int,
-    name: str,
-    device: torch.device,
-    dtype: torch.dtype,
-) -> torch.Tensor:
-    """
-    Normalize a per-class NMS parameter into a (num_classes,) tensor.
-
-    Args:
-        value: A scalar applied to every class, or one value per class.
-        num_classes: Number of class channels the value must cover.
-        name: Parameter name, used in the error message.
-        device: Device of the produced tensor.
-        dtype: Dtype of the produced tensor.
-
-    Returns:
-        The parameter as a (num_classes,) tensor.
-    """
-    if isinstance(value, (int, float)):
-        return torch.full((num_classes,), value, device=device, dtype=dtype)
-
-    values = list(value)
-    if len(values) != num_classes:
-        raise ValueError(
-            f"batch_circle_nms {name} must provide one value per class: got {len(values)} "
-            f"values for {num_classes} classes."
-        )
-    return torch.tensor(values, device=device, dtype=dtype)
-
-
 def batch_circle_nms(
     bboxes_centers: Float32[torch.Tensor, "batch_size num_classes max_num_boxes 2"],
     scores: Float32[torch.Tensor, "batch_size num_classes max_num_boxes"],
-    min_radius: float | Sequence[float],
+    min_radii: Sequence[float],
     valid_bboxes_masks: Bool[torch.Tensor, "batch_size num_classes max_num_boxes"],
-    post_max_size: int | Sequence[int],
+    post_max_sizes: Sequence[int],
 ) -> Bool[torch.Tensor, "batch_size num_classes max_num_boxes"]:
     """
     Apply greedy center-distance NMS for each batch and classes in the BEV plane.
@@ -61,30 +29,34 @@ def batch_circle_nms(
     all vehicles from the first batch are in [0, 0, :, :]. Also, max_num_bboxes includes padded
     boxes for each batch and class.
 
-    Both ``min_radius`` and ``post_max_size`` accept either a scalar, applied to every class
-    channel, or one value per channel. Per-channel values let callers that use the class axis as a
-    group axis, where each group carries its own radius and cap, do the whole batch in one call.
+    Both ``min_radii`` and ``post_max_sizes`` take one value per class channel, never a scalar,
+    so the per-class length is always explicit at the call site. Callers that use the class axis as
+    a group axis, where each group carries its own radius and cap, therefore do the whole batch in
+    one call; callers wanting the same value everywhere pass [value] * num_classes.
 
     Args:
         bboxes_centers: Decoded box centers in metric space.
         scores: Confidence scores for the boxes.
-        min_radius: Minimum center distance for suppression, as a scalar or one value per class.
+        min_radii: Minimum center distance for suppression, one value per class.
         valid_bboxes_masks: Boolean mask indicating which boxes are valid and should be considered for NMS.
-        post_max_size: Maximum number of boxes kept after suppression, counted per class, as a
-            scalar or one value per class.
+        post_max_sizes: Maximum number of boxes kept after suppression, counted per class, one
+            value per class.
 
     Returns:
         Boolean mask of the boxes kept after suppression, aligned with the input order.
     """
     batch_size, num_classes, max_num_bboxes = scores.shape
-    # (num_classes,) each, so both parameters broadcast over the batch and box axes below.
-    min_radii = _broadcast_per_class(
-        min_radius, num_classes, "min_radius", scores.device, scores.dtype
-    )
-    post_max_sizes = _broadcast_per_class(
-        post_max_size, num_classes, "post_max_size", scores.device, torch.long
-    )
     num_dimensions = bboxes_centers.shape[-1]
+    if len(min_radii) != num_classes or len(post_max_sizes) != num_classes:
+        raise ValueError(
+            "batch_circle_nms min_radii and post_max_sizes must hold one value per class: got "
+            f"{len(min_radii)} radii and {len(post_max_sizes)} sizes for {num_classes} classes."
+        )
+    # (num_classes,) each, so both parameters broadcast over the batch and box axes below.
+    per_class_min_radii = torch.tensor(list(min_radii), device=scores.device, dtype=scores.dtype)
+    per_class_post_max_sizes = torch.tensor(
+        list(post_max_sizes), device=scores.device, dtype=torch.long
+    )
 
     # max_num_bboxes includes padded boxes for each batch and class.
     # (batch_size, num_classes, max_num_bboxes)
@@ -107,7 +79,7 @@ def batch_circle_nms(
 
     # Keeps a box only when its center distance is strictly greater than min_radius.
     # (batch_size, num_classes, max_num_bboxes, max_num_bboxes) <= (1, num_classes, 1, 1)
-    pairwise_suppression = pairwise_distances <= min_radii.view(1, num_classes, 1, 1)
+    pairwise_suppression = pairwise_distances <= per_class_min_radii.view(1, num_classes, 1, 1)
 
     # Only a higher scoring box may suppress a lower scoring one. After the descending sort
     # that is exactly the strict upper triangle.
@@ -141,7 +113,9 @@ def batch_circle_nms(
     # Accumulate sum for each class to ensure that no more than post_max_size boxes
     # are kept per class.
     # (batch_size, num_classes, max_num_bboxes) <= (1, num_classes, 1)
-    sorted_keep_masks &= sorted_keep_masks.cumsum(dim=2) <= post_max_sizes.view(1, num_classes, 1)
+    sorted_keep_masks &= sorted_keep_masks.cumsum(dim=2) <= per_class_post_max_sizes.view(
+        1, num_classes, 1
+    )
 
     # Inverse the order to get the original index of each bbox in the unsorted position.
     inverse_orders = orders.argsort(dim=2, stable=True)
