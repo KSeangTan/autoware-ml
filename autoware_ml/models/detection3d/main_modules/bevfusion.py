@@ -35,13 +35,9 @@ from torch.optim.lr_scheduler import LRScheduler
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 from autoware_ml.models.base import BaseModel
-from autoware_ml.models.detection3d.feature_extractors import (
-    MultiviewImageFeatureExtractor,
-)
-from autoware_ml.models.detection3d.main_modules.bevfusion_modules import (
+from autoware_ml.models.detection3d.main_modules.bevfusions.bevfusion_lidar import (
     BEVFusionLidar,
     BEVFusionLidarExportWrapper,
-    export_detection_outputs,
 )
 from autoware_ml.utils.deploy import ExportSpec
 from autoware_ml.utils.point_cloud.batching import infer_batch_size_from_voxel_coords
@@ -116,36 +112,6 @@ class _BEVFusionExportWrapper(nn.Module):
         return export_detection_outputs(self.model.bbox_head, outputs)
 
 
-class _BEVFusionImageBackboneExportWrapper(nn.Module):
-    """Wrap the multiview image backbone export.
-
-    The wrapper consumes raw ``uint8`` images and bakes the training-time
-    ``1 / 255`` normalization into the graph.
-    """
-
-    def __init__(self, model: BEVFusionDetectionModel) -> None:
-        """Initialize the image backbone export wrapper.
-
-        Args:
-            model: BEVFusion model instance.
-        """
-        super().__init__()
-        self.model = model
-
-    def forward(self, imgs: torch.Tensor) -> torch.Tensor:
-        """Encode raw multiview images into neck features.
-
-        Args:
-            imgs: Raw multiview images of shape ``(N, 3, H, W)`` with
-                ``uint8`` values.
-
-        Returns:
-            Image neck features of shape ``(N, C, fH, fW)``.
-        """
-        images = imgs.float() / 255.0
-        return self.model.get_image_backbone_features(images.unsqueeze(0)).squeeze(0)
-
-
 class BEVFusionDetectionModel(BaseModel):
     """Compose a BEVFusion detector with camera and lidar branches.
 
@@ -199,13 +165,14 @@ class BEVFusionDetectionModel(BaseModel):
             else None
         )
         self.bbox_head = bbox_head
-        self.img_backbone = img_backbone
-        self.img_neck = img_neck
-        self.view_transform = view_transform
         self.fusion_layer = fusion_layer
-        self.image_feature_extractor = (
-            MultiviewImageFeatureExtractor(img_backbone=img_backbone, img_neck=img_neck)
-            if img_backbone is not None and img_neck is not None
+        self.camera = (
+            BEVFusionCamera(
+                img_backbone=img_backbone,
+                img_neck=img_neck,
+                view_transform=view_transform,
+            )
+            if img_backbone is not None and img_neck is not None and view_transform is not None
             else None
         )
         self._validate_geometry_contract()
@@ -217,14 +184,14 @@ class BEVFusionDetectionModel(BaseModel):
             ValueError: If configured lidar and image BEV branches do not
                 agree on the BEV spatial shape.
         """
-        if self.view_transform is None or self.lidar is None:
+        if self.camera is None or self.lidar is None:
             return
-        if not hasattr(self.view_transform, "expected_bev_shape"):
+        image_bev_shape = self.camera.expected_bev_shape
+        if image_bev_shape is None:
             return
         if not hasattr(self.lidar.pts_middle_encoder, "output_shape"):
             return
 
-        image_bev_shape = tuple(int(value) for value in self.view_transform.expected_bev_shape)
         lidar_bev_shape = tuple(int(value) for value in self.lidar.pts_middle_encoder.output_shape)
         if image_bev_shape != lidar_bev_shape:
             raise ValueError(
@@ -254,105 +221,6 @@ class BEVFusionDetectionModel(BaseModel):
                     "BEVFusion branches must share the same runtime BEV shape before fusion. "
                     f"Expected {reference_shape}, got {feature_shape}."
                 )
-
-    def _build_image_bev(
-        self,
-        img: Sequence[torch.Tensor],
-        points: Sequence[torch.Tensor],
-        lidar2img: Sequence[torch.Tensor],
-        camera_intrinsics: Sequence[torch.Tensor],
-        lidar2cam: Sequence[torch.Tensor],
-        geom_feats_precomputed: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
-        | None = None,
-        image_feature: torch.Tensor | None = None,
-        img_aug_matrix: torch.Tensor | None = None,
-        lidar_aug_matrix: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Encode multiview images into a BEV feature map.
-
-        Args:
-            img: Multiview image tensors.
-            points: Per-sample lidar points used for depth guidance.
-            lidar2img: Lidar-to-image projection matrices. The training
-                pipeline bakes image augmentation into these, so the default
-                identity ``img_aug_matrix`` keeps the projection consistent.
-            camera_intrinsics: Camera intrinsic matrices.
-            lidar2cam: Lidar-to-camera extrinsics.
-            geom_feats_precomputed: Optional precomputed BEV-pool metadata.
-            image_feature: Optional precomputed image feature tensor.
-            img_aug_matrix: Optional image augmentation matrices.
-            lidar_aug_matrix: Optional lidar augmentation matrices.
-
-        Returns:
-            Image BEV feature map.
-        """
-        if self.image_feature_extractor is None or self.view_transform is None:
-            raise ValueError("Image branch is not configured.")
-        if image_feature is None:
-            image_batch = (
-                torch.stack(list(img), dim=0).float()
-                if isinstance(img, (list, tuple))
-                else img.float()
-            )
-            if image_batch.dim() != 5:
-                raise ValueError(
-                    "Expected image batch with shape (B, N, C, H, W), "
-                    f"got {tuple(image_batch.shape)}"
-                )
-            batch_size, num_cams = image_batch.shape[:2]
-            image_feature = self.image_feature_extractor(image_batch)
-        else:
-            batch_size, num_cams = image_feature.shape[:2]
-
-        intrinsics = (
-            torch.stack(list(camera_intrinsics), dim=0).float()
-            if isinstance(camera_intrinsics, (list, tuple))
-            else camera_intrinsics.float()
-        )
-        lidar2cam_tensor = (
-            torch.stack(list(lidar2cam), dim=0).float()
-            if isinstance(lidar2cam, (list, tuple))
-            else lidar2cam.float()
-        )
-        lidar2image = (
-            torch.stack(list(lidar2img), dim=0).float()
-            if isinstance(lidar2img, (list, tuple))
-            else lidar2img.float()
-        )
-        camera2lidar = torch.inverse(lidar2cam_tensor)
-        if img_aug_matrix is None:
-            img_aug_matrix = (
-                torch.eye(4, device=image_feature.device)
-                .view(1, 1, 4, 4)
-                .repeat(batch_size, num_cams, 1, 1)
-            )
-        if lidar_aug_matrix is None:
-            lidar_aug_matrix = (
-                torch.eye(4, device=image_feature.device).view(1, 4, 4).repeat(batch_size, 1, 1)
-            )
-        return self.view_transform(
-            image_feature,
-            points,
-            lidar2image,
-            intrinsics,
-            camera2lidar,
-            img_aug_matrix,
-            lidar_aug_matrix,
-            geom_feats_precomputed=geom_feats_precomputed,
-        )
-
-    def get_image_backbone_features(self, image_batch: torch.Tensor) -> torch.Tensor:
-        """Encode multiview images into neck features expected by the view transform.
-
-        Args:
-            image_batch: Image batch with shape ``(B, N, C, H, W)``.
-
-        Returns:
-            Neck feature tensor consumed by the view transform.
-        """
-        if self.image_feature_extractor is None:
-            raise ValueError("Image branch is not configured.")
-        return self.image_feature_extractor(image_batch)
 
     def _forward_export(
         self,
@@ -386,17 +254,17 @@ class BEVFusionDetectionModel(BaseModel):
         Returns:
             Detection head outputs produced by the export path.
         """
-        if self.view_transform is None:
+        if self.camera is None:
             raise ValueError("Image branch is not configured.")
-        image_bev = self.view_transform.forward_precomputed(
-            image_feats.unsqueeze(0),
-            [points],
-            lidar2image.unsqueeze(0),
-            img_aug_matrix.unsqueeze(0),
-            geom_feats.long(),
-            kept,
-            ranks,
-            indices,
+        image_bev = self.camera.forward_export(
+            points=points,
+            lidar2image=lidar2image,
+            img_aug_matrix=img_aug_matrix,
+            geom_feats=geom_feats,
+            kept=kept,
+            ranks=ranks,
+            indices=indices,
+            image_feats=image_feats,
         )
 
         return self._forward_with_batch_size(
@@ -456,9 +324,9 @@ class BEVFusionDetectionModel(BaseModel):
                 raise ValueError(
                     "BEVFusion image branch requires points and lidar2img for depth guidance."
                 )
-            bev_features.append(
-                self._build_image_bev(img, points, lidar2img, camera_intrinsics, lidar2cam)
-            )
+            if self.camera is None:
+                raise ValueError("Image branch is not configured.")
+            bev_features.append(self.camera(img, points, lidar2img, camera_intrinsics, lidar2cam))
 
         if not bev_features:
             raise ValueError("At least one BEV branch must be provided.")
@@ -595,7 +463,7 @@ class BEVFusionDetectionModel(BaseModel):
         )
         export_model = self._prepare_export_model()
 
-        if self.view_transform is None:
+        if self.camera is None:
             return {
                 "bevfusion_lidar": ExportSpec(
                     module=BEVFusionLidarExportWrapper(export_model),
@@ -617,23 +485,15 @@ class BEVFusionDetectionModel(BaseModel):
         lidar2image_raw = torch.inverse(img_aug_matrix).matmul(lidar2img)
 
         imgs_uint8 = (img[0] * 255.0).round().clamp(0.0, 255.0).to(torch.uint8)
-        image_feats = self.get_image_backbone_features(img)[0]
+        image_feats = self.camera.extract_image_features(img)[0]
 
-        camera2lidar = torch.inverse(lidar2cam)
-        identity_aug = (
-            torch.eye(4, device=img.device).view(1, 1, 4, 4).repeat(1, img.shape[1], 1, 1)
+        geom_feats, kept, ranks, indices = self.camera.build_export_geometry(
+            camera_intrinsics, lidar2cam
         )
-        geom = self.view_transform.camera_to_lidar_geometry(
-            camera2lidar,
-            camera_intrinsics,
-            torch.eye(4, device=img.device).view(1, 4, 4),
-            identity_aug,
-        )
-        geom_feats, kept, ranks, indices = self.view_transform.bev_pool_aux(geom)
 
         return {
             "bevfusion_image_backbone": ExportSpec(
-                module=_BEVFusionImageBackboneExportWrapper(export_model),
+                module=BEVFusionImageBackboneExportWrapper(export_model.camera),
                 args=(imgs_uint8,),
                 input_param_names=["imgs"],
             ),
