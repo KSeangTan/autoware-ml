@@ -9,10 +9,12 @@ from torch import Tensor
 from autoware_ml.datamodule.multi_task.dataclasses.detection3d import (
     Detection3DGTBatch,
 )
+from autoware_ml.datamodule.multi_task.dataclasses.images import ImageGTBatch
 from autoware_ml.datamodule.multi_task.dataclasses.segmentation3d import Segmentation3DGTSample
 from autoware_ml.datamodule.multi_task.dataclasses.transformation import LiDARTransformationSample
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.geometry.points.base_points import BasePoints
+from autoware_ml.geometry.cameras.base_images import BaseImages
 
 
 class PointCloudGTBatch(NamedTuple):
@@ -96,6 +98,27 @@ class LiDARPointCloudSample(NamedTuple):
     lidar_sensor_to_lidar_sweep_matrix: Float32[Tensor, "4 4"]  # (4, 4)
 
 
+class ImageSample(NamedTuple):
+    """
+    Named tuple to represent a single row of image data, which contains the dataset record for the
+    image task.
+    """
+
+    image_path: str
+    camera_name: str
+    timestamp: float
+    # Transformation matrix for camera_intrinsics
+    camera_intrinsic: Float32[Tensor, "3 3"]
+    # Transformation matrix for lidar to camera
+    lidar2cam: Float32[Tensor, "4 4"]
+    # Transformation matrix for lidar to image
+    lidar2image: Float32[Tensor, "4 4"]
+    distortion_model: str
+    # Distortion coefficients following the OpenCV convention ``(k1, k2, p1, p2[, k3[, ...]])``.
+    # The length varies by distortion model (4, 5, 8, 12 or 14), empty for undistorted images.
+    distortion_coefficients: Float32[Tensor, " num_coefficients"]
+
+
 class MultiTaskGTSample(NamedTuple):
     """
     Named tuple to represent a single row/sample of multi-task data when inputting to the
@@ -104,10 +127,15 @@ class MultiTaskGTSample(NamedTuple):
 
     # Can be multi-sweep LiDAR point cloud data, which is a list of LiDAR point cloud data rows for each sweep.
     lidar_point_cloud_samples: Sequence[LiDARPointCloudSample] | None
+    # Sequence of image data, which is a list of image data row for each sample.
+    image_samples: Sequence[ImageSample] | None
 
     # (number of point clouds, number of features for each point), can be None
     # if it doesn't need to be loaded
     point_cloud_data: BasePoints | None
+
+    # (num_cameras, num_channels, height, width), can be None if it doesn't need to be loaded
+    camera_image_data: BaseImages | None
 
     detection3d_gt_bboxes_3d: BaseBBoxes3D | None
     segmentation3d_gt_sample: Segmentation3DGTSample | None
@@ -129,7 +157,11 @@ class MultiTaskGTBatch(NamedTuple):
     # 3D branch
     point_cloud_gt_batch: PointCloudGTBatch | None
     detection3d_gt_batch: Detection3DGTBatch | None
+
     # TODO (Kok Seang): 3D segmentation
+
+    # Images
+    image_gt_batch: ImageGTBatch | None
 
     # Summed io_processing_time of every sample collated into this batch.
     io_processing_time: float = 0.0
@@ -151,6 +183,9 @@ class MultiTaskGTBatch(NamedTuple):
             detection3d_gt_batch=self.detection3d_gt_batch.to_device(device)
             if self.detection3d_gt_batch is not None
             else None,
+            image_gt_batch=self.image_gt_batch.to_device(device)
+            if self.image_gt_batch is not None
+            else None,
             io_processing_time=self.io_processing_time,
         )
 
@@ -165,6 +200,8 @@ class MultiTaskGTBatch(NamedTuple):
             return torch.max(self.point_cloud_gt_batch.batch_indices) + 1
         elif self.detection3d_gt_batch is not None:
             return self.detection3d_gt_batch.gt_bboxes_3d.shape[0]
+        elif self.image_gt_batch is not None:
+            return self.image_gt_batch.images.shape[0]
         else:
             raise ValueError("Cannot infer batch size from an empty MultiTaskGTBatch.")
 
@@ -234,6 +271,37 @@ class MultiTaskGTBatch(NamedTuple):
         return detection3d_gt_batch
 
     @staticmethod
+    def collate_image_gt_samples(gt_samples: Sequence[MultiTaskGTSample]) -> ImageGTBatch | None:
+        """
+        Collate sequence of MultiTaskGTSample into a ImagesGtBatch
+
+        Args:
+          gt_samples: Sequence of MultiTaskGTSample to be collated.
+          max_num_3d_gt_bboxes: The maximum number of 3D ground truth bounding boxes
+            for each sample in the batch.
+
+        Returns:
+          ImageGTBatch: Collated images GT batch.
+        """
+        if len(gt_samples) == 0:
+            return None
+
+        # Check if detection3d_gt_bboxes_3d are available in the samples
+        available_camera_image_data = gt_samples[0].camera_image_data is not None
+        if not available_camera_image_data:
+            return None
+
+        image_gt_samples = []
+        for sample in gt_samples:
+            if sample.camera_image_data is None:
+                raise ValueError("All samples must have camera_image_data for collating.")
+
+            image_gt_samples.append(sample.camera_image_data)
+
+        image_gt_batch = ImageGTBatch.collate_gt_samples(images_gt_samples=image_gt_samples)
+        return image_gt_batch
+
+    @staticmethod
     def collate_gt_samples(
         gt_samples: Sequence[MultiTaskGTSample], max_num_3d_gt_bboxes: int
     ) -> MultiTaskGTBatch:
@@ -254,8 +322,12 @@ class MultiTaskGTBatch(NamedTuple):
             gt_samples=gt_samples, max_num_3d_gt_bboxes=max_num_3d_gt_bboxes
         )
 
+        # Collate image gt batch
+        image_gt_batch = MultiTaskGTBatch.collate_image_gt_samples(gt_samples=gt_samples)
+
         return MultiTaskGTBatch(
             point_cloud_gt_batch=point_cloud_gt_batch,
             detection3d_gt_batch=detection3d_gt_batch,
+            image_gt_batch=image_gt_batch,
             io_processing_time=sum(sample.io_processing_time for sample in gt_samples),
         )

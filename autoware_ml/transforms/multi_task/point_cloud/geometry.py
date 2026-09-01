@@ -142,12 +142,8 @@ class GlobalRotScaleTrans(MultiTaskBaseTransform):
                 previous_lidar_transformation_sample=multi_task_gt_sample.lidar_transformation_sample
             )
 
-        return MultiTaskGTSample(
-            lidar_point_cloud_samples=multi_task_gt_sample.lidar_point_cloud_samples,
-            point_cloud_data=multi_task_gt_sample.point_cloud_data,
-            detection3d_gt_bboxes_3d=multi_task_gt_sample.detection3d_gt_bboxes_3d,
-            segmentation3d_gt_sample=multi_task_gt_sample.segmentation3d_gt_sample,
-            lidar_transformation_sample=lidar_transformation_sample,
+        return multi_task_gt_sample._replace(
+            lidar_transformation_sample=lidar_transformation_sample
         )
 
 
@@ -250,12 +246,8 @@ class GlobalBEVRandomFlip(MultiTaskBaseTransform):
                 previous_lidar_transformation_sample=multi_task_gt_sample.lidar_transformation_sample
             )
 
-        return MultiTaskGTSample(
-            lidar_point_cloud_samples=multi_task_gt_sample.lidar_point_cloud_samples,
-            point_cloud_data=multi_task_gt_sample.point_cloud_data,
-            detection3d_gt_bboxes_3d=multi_task_gt_sample.detection3d_gt_bboxes_3d,
-            segmentation3d_gt_sample=multi_task_gt_sample.segmentation3d_gt_sample,
-            lidar_transformation_sample=lidar_transformation_sample,
+        return multi_task_gt_sample._replace(
+            lidar_transformation_sample=lidar_transformation_sample
         )
 
 

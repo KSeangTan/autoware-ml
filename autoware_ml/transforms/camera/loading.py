@@ -2,109 +2,156 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Sequence
 
-import cv2
-import numpy as np
+import torch
+from torchvision.io import decode_image
 
-from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.geometry.cameras.base_images import BaseImages
+from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
+from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import (
+    ImageSample,
+    MultiTaskGTSample,
+)
+from autoware_ml.types.geometry import ImageChannel
 
 
-class LoadImageFromFile(BaseTransform):
+class LoadImageFromFile(MultiTaskBaseTransform):
     """Load one RGB image from a metadata path."""
 
-    _required_keys = ["img_path"]
+    _required_keys = ["image_samples"]
 
-    def __init__(self, *, to_float32: bool = False, color_type: str = "rgb") -> None:
+    def __init__(self, color_type: ImageChannel, normalize_to_unit: bool) -> None:
         """Initialize the LoadImageFromFile transform.
 
         Args:
-            to_float32: Whether to cast image pixels to ``float32``.
-            color_type: Output color format, ``"rgb"`` or ``"bgr"``.
+            color_type: Output color format, only rgb is supported now.
+            normalize_to_unit: Whether to divide pixel values by ``255``.
         """
-        self.to_float32 = to_float32
+        super().__init__(probability=None)
         self.color_type = color_type
+        self.normalize_to_unit = normalize_to_unit
 
-    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
-        """Load an image from the configured path.
+    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+        """Load only the first image data from the current sample.
 
         Args:
-            input_dict: Sample metadata containing ``img_path``.
+            multi_task_gt_sample: MultiTaskGTSample instance containing `image_samples`.
 
         Returns:
-            Updated sample dictionary with ``img``.
+            Updated MultiTaskGTSample instance with a loaded `camera_image_data`.
         """
-        image = cv2.imread(input_dict["img_path"], cv2.IMREAD_COLOR)
-        if image is None:
-            raise FileNotFoundError(f"Image not found: {input_dict['img_path']}")
-        if self.color_type.lower() == "rgb":
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        if self.to_float32:
-            image = image.astype(np.float32)
-        return {"img": image}
+        assert multi_task_gt_sample.image_samples is not None
+        image_sample = multi_task_gt_sample.image_samples[0]
+        decoded_image = decode_image(
+            image_sample.image_path,
+            mode=self.color_type.value,  # type: ignore
+        )
+        if self.normalize_to_unit:
+            decoded_image = decoded_image / 255.0
+        # (num_cameras, num_channels, height, width)
+        decoded_image = decoded_image.view(
+            1, decoded_image.shape[0], decoded_image.shape[1], decoded_image.shape[2]
+        ).to(torch.float32)
+        # (num_cameras)
+        timestamp = torch.tensor([image_sample.timestamp], dtype=torch.float32)
+
+        camera_image_data = BaseImages(
+            images=decoded_image,
+            timestamps=timestamp,
+            # The leading num_cameras dimension is kept so every field stays indexable
+            # per camera by the downstream transforms.
+            camera_intrinsics=image_sample.camera_intrinsic.unsqueeze(0),
+            lidar2images=image_sample.lidar2image.unsqueeze(0),
+            lidar2cams=image_sample.lidar2cam.unsqueeze(0),
+            camera_names=[image_sample.camera_name],
+            distortion_models=[image_sample.distortion_model],
+            distortion_coefficients=[image_sample.distortion_coefficients],
+            noises=None,  # Initially, set to None
+            augmented_camera_intrinsics=None,  # Initially, set to None
+        )
+        return multi_task_gt_sample._replace(camera_image_data=camera_image_data)
 
 
-class LoadMultiViewImagesFromFiles(BaseTransform):
+class LoadMultiViewImagesFromFiles(MultiTaskBaseTransform):
     """Load synchronized multiview images and camera matrices."""
 
-    _required_keys = ["images", "camera_order"]
+    _required_keys = ["image_samples"]
 
-    def __init__(self, *, to_float32: bool = True, normalize_to_unit: bool = True) -> None:
+    def __init__(
+        self, normalize_to_unit: bool, color_type: ImageChannel, camera_order: Sequence[str]
+    ) -> None:
         """Initialize the LoadMultiViewImagesFromFiles transform.
 
         Args:
-            to_float32: Whether to cast images to ``float32``.
             normalize_to_unit: Whether to divide pixel values by ``255``.
+            color_type: Output color format, only rgb is supported now.
+            camera_order: Loading order for each camera.
         """
-        self.to_float32 = to_float32
+        super().__init__(probability=None)
         self.normalize_to_unit = normalize_to_unit
+        self.color_type = color_type
+        self.camera_order = camera_order
 
-    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
-        """Load images and camera matrices for all configured views.
+    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+        """Load only the first image data from the current sample.
 
         Args:
-            input_dict: Sample metadata containing multiview image info.
+            multi_task_gt_sample: MultiTaskGTSample instance containing `image_samples`.
 
         Returns:
-            Updated sample dictionary with image and calibration tensors.
+            Updated MultiTaskGTSample instance with a loaded `camera_image_data`.
         """
-        images = []
-        intrinsics = []
-        lidar2cam = []
-        lidar2img = []
-        camera_names = []
-        for camera_name in input_dict["camera_order"]:
-            camera_info = input_dict["images"].get(camera_name)
-            if camera_info is None:
-                raise ValueError(
-                    f"Camera '{camera_name}' declared in camera_order but missing from sample."
-                )
-            if camera_info.get("img_path") is None:
-                raise ValueError(f"Camera '{camera_name}' has no img_path in sample.")
-
-            image = cv2.imread(camera_info["img_path"], cv2.IMREAD_COLOR)
-            if image is None:
-                raise FileNotFoundError(f"Image not found: {camera_info['img_path']}")
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            if self.to_float32:
-                image = image.astype(np.float32)
-            if self.normalize_to_unit:
-                image = image / 255.0
-            images.append(np.transpose(image, (2, 0, 1)))
-
-            camera_matrix = np.eye(4, dtype=np.float32)
-            camera_matrix[:3, :3] = np.asarray(camera_info["cam2img"], dtype=np.float32)
-            intrinsics.append(camera_matrix)
-
-            camera_transform = np.asarray(camera_info["lidar2cam"], dtype=np.float32)
-            lidar2cam.append(camera_transform)
-            lidar2img.append(camera_matrix @ camera_transform)
-            camera_names.append(camera_name)
-
-        return {
-            "img": np.stack(images, axis=0),
-            "camera_intrinsics": np.stack(intrinsics, axis=0),
-            "lidar2cam": np.stack(lidar2cam, axis=0),
-            "lidar2img": np.stack(lidar2img, axis=0),
-            "camera_names": camera_names,
+        assert multi_task_gt_sample.image_samples is not None
+        # Reorder image_samples based on camera_order.
+        image_samples_by_camera_name = {
+            image_sample.camera_name: image_sample
+            for image_sample in multi_task_gt_sample.image_samples
         }
+        image_samples: Sequence[ImageSample] = []
+        for camera_name in self.camera_order:
+            if camera_name not in image_samples_by_camera_name:
+                raise ValueError(
+                    f"Missing camera_name: {camera_name} from the "
+                    f"sample: {multi_task_gt_sample.image_samples}"
+                )
+            image_samples.append(image_samples_by_camera_name[camera_name])
+
+        images = []
+        camera_intrinsics = []
+        lidar2cams = []
+        lidar2images = []
+        timestamps = []
+        distortion_models = []
+        distortion_coefficients = []
+        for image_sample in image_samples:
+            decoded_image = decode_image(
+                image_sample.image_path,
+                mode=self.color_type.value,  # type: ignore
+            )
+
+            decoded_image = decoded_image.to(torch.float32)
+            if self.normalize_to_unit:
+                decoded_image = decoded_image / 255.0
+
+            images.append(decoded_image)
+            camera_intrinsics.append(image_sample.camera_intrinsic)
+            lidar2cams.append(image_sample.lidar2cam)
+            lidar2images.append(image_sample.lidar2image)
+            timestamps.append(image_sample.timestamp)
+            distortion_models.append(image_sample.distortion_model)
+            distortion_coefficients.append(image_sample.distortion_coefficients)
+
+        camera_image_data = BaseImages(
+            images=torch.stack(images, dim=0),
+            camera_intrinsics=torch.stack(camera_intrinsics, dim=0),
+            lidar2images=torch.stack(lidar2images, dim=0),
+            lidar2cams=torch.stack(lidar2cams, dim=0),
+            timestamps=torch.tensor(timestamps, dtype=torch.float32),
+            camera_names=self.camera_order,
+            distortion_models=distortion_models,
+            distortion_coefficients=distortion_coefficients,
+            noises=None,  # Initially set to Empty
+            augmented_camera_intrinsics=None,  # Initially set to Empty
+        )
+        return multi_task_gt_sample._replace(camera_image_data=camera_image_data)

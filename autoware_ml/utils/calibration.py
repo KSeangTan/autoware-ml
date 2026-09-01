@@ -50,6 +50,7 @@ class CalibrationData:
             When omitted, a copy of ``camera_matrix`` is used.
     """
 
+    # TODO (KokSeang): This dataclass will be combined with BaseImages
     camera_matrix: npt.NDArray[np.float32]
     distortion_coefficients: npt.NDArray[np.float32]
     lidar_to_camera_transformation: npt.NDArray[np.float32]

@@ -32,7 +32,7 @@ import transforms3d
 from scipy.stats import truncnorm
 
 from autoware_ml.transforms.base import BaseTransform
-from autoware_ml.transforms.camera.resize import ResizeCropFlipRotImage
+from autoware_ml.transforms.camera.utils import as_hwc_image_list, restore_image_container
 from autoware_ml.utils.calibration import CalibrationData, CalibrationStatus
 
 
@@ -1126,17 +1126,100 @@ class ImageAug3D(BaseTransform):
         Returns:
             Updated sample dictionary.
         """
-        aug = ResizeCropFlipRotImage(
-            data_aug_conf={
-                "final_dim": self.final_dim,
-                "resize_lim": self.resize_lim,
-                "bot_pct_lim": self.bot_pct_lim,
-                "rand_flip": self.rand_flip,
-                "rot_lim": self.rot_lim,
-            },
-            training=self.training,
-        )
-        return aug(input_dict)
+        images, format_info = as_hwc_image_list(input_dict["img"])
+        augmented = []
+        aug_mats = []
+        intrinsics = input_dict.get("camera_intrinsics")
+
+        for view_index, image in enumerate(images):
+            transform, augmented_image = self._augment_image(image)
+            augmented.append(augmented_image)
+            aug_mats.append(transform)
+            if intrinsics is not None:
+                input_dict["camera_intrinsics"][view_index] = (
+                    transform @ input_dict["camera_intrinsics"][view_index]
+                )
+
+        input_dict["img"] = restore_image_container(input_dict["img"], augmented, format_info)
+        input_dict["img_aug_matrix"] = np.stack(aug_mats, axis=0).astype(np.float32)
+        if intrinsics is not None and "lidar2cam" in input_dict:
+            input_dict["lidar2img"] = input_dict["camera_intrinsics"] @ input_dict["lidar2cam"]
+        return input_dict
+
+    def _augment_image(self, image: npt.NDArray) -> tuple[npt.NDArray[np.float32], npt.NDArray]:
+        """Resize, crop, flip, and rotate one view and return its augmentation matrix.
+
+        Args:
+            image: Single view image in ``HWC`` layout.
+
+        Returns:
+            The 4x4 augmentation matrix and the augmented image.
+        """
+        source_height, source_width = image.shape[:2]
+        final_height, final_width = self.final_dim
+
+        if self.training:
+            if isinstance(self.resize_lim, (int, float)):
+                base_resize = min(final_height / source_height, final_width / source_width)
+                resize = np.random.uniform(
+                    base_resize - self.resize_lim, base_resize + self.resize_lim
+                )
+            else:
+                resize = np.random.uniform(*self.resize_lim)
+            crop_bottom = np.random.uniform(*self.bot_pct_lim)
+            crop_height = int((1 - crop_bottom) * final_height)
+            crop_width = final_width
+            flip = bool(self.rand_flip and np.random.randint(2))
+            rotate = float(np.random.uniform(*self.rot_lim))
+        else:
+            resize = (
+                min(final_height / source_height, final_width / source_width)
+                if isinstance(self.resize_lim, (int, float))
+                else float(np.mean(self.resize_lim))
+            )
+            crop_bottom = float(np.mean(self.bot_pct_lim))
+            crop_height = int((1 - crop_bottom) * final_height)
+            crop_width = final_width
+            flip = False
+            rotate = 0.0
+
+        resized_width = int(source_width * resize)
+        resized_height = int(source_height * resize)
+        resized = cv2.resize(image, (resized_width, resized_height))
+
+        crop_y = max(0, resized_height - crop_height)
+        crop_x = max(0, (resized_width - crop_width) // 2)
+        cropped = resized[crop_y : crop_y + crop_height, crop_x : crop_x + crop_width]
+        cropped = cv2.resize(cropped, (final_width, final_height))
+
+        transform = np.eye(4, dtype=np.float32)
+        transform[0, 0] = resize * final_width / crop_width
+        transform[1, 1] = resize * final_height / crop_height
+        transform[0, 2] = -crop_x * final_width / crop_width
+        transform[1, 2] = -crop_y * final_height / crop_height
+
+        if flip:
+            cropped = np.ascontiguousarray(np.fliplr(cropped))
+            flip_mat = np.array(
+                [
+                    [-1.0, 0.0, final_width - 1.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                ],
+                dtype=np.float32,
+            )
+            transform = flip_mat @ transform
+
+        if abs(rotate) > 1e-6:
+            center = (final_width / 2.0, final_height / 2.0)
+            affine = cv2.getRotationMatrix2D(center, rotate, 1.0).astype(np.float32)
+            cropped = cv2.warpAffine(cropped, affine, (final_width, final_height))
+            rot_mat = np.eye(4, dtype=np.float32)
+            rot_mat[:2, :3] = affine
+            transform = rot_mat @ transform
+
+        return transform, cropped.astype(image.dtype)
 
 
 class BEVLoadMultiViewImageFromFiles(BaseTransform):

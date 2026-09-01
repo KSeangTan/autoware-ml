@@ -118,6 +118,9 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
             point_cloud_data=None,  # point cloud data will be populated in the transform pipeline
             detection3d_gt_bboxes_3d=detection3d_gt_bboxes_3d,
             segmentation3d_gt_sample=segmentation3d_gt_sample,
+            image_samples=None,
+            camera_image_data=None,
+            augmented_calibration_data=None,
         )
 
     def _update_lidar_pointcloud_path(self, lidar_pointcloud_path: str) -> str:
