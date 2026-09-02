@@ -186,6 +186,14 @@ class TestLoadImageFromFile(BaseCameraLoadingTestCase):
                 camera_image_data.camera_intrinsics,
             )
         )
+        self.assertTrue(
+            torch.equal(
+                camera_image_data.image_augmentation_matrices,
+                torch.eye(3, dtype=torch.float32).repeat(
+                    camera_image_data.camera_intrinsics.shape[0], 1, 1
+                ),
+            )
+        )
 
 
 class TestLoadMultiViewImagesFromFiles(BaseCameraLoadingTestCase):
@@ -326,6 +334,14 @@ class TestLoadMultiViewImagesFromFiles(BaseCameraLoadingTestCase):
             torch.equal(
                 camera_image_data.augmented_camera_intrinsics,
                 camera_image_data.camera_intrinsics,
+            )
+        )
+        self.assertTrue(
+            torch.equal(
+                camera_image_data.image_augmentation_matrices,
+                torch.eye(3, dtype=torch.float32).repeat(
+                    camera_image_data.camera_intrinsics.shape[0], 1, 1
+                ),
             )
         )
 

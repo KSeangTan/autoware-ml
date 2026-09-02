@@ -69,6 +69,7 @@ class LoadImageFromFile(MultiTaskBaseTransform):
             distortion_coefficients=[image_sample.distortion_coefficients],
             noises=None,  # Initially, set to None
             augmented_camera_intrinsics=None,  # Initially, set to None
+            image_augmentation_matrices=None,  # Initially, set to None
         )
         return multi_task_gt_sample._replace(camera_image_data=camera_image_data)
 
@@ -153,5 +154,6 @@ class LoadMultiViewImagesFromFiles(MultiTaskBaseTransform):
             distortion_coefficients=distortion_coefficients,
             noises=None,  # Initially set to Empty
             augmented_camera_intrinsics=None,  # Initially set to Empty
+            image_augmentation_matrices=None,  # Initially set to Empty
         )
         return multi_task_gt_sample._replace(camera_image_data=camera_image_data)

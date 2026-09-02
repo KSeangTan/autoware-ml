@@ -176,6 +176,13 @@ class TestUndistortImage(unittest.TestCase):
         self.assertTrue(
             torch.equal(camera_image_data.lidar2cams, sample.camera_image_data.lidar2cams)
         )
+        # The undistortion is not a 2D affine, it is carried by the intrinsics alone.
+        self.assertTrue(
+            torch.equal(
+                camera_image_data.image_augmentation_matrices,
+                sample.camera_image_data.image_augmentation_matrices,
+            )
+        )
 
     def test_applying_twice_is_a_no_op(self) -> None:
         """Test that a second pass leaves the already undistorted images unchanged."""

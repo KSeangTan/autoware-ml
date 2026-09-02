@@ -58,6 +58,7 @@ class NormalizeMultiviewImage(MultiTaskBaseTransform):
             lidar2images=camera_image_data.lidar2images,
             lidar2cams=camera_image_data.lidar2cams,
             augmented_camera_intrinsics=camera_image_data.augmented_camera_intrinsics,
+            image_augmentation_matrices=camera_image_data.image_augmentation_matrices,
             noises=camera_image_data.noises,
             distortion_models=camera_image_data.distortion_models,
             distortion_coefficients=camera_image_data.distortion_coefficients,

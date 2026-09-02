@@ -29,6 +29,7 @@ class BaseImages(ABC):
         distortion_coefficients: Sequence[Float32[torch.Tensor, " num_coefficients"]],
         noises: Float32[torch.Tensor, " num_cameras"] | None = None,
         augmented_camera_intrinsics: Float32[torch.Tensor, "num_cameras 3 3"] | None = None,
+        image_augmentation_matrices: Float32[torch.Tensor, "num_cameras 3 3"] | None = None,
     ) -> None:
         """
         Initialize the BasePoints instance.
@@ -51,6 +52,12 @@ class BaseImages(ABC):
             augmentation.
             augmented_camera_intrinsics: Updated intrinsic matrix after image-space transforms.
             When omitted, a copy of ``camera_intrinsics`` is used.
+            image_augmentation_matrices: Composition of the 2D affines applied to the pixels
+            by the image-space augmentations, mapping a pixel of the raw loaded image onto
+            its location in ``images``. When omitted, the identity is used. Note that a
+            non-affine image transform, such as the undistortion applied by
+            ``UndistortImage``, is not composed into it, so it describes the augmentations
+            alone rather than the full raw-image-to-augmented-image mapping.
         """
         self._images = images
         self._timestamps = timestamps
@@ -65,6 +72,14 @@ class BaseImages(ABC):
             self._augmented_camera_intrinsics = self._camera_intrinsics.clone()
         else:
             self._augmented_camera_intrinsics = augmented_camera_intrinsics
+        if image_augmentation_matrices is None:
+            self._image_augmentation_matrices = torch.eye(
+                3,
+                dtype=self._augmented_camera_intrinsics.dtype,
+                device=self._augmented_camera_intrinsics.device,
+            ).repeat(self._camera_intrinsics.shape[0], 1, 1)
+        else:
+            self._image_augmentation_matrices = image_augmentation_matrices
 
     @property
     def images(self) -> Float32[torch.Tensor, "num_cameras num_channels height width"]:
@@ -115,6 +130,11 @@ class BaseImages(ABC):
     def augmented_camera_intrinsics(self) -> Float32[torch.Tensor, "num_cameras 3 3"]:
         """Return augmented camera intrinsics after series of image-space transformations."""
         return self._augmented_camera_intrinsics
+
+    @property
+    def image_augmentation_matrices(self) -> Float32[torch.Tensor, "num_cameras 3 3"]:
+        """Return the composed 2D affine the image-space augmentations applied to the pixels."""
+        return self._image_augmentation_matrices
 
     def update_lidar_transformation_matrices(
         self, augmentation_inverse: Float32[torch.Tensor, "4 4"]

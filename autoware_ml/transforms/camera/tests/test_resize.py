@@ -82,6 +82,20 @@ class CameraImageDataTestCase(unittest.TestCase):
             segmentation3d_gt_sample=None,
         )
 
+    def assert_augmentation_matrices_match_intrinsics(self, camera_image_data: BaseImages) -> None:
+        """Assert the composed augmentation affines map the raw intrinsics onto the augmented ones.
+
+        Args:
+            camera_image_data: Camera image data returned by a transform.
+        """
+        self.assertTrue(
+            torch.allclose(
+                camera_image_data.augmented_camera_intrinsics,
+                camera_image_data.image_augmentation_matrices @ camera_image_data.camera_intrinsics,
+                atol=1e-5,
+            )
+        )
+
     def assert_projection_is_consistent(self, camera_image_data: BaseImages) -> None:
         """Assert `lidar2images` projects like the augmented intrinsics and `lidar2cams`.
 
@@ -141,6 +155,7 @@ class TestCropAndScale(CameraImageDataTestCase):
                 camera_image_data.camera_intrinsics, sample.camera_image_data.camera_intrinsics
             )
         )
+        self.assert_augmentation_matrices_match_intrinsics(camera_image_data)
         self.assert_projection_is_consistent(camera_image_data)
 
     def test_cameras_are_cropped_independently(self) -> None:
@@ -188,6 +203,7 @@ class TestResizeMultiviewImages(CameraImageDataTestCase):
                 expected_intrinsic.repeat(self.num_cameras, 1, 1),
             )
         )
+        self.assert_augmentation_matrices_match_intrinsics(camera_image_data)
         self.assert_projection_is_consistent(camera_image_data)
 
     def test_anisotropic_resize(self) -> None:
@@ -269,6 +285,7 @@ class TestPadMultiViewImage(CameraImageDataTestCase):
                 sample.camera_image_data.augmented_camera_intrinsics,
             )
         )
+        self.assert_augmentation_matrices_match_intrinsics(camera_image_data)
         self.assert_projection_is_consistent(camera_image_data)
 
     def test_smaller_target_size_raises(self) -> None:
@@ -321,6 +338,7 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
                 atol=1e-5,
             )
         )
+        self.assert_augmentation_matrices_match_intrinsics(camera_image_data)
         self.assert_projection_is_consistent(camera_image_data)
 
     def test_scalar_resize_range_fits_the_target_size(self) -> None:
@@ -414,6 +432,110 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
         intrinsics = output.camera_image_data.augmented_camera_intrinsics
         self.assertFalse(torch.allclose(intrinsics[0], intrinsics[1]))
         self.assert_projection_is_consistent(output.camera_image_data)
+
+
+class TestImageAugmentationMatrices(CameraImageDataTestCase):
+    """Unit tests for the composed image augmentation matrices."""
+
+    def test_identity_before_any_transform(self) -> None:
+        """Test that a freshly built sample carries the identity for every camera."""
+        sample = self.build_multi_task_gt_sample()
+        assert sample.camera_image_data is not None
+
+        self.assertTrue(
+            torch.equal(
+                sample.camera_image_data.image_augmentation_matrices,
+                torch.eye(3, dtype=torch.float32).repeat(self.num_cameras, 1, 1),
+            )
+        )
+
+    def test_holds_the_affine_of_a_single_resize(self) -> None:
+        """Test that a half resize is stored as the matching scaling."""
+        sample = self.build_multi_task_gt_sample()
+
+        output = ResizeMultiviewImages(target_size=[self.image_height // 2, self.image_width // 2])(
+            sample
+        )
+
+        assert output.camera_image_data is not None
+        expected = torch.tensor(
+            [[0.5, 0.0, 0.0], [0.0, 0.5, 0.0], [0.0, 0.0, 1.0]], dtype=torch.float32
+        )
+        self.assertTrue(
+            torch.allclose(
+                output.camera_image_data.image_augmentation_matrices,
+                expected.repeat(self.num_cameras, 1, 1),
+                atol=1e-5,
+            )
+        )
+
+    def test_composes_across_chained_transforms(self) -> None:
+        """Test that chained transforms accumulate into a single affine."""
+        np.random.seed(0)
+        sample = self.build_multi_task_gt_sample()
+
+        resized = ResizeMultiviewImages(target_size=[self.image_height, self.image_width * 2])(
+            sample
+        )
+        assert resized.camera_image_data is not None
+        cropped = CropAndScale(probability=1.0, crop_ratio=0.8)(resized)
+
+        assert cropped.camera_image_data is not None
+        # The affine of the second transform alone, recovered from the intrinsics it composed.
+        second_transform = cropped.camera_image_data.augmented_camera_intrinsics @ torch.linalg.inv(
+            resized.camera_image_data.augmented_camera_intrinsics
+        )
+        self.assertTrue(
+            torch.allclose(
+                cropped.camera_image_data.image_augmentation_matrices,
+                second_transform @ resized.camera_image_data.image_augmentation_matrices,
+                atol=1e-4,
+            )
+        )
+        self.assert_augmentation_matrices_match_intrinsics(cropped.camera_image_data)
+
+    def test_maps_a_source_pixel_onto_the_augmented_pixel(self) -> None:
+        """Test that the stored affine moves a pixel the way the augmentation moved it."""
+        np.random.seed(0)
+        sample = self.build_multi_task_gt_sample()
+        assert sample.camera_image_data is not None
+        # (4, ), a point five metres in front of the lidar.
+        point = torch.tensor([1.0, 0.5, 5.0, 1.0], dtype=torch.float32)
+        source_projection = sample.camera_image_data.lidar2images[0] @ point
+        source_pixel = source_projection[:3] / source_projection[2]
+
+        output = ResizeCropFlipRotImage(
+            target_size=[self.image_height, self.image_width],
+            resize_range=[0.8, 1.2],
+            bottom_crop_ratio_range=[0.0, 0.2],
+            training=True,
+            random_horizontal_flip=True,
+        )(sample)
+
+        assert output.camera_image_data is not None
+        camera_image_data = output.camera_image_data
+        augmented_projection = camera_image_data.lidar2images[0] @ point
+        augmented_pixel = augmented_projection[:2] / augmented_projection[2]
+        mapped_pixel = camera_image_data.image_augmentation_matrices[0] @ source_pixel
+        self.assertTrue(
+            torch.allclose(mapped_pixel[:2] / mapped_pixel[2], augmented_pixel, atol=1e-4)
+        )
+
+    def test_lidar_space_augmentation_leaves_the_matrices_untouched(self) -> None:
+        """Test that moving the scene rather than the pixels keeps the affine unchanged."""
+        sample = self.build_multi_task_gt_sample()
+        assert sample.camera_image_data is not None
+
+        sample.camera_image_data.update_lidar_transformation_matrices(
+            torch.eye(4, dtype=torch.float32)
+        )
+
+        self.assertTrue(
+            torch.equal(
+                sample.camera_image_data.image_augmentation_matrices,
+                torch.eye(3, dtype=torch.float32).repeat(self.num_cameras, 1, 1),
+            )
+        )
 
 
 if __name__ == "__main__":

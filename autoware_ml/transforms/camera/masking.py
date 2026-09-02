@@ -66,6 +66,7 @@ class GridMask(MultiTaskBaseTransform):
             distortion_coefficients=camera_image_data.distortion_coefficients,
             noises=camera_image_data.noises,
             augmented_camera_intrinsics=camera_image_data.augmented_camera_intrinsics,
+            image_augmentation_matrices=camera_image_data.image_augmentation_matrices,
         )
         return multi_task_gt_sample._replace(camera_image_data=masked_camera_image_data)
 

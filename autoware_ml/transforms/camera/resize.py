@@ -21,7 +21,9 @@ raw calibration, and `lidar2images` is recomputed from the augmented intrinsics 
 point keeps projecting onto the pixel it lands on in the transformed image.
 
 The image-space transforms are expressed in the frame of the image they are given, hence
-they have to be composed in the same order as the pipeline applies them.
+they have to be composed in the same order as the pipeline applies them. Their composition
+is kept in `image_augmentation_matrices`, so the pixel remapping the augmentation applied
+stays available to the models that have to undo it.
 """
 
 from __future__ import annotations
@@ -62,12 +64,18 @@ class ImageSpaceTransform(MultiTaskBaseTransform):
                 its location in `images`.
 
         Returns:
-            Camera image data holding the transformed images, the augmented intrinsics
-            composed with `image_transforms`, and the matching `lidar2images`.
+            Camera image data holding the transformed images, the augmented intrinsics and
+            the image augmentation matrices composed with `image_transforms`, and the
+            matching `lidar2images`.
         """
+        image_transforms = image_transforms.to(camera_image_data.augmented_camera_intrinsics)
         augmented_camera_intrinsics = (
-            image_transforms.to(camera_image_data.augmented_camera_intrinsics)
-            @ camera_image_data.augmented_camera_intrinsics
+            image_transforms @ camera_image_data.augmented_camera_intrinsics
+        )
+        # The affines are expressed in the frame of the image they are given, so the new one
+        # is composed on the left of the ones the earlier transforms already applied.
+        image_augmentation_matrices = (
+            image_transforms @ camera_image_data.image_augmentation_matrices
         )
 
         # (num_cameras, 4, 4), the augmented intrinsics padded to homogeneous coordinates.
@@ -88,6 +96,7 @@ class ImageSpaceTransform(MultiTaskBaseTransform):
             distortion_coefficients=camera_image_data.distortion_coefficients,
             noises=camera_image_data.noises,
             augmented_camera_intrinsics=augmented_camera_intrinsics,
+            image_augmentation_matrices=image_augmentation_matrices,
         )
 
     @staticmethod

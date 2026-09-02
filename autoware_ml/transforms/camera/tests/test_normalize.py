@@ -141,6 +141,12 @@ class TestNormalizeMultiviewImage(unittest.TestCase):
         self.assertTrue(
             torch.equal(camera_image_data.lidar2cams, sample.camera_image_data.lidar2cams)
         )
+        self.assertTrue(
+            torch.equal(
+                camera_image_data.image_augmentation_matrices,
+                sample.camera_image_data.image_augmentation_matrices,
+            )
+        )
 
     def test_missing_camera_image_data_key(self) -> None:
         """Test that missing 'camera_image_data' raises KeyError."""

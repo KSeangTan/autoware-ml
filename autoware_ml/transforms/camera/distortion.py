@@ -94,5 +94,8 @@ class UndistortImage(MultiTaskBaseTransform):
             distortion_coefficients=undistorted_coefficients,
             noises=camera_image_data.noises,
             augmented_camera_intrinsics=augmented_camera_intrinsics,
+            # The undistortion is not a 2D affine, so it is carried by the intrinsics alone
+            # and leaves the composed image augmentation matrices untouched.
+            image_augmentation_matrices=camera_image_data.image_augmentation_matrices,
         )
         return multi_task_gt_sample._replace(camera_image_data=undistorted_camera_image_data)
