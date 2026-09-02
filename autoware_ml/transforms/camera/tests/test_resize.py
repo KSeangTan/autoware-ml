@@ -16,8 +16,10 @@
 
 import unittest
 
+from jaxtyping import Float32
 import numpy as np
 import torch
+from torch import Tensor
 
 from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
@@ -436,6 +438,123 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
 
 class TestImageAugmentationMatrices(CameraImageDataTestCase):
     """Unit tests for the composed image augmentation matrices."""
+
+    # (4, ), a homogeneous lidar point five metres in front of the lidar, projecting in
+    # front of every camera under test.
+    LIDAR_POINT = torch.tensor([1.0, 0.5, 5.0, 1.0], dtype=torch.float32)
+
+    def project_lidar_point(
+        self, camera_image_data: BaseImages, camera_index: int
+    ) -> Float32[Tensor, "3"]:
+        """Project `LIDAR_POINT` onto the pixel plane of one camera.
+
+        Args:
+            camera_image_data: Camera image data holding the projection matrices.
+            camera_index: Index of the camera the point is projected onto.
+
+        Returns:
+            The homogeneous pixel ``(u, v, 1)`` the point projects onto.
+        """
+        projection = camera_image_data.lidar2images[camera_index] @ self.LIDAR_POINT
+        return projection[:3] / projection[2]
+
+    def assert_inverse_recovers_the_source_pixel(
+        self,
+        source_camera_image_data: BaseImages,
+        augmented_camera_image_data: BaseImages,
+        atol: float = 1e-4,
+    ) -> None:
+        """Assert un-augmenting the augmented projection lands on the source pixel.
+
+        The augmentation only remaps pixels, so the pixel a point projects onto in the
+        augmented image, mapped back through the inverse of the composed affine, has to be
+        the pixel the very same point projects onto in the source image.
+
+        Args:
+            source_camera_image_data: Camera image data before the transforms.
+            augmented_camera_image_data: Camera image data returned by the transforms.
+            atol: Absolute pixel tolerance of the comparison.
+        """
+        for camera_index in range(self.num_cameras):
+            source_pixel = self.project_lidar_point(source_camera_image_data, camera_index)
+            augmented_pixel = self.project_lidar_point(augmented_camera_image_data, camera_index)
+            inverse_augmentation = torch.linalg.inv(
+                augmented_camera_image_data.image_augmentation_matrices[camera_index]
+            )
+            recovered_pixel = inverse_augmentation @ augmented_pixel
+            recovered_pixel = recovered_pixel / recovered_pixel[2]
+            self.assertTrue(
+                torch.allclose(recovered_pixel, source_pixel, atol=atol),
+                f"camera {camera_index}: {recovered_pixel} != {source_pixel}",
+            )
+
+    def test_inverse_recovers_the_source_pixel_after_a_resize(self) -> None:
+        """Test that a plain resize is undone by the inverse of the stored affine."""
+        sample = self.build_multi_task_gt_sample()
+        assert sample.camera_image_data is not None
+
+        output = ResizeMultiviewImages(target_size=[self.image_height, self.image_width * 2])(
+            sample
+        )
+
+        assert output.camera_image_data is not None
+        self.assert_inverse_recovers_the_source_pixel(
+            sample.camera_image_data, output.camera_image_data
+        )
+
+    def test_inverse_recovers_the_source_pixel_after_a_crop_and_scale(self) -> None:
+        """Test that a per-camera crop is undone by the inverse of the stored affine."""
+        np.random.seed(0)
+        sample = self.build_multi_task_gt_sample()
+        assert sample.camera_image_data is not None
+
+        output = CropAndScale(probability=1.0, crop_ratio=0.6)(sample)
+
+        assert output.camera_image_data is not None
+        self.assert_inverse_recovers_the_source_pixel(
+            sample.camera_image_data, output.camera_image_data
+        )
+
+    def test_inverse_recovers_the_source_pixel_after_a_flip_and_rotation(self) -> None:
+        """Test that a sampled resize, crop, flip, and rotation is undone by the inverse."""
+        np.random.seed(0)
+        sample = self.build_multi_task_gt_sample()
+        assert sample.camera_image_data is not None
+
+        output = ResizeCropFlipRotImage(
+            target_size=[self.image_height, self.image_width],
+            resize_range=[0.8, 1.2],
+            bottom_crop_ratio_range=[0.0, 0.2],
+            training=True,
+            random_horizontal_flip=True,
+            rotation_range=[-5.0, 5.0],
+        )(sample)
+
+        assert output.camera_image_data is not None
+        self.assert_inverse_recovers_the_source_pixel(
+            sample.camera_image_data, output.camera_image_data
+        )
+
+    def test_inverse_recovers_the_source_pixel_after_a_chained_pipeline(self) -> None:
+        """Test that the inverse undoes a whole chain of image-space transforms at once."""
+        np.random.seed(0)
+        sample = self.build_multi_task_gt_sample()
+        assert sample.camera_image_data is not None
+
+        output = ResizeMultiviewImages(target_size=[self.image_height, self.image_width])(
+            PadMultiViewImage(size=[80, 128])(
+                CropAndScale(probability=1.0, crop_ratio=0.7)(
+                    ResizeMultiviewImages(
+                        target_size=[self.image_height * 2, self.image_width * 2]
+                    )(sample)
+                )
+            )
+        )
+
+        assert output.camera_image_data is not None
+        self.assert_inverse_recovers_the_source_pixel(
+            sample.camera_image_data, output.camera_image_data
+        )
 
     def test_identity_before_any_transform(self) -> None:
         """Test that a freshly built sample carries the identity for every camera."""
