@@ -143,7 +143,7 @@ class GlobalRotScaleTrans(MultiTaskBaseTransform):
         # lidar2cam_augmented @ (augmentation @ point) == lidar2cam @ point. The camera
         # extrinsics are therefore re-expressed in the augmented frame by composing them
         # with the inverse of the augmentation.
-        camera_image_data.update_lidar_transformation_matrices(
+        augmented_camera_image_data = camera_image_data.update_lidar_transformation_matrices(
             torch.linalg.inv(lidar_transformation_sample.transformation_matrix)
         )
 
@@ -154,7 +154,8 @@ class GlobalRotScaleTrans(MultiTaskBaseTransform):
             )
 
         return multi_task_gt_sample._replace(
-            lidar_transformation_sample=lidar_transformation_sample
+            camera_image_data=augmented_camera_image_data,
+            lidar_transformation_sample=lidar_transformation_sample,
         )
 
 
@@ -256,7 +257,7 @@ class GlobalBEVRandomFlip(MultiTaskBaseTransform):
         # Keep the camera projection consistent with the flipped scene. The image pixels are
         # never re-rendered, so the camera extrinsics are re-expressed in the flipped frame by
         # composing them with the inverse of the flip.
-        camera_image_data.update_lidar_transformation_matrices(
+        flipped_camera_image_data = camera_image_data.update_lidar_transformation_matrices(
             torch.linalg.inv(lidar_transformation_sample.transformation_matrix)
         )
 
@@ -267,5 +268,6 @@ class GlobalBEVRandomFlip(MultiTaskBaseTransform):
             )
 
         return multi_task_gt_sample._replace(
-            lidar_transformation_sample=lidar_transformation_sample
+            camera_image_data=flipped_camera_image_data,
+            lidar_transformation_sample=lidar_transformation_sample,
         )

@@ -84,19 +84,17 @@ class ImageSpaceTransform(MultiTaskBaseTransform):
         ).repeat(augmented_camera_intrinsics.shape[0], 1, 1)
         homogeneous_intrinsics[:, :3, :3] = augmented_camera_intrinsics
 
-        return BaseImages(
-            images=images,
-            timestamps=camera_image_data.timestamps,
-            camera_intrinsics=camera_image_data.camera_intrinsics,
-            camera_names=camera_image_data.camera_names,
-            # augmented_intrinsic @ lidar2cam -> lidar2img
-            lidar2images=homogeneous_intrinsics @ camera_image_data.lidar2cams,
-            lidar2cams=camera_image_data.lidar2cams,
-            distortion_models=camera_image_data.distortion_models,
-            distortion_coefficients=camera_image_data.distortion_coefficients,
-            noises=camera_image_data.noises,
-            augmented_camera_intrinsics=augmented_camera_intrinsics,
-            image_augmentation_matrices=image_augmentation_matrices,
+        # model_copy does not validate what it is given, so the copy is validated explicitly.
+        return BaseImages.model_validate(
+            camera_image_data.model_copy(
+                update={
+                    "images": images,
+                    # augmented_intrinsic @ lidar2cam -> lidar2img
+                    "lidar2images": homogeneous_intrinsics @ camera_image_data.lidar2cams,
+                    "augmented_camera_intrinsics": augmented_camera_intrinsics,
+                    "image_augmentation_matrices": image_augmentation_matrices,
+                }
+            )
         )
 
     @staticmethod

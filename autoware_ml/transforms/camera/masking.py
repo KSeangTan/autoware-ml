@@ -55,18 +55,10 @@ class GridMask(MultiTaskBaseTransform):
         images = camera_image_data.images
         masked_images = torch.stack([image * self._grid_mask(image) for image in images], dim=0)
 
-        masked_camera_image_data = BaseImages(
-            images=masked_images,
-            timestamps=camera_image_data.timestamps,
-            camera_intrinsics=camera_image_data.camera_intrinsics,
-            camera_names=camera_image_data.camera_names,
-            lidar2images=camera_image_data.lidar2images,
-            lidar2cams=camera_image_data.lidar2cams,
-            distortion_models=camera_image_data.distortion_models,
-            distortion_coefficients=camera_image_data.distortion_coefficients,
-            noises=camera_image_data.noises,
-            augmented_camera_intrinsics=camera_image_data.augmented_camera_intrinsics,
-            image_augmentation_matrices=camera_image_data.image_augmentation_matrices,
+        # Only the pixel values change, every other field is carried over unchanged.
+        # model_copy does not validate what it is given, so the copy is validated explicitly.
+        masked_camera_image_data = BaseImages.model_validate(
+            camera_image_data.model_copy(update={"images": masked_images})
         )
         return multi_task_gt_sample._replace(camera_image_data=masked_camera_image_data)
 

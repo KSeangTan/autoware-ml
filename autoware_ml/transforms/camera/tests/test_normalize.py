@@ -17,6 +17,7 @@
 import unittest
 
 from jaxtyping import Float32
+from pydantic import ValidationError
 import torch
 from torch import Tensor
 
@@ -50,6 +51,8 @@ class TestNormalizeMultiviewImage(unittest.TestCase):
             lidar2cams=torch.eye(4).repeat(num_cameras, 1, 1),
             distortion_models=["plumb_bob"] * num_cameras,
             distortion_coefficients=[torch.zeros(5) for _ in range(num_cameras)],
+            augmented_camera_intrinsics=torch.eye(3).repeat(num_cameras, 1, 1),
+            image_augmentation_matrices=torch.eye(3).repeat(num_cameras, 1, 1),
         )
         return MultiTaskGTSample(
             lidar_point_cloud_samples=None,
@@ -97,9 +100,9 @@ class TestNormalizeMultiviewImage(unittest.TestCase):
                 )
             )
 
-    def test_casts_to_float32(self) -> None:
-        """Test that integer images are cast to float before being normalized."""
-        images = torch.full((1, 3, 2, 2), 255, dtype=torch.uint8)
+    def test_keeps_float32(self) -> None:
+        """Test that the normalized images keep the float32 dtype BaseImages requires."""
+        images = torch.full((1, 3, 2, 2), 255.0, dtype=torch.float32)
 
         output = NormalizeMultiviewImage(mean=[0.0, 0.0, 0.0], std=[255.0, 255.0, 255.0])(
             self.build_multi_task_gt_sample(images)
@@ -109,6 +112,11 @@ class TestNormalizeMultiviewImage(unittest.TestCase):
         normalized_images = output.camera_image_data.images
         self.assertEqual(normalized_images.dtype, torch.float32)
         self.assertTrue(torch.allclose(normalized_images, torch.ones_like(normalized_images)))
+
+    def test_rejects_non_float32_images(self) -> None:
+        """Test that BaseImages refuses images that are not float32."""
+        with self.assertRaises(ValidationError):
+            self.build_multi_task_gt_sample(torch.full((1, 3, 2, 2), 255, dtype=torch.uint8))
 
     def test_geometry_preserved(self) -> None:
         """Test that only pixel values change, geometric attributes are carried over."""

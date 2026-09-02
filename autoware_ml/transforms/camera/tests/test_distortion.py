@@ -69,6 +69,8 @@ class TestUndistortImage(unittest.TestCase):
             lidar2cams=torch.eye(4).repeat(num_cameras, 1, 1),
             distortion_models=["plumb_bob"] * num_cameras,
             distortion_coefficients=distortion_coefficients,
+            augmented_camera_intrinsics=self.camera_intrinsic.repeat(num_cameras, 1, 1),
+            image_augmentation_matrices=torch.eye(3).repeat(num_cameras, 1, 1),
         )
         return MultiTaskGTSample(
             lidar_point_cloud_samples=None,

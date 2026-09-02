@@ -83,19 +83,16 @@ class UndistortImage(MultiTaskBaseTransform):
             )
             undistorted_coefficients.append(torch.zeros_like(coefficients))
 
-        undistorted_camera_image_data = BaseImages(
-            images=torch.stack(undistorted_images, dim=0),
-            timestamps=camera_image_data.timestamps,
-            camera_intrinsics=camera_intrinsics,
-            camera_names=camera_image_data.camera_names,
-            lidar2images=camera_image_data.lidar2images,
-            lidar2cams=camera_image_data.lidar2cams,
-            distortion_models=camera_image_data.distortion_models,
-            distortion_coefficients=undistorted_coefficients,
-            noises=camera_image_data.noises,
-            augmented_camera_intrinsics=augmented_camera_intrinsics,
-            # The undistortion is not a 2D affine, so it is carried by the intrinsics alone
-            # and leaves the composed image augmentation matrices untouched.
-            image_augmentation_matrices=camera_image_data.image_augmentation_matrices,
+        # The undistortion is not a 2D affine, so it is carried by the intrinsics alone and
+        # leaves the composed image augmentation matrices untouched.
+        # model_copy does not validate what it is given, so the copy is validated explicitly.
+        undistorted_camera_image_data = BaseImages.model_validate(
+            camera_image_data.model_copy(
+                update={
+                    "images": torch.stack(undistorted_images, dim=0),
+                    "distortion_coefficients": undistorted_coefficients,
+                    "augmented_camera_intrinsics": augmented_camera_intrinsics,
+                }
+            )
         )
         return multi_task_gt_sample._replace(camera_image_data=undistorted_camera_image_data)

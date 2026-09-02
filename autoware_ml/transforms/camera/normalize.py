@@ -50,17 +50,9 @@ class NormalizeMultiviewImage(MultiTaskBaseTransform):
         # dimension is broadcast over automatically.
         images = self._normalize(camera_image_data.images.to(torch.float32))
 
-        normalized_camera_image_data = BaseImages(
-            images=images,
-            timestamps=camera_image_data.timestamps,
-            camera_intrinsics=camera_image_data.camera_intrinsics,
-            camera_names=camera_image_data.camera_names,
-            lidar2images=camera_image_data.lidar2images,
-            lidar2cams=camera_image_data.lidar2cams,
-            augmented_camera_intrinsics=camera_image_data.augmented_camera_intrinsics,
-            image_augmentation_matrices=camera_image_data.image_augmentation_matrices,
-            noises=camera_image_data.noises,
-            distortion_models=camera_image_data.distortion_models,
-            distortion_coefficients=camera_image_data.distortion_coefficients,
+        # Only the pixel values change, every other field is carried over unchanged.
+        # model_copy does not validate what it is given, so the copy is validated explicitly.
+        normalized_camera_image_data = BaseImages.model_validate(
+            camera_image_data.model_copy(update={"images": images})
         )
         return multi_task_gt_sample._replace(camera_image_data=normalized_camera_image_data)

@@ -74,6 +74,10 @@ class CameraImageDataTestCase(unittest.TestCase):
             lidar2cams=self.lidar2cam.repeat(self.num_cameras, 1, 1),
             distortion_models=["plumb_bob"] * self.num_cameras,
             distortion_coefficients=[torch.zeros(5)] * self.num_cameras,
+            augmented_camera_intrinsics=self.camera_intrinsic.repeat(self.num_cameras, 1, 1),
+            image_augmentation_matrices=torch.eye(3, dtype=torch.float32).repeat(
+                self.num_cameras, 1, 1
+            ),
         )
         return MultiTaskGTSample(
             lidar_point_cloud_samples=None,
@@ -645,13 +649,13 @@ class TestImageAugmentationMatrices(CameraImageDataTestCase):
         sample = self.build_multi_task_gt_sample()
         assert sample.camera_image_data is not None
 
-        sample.camera_image_data.update_lidar_transformation_matrices(
+        camera_image_data = sample.camera_image_data.update_lidar_transformation_matrices(
             torch.eye(4, dtype=torch.float32)
         )
 
         self.assertTrue(
             torch.equal(
-                sample.camera_image_data.image_augmentation_matrices,
+                camera_image_data.image_augmentation_matrices,
                 torch.eye(3, dtype=torch.float32).repeat(self.num_cameras, 1, 1),
             )
         )

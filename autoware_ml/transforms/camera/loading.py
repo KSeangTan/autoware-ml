@@ -56,20 +56,27 @@ class LoadImageFromFile(MultiTaskBaseTransform):
         # (num_cameras)
         timestamp = torch.tensor([image_sample.timestamp], dtype=torch.float32)
 
+        # The leading num_cameras dimension is kept so every field stays indexable
+        # per camera by the downstream transforms.
+        camera_intrinsics = image_sample.camera_intrinsic.unsqueeze(0)
+
         camera_image_data = BaseImages(
             images=decoded_image,
+            depth_images=None,  # No depth is loaded from an image file
             timestamps=timestamp,
-            # The leading num_cameras dimension is kept so every field stays indexable
-            # per camera by the downstream transforms.
-            camera_intrinsics=image_sample.camera_intrinsic.unsqueeze(0),
+            camera_intrinsics=camera_intrinsics,
             lidar2images=image_sample.lidar2image.unsqueeze(0),
             lidar2cams=image_sample.lidar2cam.unsqueeze(0),
             camera_names=[image_sample.camera_name],
             distortion_models=[image_sample.distortion_model],
             distortion_coefficients=[image_sample.distortion_coefficients],
+            # No image-space transform ran yet, so the augmented intrinsics are the raw
+            # ones and the composed augmentation affine is the identity.
+            augmented_camera_intrinsics=camera_intrinsics.clone(),
+            image_augmentation_matrices=BaseImages.identity_image_augmentation_matrices(
+                camera_intrinsics
+            ),
             noises=None,  # Initially, set to None
-            augmented_camera_intrinsics=None,  # Initially, set to None
-            image_augmentation_matrices=None,  # Initially, set to None
         )
         return multi_task_gt_sample._replace(camera_image_data=camera_image_data)
 
@@ -143,17 +150,24 @@ class LoadMultiViewImagesFromFiles(MultiTaskBaseTransform):
             distortion_models.append(image_sample.distortion_model)
             distortion_coefficients.append(image_sample.distortion_coefficients)
 
+        stacked_camera_intrinsics = torch.stack(camera_intrinsics, dim=0)
+
         camera_image_data = BaseImages(
             images=torch.stack(images, dim=0),
-            camera_intrinsics=torch.stack(camera_intrinsics, dim=0),
+            depth_images=None,  # No depth is loaded from an image file
+            camera_intrinsics=stacked_camera_intrinsics,
             lidar2images=torch.stack(lidar2images, dim=0),
             lidar2cams=torch.stack(lidar2cams, dim=0),
             timestamps=torch.tensor(timestamps, dtype=torch.float32),
             camera_names=self.camera_order,
             distortion_models=distortion_models,
             distortion_coefficients=distortion_coefficients,
+            # No image-space transform ran yet, so the augmented intrinsics are the raw
+            # ones and the composed augmentation affine is the identity.
+            augmented_camera_intrinsics=stacked_camera_intrinsics.clone(),
+            image_augmentation_matrices=BaseImages.identity_image_augmentation_matrices(
+                stacked_camera_intrinsics
+            ),
             noises=None,  # Initially set to Empty
-            augmented_camera_intrinsics=None,  # Initially set to Empty
-            image_augmentation_matrices=None,  # Initially set to Empty
         )
         return multi_task_gt_sample._replace(camera_image_data=camera_image_data)
