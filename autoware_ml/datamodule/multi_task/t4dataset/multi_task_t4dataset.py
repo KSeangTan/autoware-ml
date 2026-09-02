@@ -120,7 +120,6 @@ class MultiTaskT4Dataset(MultiTaskBaseDataset):
             segmentation3d_gt_sample=segmentation3d_gt_sample,
             image_samples=None,
             camera_image_data=None,
-            augmented_calibration_data=None,
         )
 
     def _update_lidar_pointcloud_path(self, lidar_pointcloud_path: str) -> str:

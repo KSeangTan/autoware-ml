@@ -98,12 +98,12 @@ datamodule:
         - _target_: autoware_ml.transforms.multi_task.point_cloud.geometry.PointsRandomShuffle
           _convert_: all
 
-        - _target_: autoware_ml.transforms.multi_task.bboxes_3d.loading.BBoxesLabelNameFilter
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
           _convert_: all
 
           label_names_to_keep: ${database.database_task_configs.detection3d.label_names}
 
-        - _target_: autoware_ml.transforms.multi_task.bboxes_3d.geometry.BBoxesBEVDistanceFilter
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesBEVDistanceFilter
           _convert_: all
 
           bev_range:
@@ -114,7 +114,7 @@ datamodule:
 
         # Order matters, it first filters bboxes within the default meters with less than 2 points.
         # Then it filters bboxes within 60 meters with less than 3 points
-        - _target_: autoware_ml.transforms.multi_task.bboxes_3d.geometry.BBoxesMinPointsFilter
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesMinPointsFilter
           _convert_: all
 
           min_points: 2
@@ -124,13 +124,13 @@ datamodule:
             - ${point_cloud_range.3}
             - ${point_cloud_range.4}
 
-        - _target_: autoware_ml.transforms.multi_task.bboxes_3d.geometry.BBoxesMinPointsFilter
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesMinPointsFilter
           _convert_: all
 
           min_points: 3
           bev_range: [-60.0, -60.0, 60.0, 60.0]
 
-        - _target_: autoware_ml.transforms.multi_task.bboxes_3d.loading.BBoxesAttributeFilter
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesAttributeFilter
           _convert_: all
 
           attributes_to_filter:

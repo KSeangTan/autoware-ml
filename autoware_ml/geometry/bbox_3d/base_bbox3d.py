@@ -349,13 +349,14 @@ class BaseBBoxes3D(ABC):
         self, points: Float32[Tensor, "num_points 3"]
     ) -> Bool[Tensor, "num_bboxes num_points"]:
         """
-        Compute whether the given points are inside the 3D bounding boxes.
+        Compute the number of points inside each 3D bounding box.
 
         Args:
-            points (Float32[Tensor, "num_points 3"]): The points to check, with shape (num_points, 3).
+            points (Float32[Tensor, "num_points 3"]): The point cloud data in shape (N, 3).
 
         Returns:
-            Bool[Tensor, "num_bboxes num_points"]: A boolean tensor indicating whether each point is inside each bounding box.
+            Float32[Tensor, "num_bboxes num_points"]: A tensor mask indicating which points are
+            inside each bounding box.
         """
         raise NotImplementedError(
             "Subclasses must implement the `compute_points_in_bboxes` method."

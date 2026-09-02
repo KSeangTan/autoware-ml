@@ -13,7 +13,6 @@ from autoware_ml.transforms.point_cloud.geometry import (
     RandomFlip3D,
     RandomRotateTargetAngle,
 )
-from autoware_ml.transforms.point_cloud.loading import LoadPointsFromFile
 from autoware_ml.transforms.point_cloud.perturbation import RandomShift
 from autoware_ml.transforms.point_cloud.sampling import (
     ElasticDistortion,
@@ -127,18 +126,6 @@ class TestPointCloudTransforms:
             np.array([8.0, 4.0, 2.0], dtype=np.float32),
         )
         assert np.allclose(output["gt_boxes"][0, 6], 0.1)
-
-    def test_load_points_from_file_omits_unset_slice_metadata(self, tmp_path):
-        points_path = tmp_path / "points.bin"
-        np.array([[1.0, 2.0, 3.0, 4.0]], dtype=np.float32).tofile(points_path)
-
-        output = LoadPointsFromFile(load_dim=4, use_dim=[0, 1, 2, 3])(
-            {"lidar_path": str(points_path)}
-        )
-
-        assert output["points"].shape == (1, 4)
-        assert "idx_begin" not in output
-        assert "length" not in output
 
     def test_multi_sweeps_time_dim_overwrites_raw_column_with_time_lag(self, tmp_path):
         key_points = np.zeros((2, 5), dtype=np.float32)

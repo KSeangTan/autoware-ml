@@ -24,12 +24,12 @@ pipeline:
 
     points_range: ${point_cloud_range}
 
-  - _target_: autoware_ml.transforms.multi_task.bboxes_3d.loading.BBoxesLabelNameFilter
+  - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
     _convert_: all
 
     label_names_to_keep: ${database.database_task_configs.detection3d.label_names}
 
-  - _target_: autoware_ml.transforms.multi_task.bboxes_3d.loading.BBoxesAttributeFilter
+  - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesAttributeFilter
     _convert_: all
 
     attributes_to_filter:

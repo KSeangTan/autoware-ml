@@ -155,7 +155,8 @@ class LidarBBoxes3D(BaseBBoxes3D):
             points (Float32[Tensor, "num_points 3"]): The point cloud data in shape (N, 3).
 
         Returns:
-            Float32[Tensor, "num_bboxes num_points"]: A tensor indicating the number of points inside each bounding box.
+            Float32[Tensor, "num_bboxes num_points"]: A tensor mask indicating which points are
+            inside each bounding box.
         """
         if self.bbox_params.numel() == 0 or points.numel() == 0:
             return torch.zeros(

@@ -153,7 +153,6 @@ class T4Detection3DTask(BaseDatasetTask):
             point_cloud_data=None,
             detection3d_gt_bboxes_3d=detection3d_bboxes_3d,
             segmentation3d_gt_sample=None,
-            augmented_calibration_data=None,
             image_samples=None,
             camera_image_data=None,
         )
