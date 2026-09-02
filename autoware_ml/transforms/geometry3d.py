@@ -17,8 +17,8 @@
 This module holds the *math* behind the rotation / scale / translation / flip
 augmentations as plain functions. It owns no transform classes and declares no
 required keys, so the modality-specific transforms in
-``transforms.point_cloud.geometry``, ``transforms.camera_lidar.geometry`` and
-``transforms.camera.geometry`` can all reuse exactly the same computations
+``transforms.point_cloud.geometry`` and ``transforms.camera_lidar.geometry``
+can all reuse exactly the same computations
 (verified to be identical by the cross-namespace tests).
 
 Two groups of helpers:

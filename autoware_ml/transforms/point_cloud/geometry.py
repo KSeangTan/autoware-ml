@@ -17,8 +17,8 @@
 Operate on the point representation (``coord`` and/or ``points``), per-point
 ``normal`` and ``gt_boxes`` when present. They require a point cloud and never
 touch camera matrices - the camera-aware variants live in
-``transforms.camera_lidar.geometry`` and ``transforms.camera.geometry`` and
-share the exact same math via ``transforms.geometry3d``.
+``transforms.camera_lidar.geometry`` and share the exact same math via
+``transforms.geometry3d``.
 """
 
 from __future__ import annotations
