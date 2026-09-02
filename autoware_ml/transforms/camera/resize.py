@@ -22,8 +22,8 @@ point keeps projecting onto the pixel it lands on in the transformed image.
 
 The image-space transforms are expressed in the frame of the image they are given, hence
 they have to be composed in the same order as the pipeline applies them. Their composition
-is kept in `image_augmentation_matrices`, so the pixel remapping the augmentation applied
-stays available to the models that have to undo it.
+is kept in `image_augmentation_matrices` as 4x4 homogeneous matrices, so the pixel
+remapping the augmentation applied stays available to the models that have to undo it.
 """
 
 from __future__ import annotations
@@ -73,9 +73,11 @@ class ImageSpaceTransform(MultiTaskBaseTransform):
             image_transforms @ camera_image_data.augmented_camera_intrinsics
         )
         # The affines are expressed in the frame of the image they are given, so the new one
-        # is composed on the left of the ones the earlier transforms already applied.
+        # is composed on the left of the ones the earlier transforms already applied, after
+        # being lifted into the 4x4 layout the stored matrices use.
         image_augmentation_matrices = (
-            image_transforms @ camera_image_data.image_augmentation_matrices
+            BaseImages.homogeneous_image_augmentation_matrices(image_transforms)
+            @ camera_image_data.image_augmentation_matrices
         )
 
         # (num_cameras, 4, 4), the augmented intrinsics padded to homogeneous coordinates.

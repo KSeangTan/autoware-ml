@@ -39,10 +39,15 @@ class BaseImages(BaseModel):
         The loading transforms initialize it with a copy of ``camera_intrinsics``.
         image_augmentation_matrices: Composition of the 2D affines applied to the pixels
         by the image-space augmentations, mapping a pixel of the raw loaded image onto
-        its location in ``images``. The loading transforms initialize it with the
-        identity. Note that a non-affine image transform, such as the undistortion
-        applied by ``UndistortImage``, is not composed into it, so it describes the
-        augmentations alone rather than the full raw-image-to-augmented-image mapping.
+        its location in ``images``. It is stored as a 4x4 homogeneous matrix: the 2D
+        rotation and scale sit in the top-left 2x2 block, the pixel translation in the
+        first two rows of the last column, and the remaining diagonal is one. Slicing
+        ``[:3, :3]`` therefore yields the rotation padded with a unit depth axis and
+        ``[:3, 3]`` the translation with a zero depth offset, which is the layout the
+        view transforms consume. The loading transforms initialize it with the identity.
+        Note that a non-affine image transform, such as the undistortion applied by
+        ``UndistortImage``, is not composed into it, so it describes the augmentations
+        alone rather than the full raw-image-to-augmented-image mapping.
         noises: Optional homogeneous perturbation transform applied by calibration
         augmentation.
     """
@@ -67,13 +72,13 @@ class BaseImages(BaseModel):
     distortion_models: Sequence[str]
     distortion_coefficients: Sequence[Float32[torch.Tensor, " num_coefficients"]]
     augmented_camera_intrinsics: Float32[torch.Tensor, "num_cameras 3 3"]
-    image_augmentation_matrices: Float32[torch.Tensor, "num_cameras 3 3"]
+    image_augmentation_matrices: Float32[torch.Tensor, "num_cameras 4 4"]
     noises: Float32[torch.Tensor, " num_cameras"] | None = None
 
     @staticmethod
     def identity_image_augmentation_matrices(
         camera_intrinsics: Float32[torch.Tensor, "num_cameras 3 3"],
-    ) -> Float32[torch.Tensor, "num_cameras 3 3"]:
+    ) -> Float32[torch.Tensor, "num_cameras 4 4"]:
         """
         Build the per-camera identity the image augmentation matrices start from.
 
@@ -82,11 +87,49 @@ class BaseImages(BaseModel):
                 identity matrices are built for.
 
         Returns:
-            The 3x3 identity repeated once per camera.
+            The 4x4 identity repeated once per camera.
         """
-        return torch.eye(3, dtype=camera_intrinsics.dtype, device=camera_intrinsics.device).repeat(
+        return torch.eye(4, dtype=camera_intrinsics.dtype, device=camera_intrinsics.device).repeat(
             camera_intrinsics.shape[0], 1, 1
         )
+
+    @staticmethod
+    def homogeneous_image_augmentation_matrices(
+        pixel_affines: Float32[torch.Tensor, "num_cameras 3 3"],
+    ) -> Float32[torch.Tensor, "num_cameras 4 4"]:
+        """
+        Lift per-camera 2D pixel affines into the 4x4 layout of ``image_augmentation_matrices``.
+
+        Args:
+            pixel_affines: 3x3 affines ``[[R, t], [0, 1]]`` acting on homogeneous pixels.
+
+        Returns:
+            4x4 matrices holding ``R`` in the top-left 2x2 block, ``t`` in the first two rows
+            of the last column, and one on the remaining diagonal.
+        """
+        homogeneous = torch.eye(4, dtype=pixel_affines.dtype, device=pixel_affines.device).repeat(
+            pixel_affines.shape[0], 1, 1
+        )
+        homogeneous[:, :2, :2] = pixel_affines[:, :2, :2]
+        homogeneous[:, :2, 3] = pixel_affines[:, :2, 2]
+        return homogeneous
+
+    def image_augmentation_pixel_affines(self) -> Float32[torch.Tensor, "num_cameras 3 3"]:
+        """
+        Read ``image_augmentation_matrices`` back as 3x3 affines acting on homogeneous pixels.
+
+        Returns:
+            Per-camera 3x3 affines ``[[R, t], [0, 1]]`` such that ``affine @ (u, v, 1)`` is the
+            location in ``images`` of the raw pixel ``(u, v)``.
+        """
+        pixel_affines = torch.eye(
+            3,
+            dtype=self.image_augmentation_matrices.dtype,
+            device=self.image_augmentation_matrices.device,
+        ).repeat(self.image_augmentation_matrices.shape[0], 1, 1)
+        pixel_affines[:, :2, :2] = self.image_augmentation_matrices[:, :2, :2]
+        pixel_affines[:, :2, 2] = self.image_augmentation_matrices[:, :2, 3]
+        return pixel_affines
 
     def update_lidar_transformation_matrices(
         self, augmentation_inverse: Float32[torch.Tensor, "4 4"]

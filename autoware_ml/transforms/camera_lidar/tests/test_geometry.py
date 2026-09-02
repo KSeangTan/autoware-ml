@@ -98,7 +98,7 @@ class BaseCameraLidarGeometryTestCase(unittest.TestCase):
             distortion_models=["plumb_bob"] * num_cameras,
             distortion_coefficients=[torch.zeros(5) for _ in range(num_cameras)],
             augmented_camera_intrinsics=torch.eye(3).repeat(num_cameras, 1, 1),
-            image_augmentation_matrices=torch.eye(3).repeat(num_cameras, 1, 1),
+            image_augmentation_matrices=torch.eye(4).repeat(num_cameras, 1, 1),
         )
 
     def build_multi_task_gt_sample(

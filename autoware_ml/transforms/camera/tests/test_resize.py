@@ -75,7 +75,7 @@ class CameraImageDataTestCase(unittest.TestCase):
             distortion_models=["plumb_bob"] * self.num_cameras,
             distortion_coefficients=[torch.zeros(5)] * self.num_cameras,
             augmented_camera_intrinsics=self.camera_intrinsic.repeat(self.num_cameras, 1, 1),
-            image_augmentation_matrices=torch.eye(3, dtype=torch.float32).repeat(
+            image_augmentation_matrices=torch.eye(4, dtype=torch.float32).repeat(
                 self.num_cameras, 1, 1
             ),
         )
@@ -97,7 +97,8 @@ class CameraImageDataTestCase(unittest.TestCase):
         self.assertTrue(
             torch.allclose(
                 camera_image_data.augmented_camera_intrinsics,
-                camera_image_data.image_augmentation_matrices @ camera_image_data.camera_intrinsics,
+                camera_image_data.image_augmentation_pixel_affines()
+                @ camera_image_data.camera_intrinsics,
                 atol=1e-5,
             )
         )
@@ -483,7 +484,7 @@ class TestImageAugmentationMatrices(CameraImageDataTestCase):
             source_pixel = self.project_lidar_point(source_camera_image_data, camera_index)
             augmented_pixel = self.project_lidar_point(augmented_camera_image_data, camera_index)
             inverse_augmentation = torch.linalg.inv(
-                augmented_camera_image_data.image_augmentation_matrices[camera_index]
+                augmented_camera_image_data.image_augmentation_pixel_affines()[camera_index]
             )
             recovered_pixel = inverse_augmentation @ augmented_pixel
             recovered_pixel = recovered_pixel / recovered_pixel[2]
@@ -568,7 +569,7 @@ class TestImageAugmentationMatrices(CameraImageDataTestCase):
         self.assertTrue(
             torch.equal(
                 sample.camera_image_data.image_augmentation_matrices,
-                torch.eye(3, dtype=torch.float32).repeat(self.num_cameras, 1, 1),
+                torch.eye(4, dtype=torch.float32).repeat(self.num_cameras, 1, 1),
             )
         )
 
@@ -582,13 +583,59 @@ class TestImageAugmentationMatrices(CameraImageDataTestCase):
 
         assert output.camera_image_data is not None
         expected = torch.tensor(
-            [[0.5, 0.0, 0.0], [0.0, 0.5, 0.0], [0.0, 0.0, 1.0]], dtype=torch.float32
+            [
+                [0.5, 0.0, 0.0, 0.0],
+                [0.0, 0.5, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            dtype=torch.float32,
         )
         self.assertTrue(
             torch.allclose(
                 output.camera_image_data.image_augmentation_matrices,
                 expected.repeat(self.num_cameras, 1, 1),
                 atol=1e-5,
+            )
+        )
+
+    def test_stores_the_pixel_translation_in_the_homogeneous_layout(self) -> None:
+        """Test that a crop lands its offset in the last column and leaves the depth axis alone."""
+        np.random.seed(0)
+        sample = self.build_multi_task_gt_sample()
+
+        output = ResizeCropFlipRotImage(
+            target_size=[self.image_height, self.image_width],
+            resize_range=[1.0, 1.0],
+            bottom_crop_ratio_range=[0.2, 0.2],
+            training=True,
+            random_horizontal_flip=False,
+        )(sample)
+
+        assert output.camera_image_data is not None
+        matrices = output.camera_image_data.image_augmentation_matrices
+        pixel_affines = output.camera_image_data.image_augmentation_pixel_affines()
+        # The 2D part of the affine sits in the top-left block and the last column.
+        self.assertTrue(torch.allclose(matrices[:, :2, :2], pixel_affines[:, :2, :2]))
+        self.assertTrue(torch.allclose(matrices[:, :2, 3], pixel_affines[:, :2, 2]))
+        self.assertTrue(torch.any(matrices[:, :2, 3] != 0.0))
+        # The depth axis and the homogeneous row are the identity, so slicing ``[:3, 3]``
+        # yields a zero depth offset and ``[:3, :3]`` a rotation padded with a unit depth.
+        self.assertTrue(
+            torch.equal(
+                matrices[:, 2], torch.tensor([0.0, 0.0, 1.0, 0.0]).repeat(self.num_cameras, 1)
+            )
+        )
+        self.assertTrue(
+            torch.equal(
+                matrices[:, 3], torch.tensor([0.0, 0.0, 0.0, 1.0]).repeat(self.num_cameras, 1)
+            )
+        )
+        self.assertTrue(torch.equal(matrices[:, :2, 2], torch.zeros(self.num_cameras, 2)))
+        # Lifting the 3x3 affines back reproduces the stored matrices.
+        self.assertTrue(
+            torch.allclose(
+                BaseImages.homogeneous_image_augmentation_matrices(pixel_affines), matrices
             )
         )
 
@@ -610,8 +657,8 @@ class TestImageAugmentationMatrices(CameraImageDataTestCase):
         )
         self.assertTrue(
             torch.allclose(
-                cropped.camera_image_data.image_augmentation_matrices,
-                second_transform @ resized.camera_image_data.image_augmentation_matrices,
+                cropped.camera_image_data.image_augmentation_pixel_affines(),
+                second_transform @ resized.camera_image_data.image_augmentation_pixel_affines(),
                 atol=1e-4,
             )
         )
@@ -639,7 +686,7 @@ class TestImageAugmentationMatrices(CameraImageDataTestCase):
         camera_image_data = output.camera_image_data
         augmented_projection = camera_image_data.lidar2images[0] @ point
         augmented_pixel = augmented_projection[:2] / augmented_projection[2]
-        mapped_pixel = camera_image_data.image_augmentation_matrices[0] @ source_pixel
+        mapped_pixel = camera_image_data.image_augmentation_pixel_affines()[0] @ source_pixel
         self.assertTrue(
             torch.allclose(mapped_pixel[:2] / mapped_pixel[2], augmented_pixel, atol=1e-4)
         )
@@ -656,7 +703,7 @@ class TestImageAugmentationMatrices(CameraImageDataTestCase):
         self.assertTrue(
             torch.equal(
                 camera_image_data.image_augmentation_matrices,
-                torch.eye(3, dtype=torch.float32).repeat(self.num_cameras, 1, 1),
+                torch.eye(4, dtype=torch.float32).repeat(self.num_cameras, 1, 1),
             )
         )
 

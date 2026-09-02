@@ -84,7 +84,7 @@ class BEVFusionCamera(nn.Module):
     def forward(
         self,
         image_batch: Float32[torch.Tensor, "batch_size num_cams 3 height width"],
-        points: Sequence[Float32[torch.Tebsor, ""]],
+        points: Sequence[Float32[torch.Tensor, ""]],
         lidar2img: Sequence[torch.Tensor],
         camera_intrinsics: Sequence[torch.Tensor],
         lidar2cam: Sequence[torch.Tensor],
@@ -92,7 +92,6 @@ class BEVFusionCamera(nn.Module):
         | None = None,
         image_feature: torch.Tensor | None = None,
         img_aug_matrix: torch.Tensor | None = None,
-        lidar_aug_matrix: torch.Tensor | None = None,
     ) -> Float32[torch.Tensor, "batch_size channels height width"]:
         """Encode multiview images into a BEV feature map.
 
@@ -103,11 +102,12 @@ class BEVFusionCamera(nn.Module):
                 augmentation into these, so the default identity ``img_aug_matrix`` keeps the
                 projection consistent.
             camera_intrinsics: Camera intrinsic matrices.
-            lidar2cam: Lidar-to-camera extrinsics.
+            lidar2cam: Lidar-to-camera extrinsics expressed in the lidar frame the BEV grid
+                is built in. The pipeline composes the inverse of the lidar augmentation into
+                these, so their inverse maps the camera into the augmented lidar frame.
             geom_feats_precomputed: Optional precomputed BEV-pool metadata.
             image_feature: Optional precomputed image feature tensor.
             img_aug_matrix: Optional image augmentation matrices.
-            lidar_aug_matrix: Optional lidar augmentation matrices.
 
         Returns:
             Image BEV feature map.
@@ -131,25 +131,20 @@ class BEVFusionCamera(nn.Module):
             if isinstance(lidar2img, (list, tuple))
             else lidar2img.float()
         )
-        camera2lidar = torch.inverse(lidar2cam_tensor)
+        camera2aug_lidar = torch.inverse(lidar2cam_tensor)
         if img_aug_matrix is None:
             img_aug_matrix = (
                 torch.eye(4, device=image_feature.device)
                 .view(1, 1, 4, 4)
                 .repeat(batch_size, num_cams, 1, 1)
             )
-        if lidar_aug_matrix is None:
-            lidar_aug_matrix = (
-                torch.eye(4, device=image_feature.device).view(1, 4, 4).repeat(batch_size, 1, 1)
-            )
         return self.view_transform(
             image_feature,
             points,
             lidar2image,
             intrinsics,
-            camera2lidar,
+            camera2aug_lidar,
             img_aug_matrix,
-            lidar_aug_matrix,
             geom_feats_precomputed=geom_feats_precomputed,
         )
 
@@ -202,7 +197,7 @@ class BEVFusionCamera(nn.Module):
         """Precompute the BEV-pool metadata baked into the exported graph.
 
         The runtime resolves the pooling geometry once from the calibration, so the export sample
-        uses identity augmentation matrices to keep the metadata free of training-time augmentation.
+        uses an identity image augmentation to keep the metadata free of training-time augmentation.
 
         Args:
             camera_intrinsics: Single-sample camera intrinsic matrices.
@@ -213,13 +208,11 @@ class BEVFusionCamera(nn.Module):
         """
         device = camera_intrinsics.device
         num_cams = camera_intrinsics.shape[1]
-        camera2lidar = torch.inverse(lidar2cam)
+        camera2aug_lidar = torch.inverse(lidar2cam)
         identity_img_aug = torch.eye(4, device=device).view(1, 1, 4, 4).repeat(1, num_cams, 1, 1)
-        identity_lidar_aug = torch.eye(4, device=device).view(1, 4, 4)
         geom = self.view_transform.camera_to_lidar_geometry(
-            camera2lidar,
+            camera2aug_lidar,
             camera_intrinsics,
-            identity_lidar_aug,
             identity_img_aug,
         )
         return self.view_transform.bev_pool_aux(geom)

@@ -369,7 +369,6 @@ class BEVFusionDetectionModel(BaseModel):
         | None = None,
         image_feature: torch.Tensor | None = None,
         img_aug_matrix: torch.Tensor | None = None,
-        lidar_aug_matrix: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Encode multiview images into a BEV feature map.
 
@@ -380,11 +379,13 @@ class BEVFusionDetectionModel(BaseModel):
                 pipeline bakes image augmentation into these, so the default
                 identity ``img_aug_matrix`` keeps the projection consistent.
             camera_intrinsics: Camera intrinsic matrices.
-            lidar2cam: Lidar-to-camera extrinsics.
+            lidar2cam: Lidar-to-camera extrinsics expressed in the lidar frame the BEV
+                grid is built in. The pipeline composes the inverse of the lidar
+                augmentation into these, so their inverse maps the camera into the
+                augmented lidar frame.
             geom_feats_precomputed: Optional precomputed BEV-pool metadata.
             image_feature: Optional precomputed image feature tensor.
             img_aug_matrix: Optional image augmentation matrices.
-            lidar_aug_matrix: Optional lidar augmentation matrices.
 
         Returns:
             Image BEV feature map.
@@ -422,25 +423,20 @@ class BEVFusionDetectionModel(BaseModel):
             if isinstance(lidar2img, (list, tuple))
             else lidar2img.float()
         )
-        camera2lidar = torch.inverse(lidar2cam_tensor)
+        camera2aug_lidar = torch.inverse(lidar2cam_tensor)
         if img_aug_matrix is None:
             img_aug_matrix = (
                 torch.eye(4, device=image_feature.device)
                 .view(1, 1, 4, 4)
                 .repeat(batch_size, num_cams, 1, 1)
             )
-        if lidar_aug_matrix is None:
-            lidar_aug_matrix = (
-                torch.eye(4, device=image_feature.device).view(1, 4, 4).repeat(batch_size, 1, 1)
-            )
         return self.view_transform(
             image_feature,
             points,
             lidar2image,
             intrinsics,
-            camera2lidar,
+            camera2aug_lidar,
             img_aug_matrix,
-            lidar_aug_matrix,
             geom_feats_precomputed=geom_feats_precomputed,
         )
 
@@ -751,14 +747,13 @@ class BEVFusionDetectionModel(BaseModel):
         imgs_uint8 = (img[0] * 255.0).round().clamp(0.0, 255.0).to(torch.uint8)
         image_feats = self.get_image_backbone_features(img)[0]
 
-        camera2lidar = torch.inverse(lidar2cam)
+        camera2aug_lidar = torch.inverse(lidar2cam)
         identity_aug = (
             torch.eye(4, device=img.device).view(1, 1, 4, 4).repeat(1, img.shape[1], 1, 1)
         )
         geom = self.view_transform.camera_to_lidar_geometry(
-            camera2lidar,
+            camera2aug_lidar,
             camera_intrinsics,
-            torch.eye(4, device=img.device).view(1, 4, 4),
             identity_aug,
         )
         geom_feats, kept, ranks, indices = self.view_transform.bev_pool_aux(geom)

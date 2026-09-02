@@ -104,7 +104,7 @@ class TestLiDARDepthSparseTransform(unittest.TestCase):
             distortion_models=["plumb_bob"] * num_cameras,
             distortion_coefficients=[torch.zeros(5) for _ in range(num_cameras)],
             augmented_camera_intrinsics=camera_intrinsics.clone(),
-            image_augmentation_matrices=torch.eye(3).repeat(num_cameras, 1, 1),
+            image_augmentation_matrices=torch.eye(4).repeat(num_cameras, 1, 1),
         )
         intensity = torch.full((points_xyz.shape[0], 1), 0.5, dtype=torch.float32)
         point_cloud_data = LiDARPoints(

@@ -102,13 +102,10 @@ def test_depth_lss_transform_uses_bev_pool(monkeypatch) -> None:
     points = [torch.rand(50, 4) * 8.0 for _ in range(2)]
     lidar2image = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
     intrinsics = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
-    camera2lidar = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
+    camera2aug_lidar = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
     img_aug = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
-    lidar_aug = torch.eye(4).view(1, 4, 4).repeat(2, 1, 1)
 
-    bev = transform(
-        image_features, points, lidar2image, intrinsics, camera2lidar, img_aug, lidar_aug
-    )
+    bev = transform(image_features, points, lidar2image, intrinsics, camera2aug_lidar, img_aug)
     assert bev.shape[0] == 2
     assert bev.shape[1] == 8 * 1
     assert transform.nx == (16, 16, 1)
@@ -140,13 +137,10 @@ def test_depth_lss_transform_emits_lidar_convention_bev_layout(monkeypatch) -> N
     points = [torch.rand(50, 4) * 4.0 for _ in range(2)]
     lidar2image = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
     intrinsics = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
-    camera2lidar = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
+    camera2aug_lidar = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
     img_aug = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
-    lidar_aug = torch.eye(4).view(1, 4, 4).repeat(2, 1, 1)
 
-    bev = transform(
-        image_features, points, lidar2image, intrinsics, camera2lidar, img_aug, lidar_aug
-    )
+    bev = transform(image_features, points, lidar2image, intrinsics, camera2aug_lidar, img_aug)
 
     # nx = (X, Y, Z) = (16, 8, 1); the pooled grid must come out in the
     # (Y, X) layout shared with the lidar branch, not the pooling-native (X, Y).
@@ -183,11 +177,10 @@ def test_depth_lss_transform_supports_precomputed_pool_metadata(monkeypatch) -> 
     points = [torch.rand(30, 4) * 4.0]
     lidar2image = torch.eye(4).view(1, 1, 4, 4).repeat(1, 2, 1, 1)
     intrinsics = torch.eye(4).view(1, 1, 4, 4).repeat(1, 2, 1, 1)
-    camera2lidar = torch.eye(4).view(1, 1, 4, 4).repeat(1, 2, 1, 1)
+    camera2aug_lidar = torch.eye(4).view(1, 1, 4, 4).repeat(1, 2, 1, 1)
     img_aug = torch.eye(4).view(1, 1, 4, 4).repeat(1, 2, 1, 1)
-    lidar_aug = torch.eye(4).view(1, 4, 4)
 
-    geom = transform.camera_to_lidar_geometry(camera2lidar, intrinsics, lidar_aug, img_aug)
+    geom = transform.camera_to_lidar_geometry(camera2aug_lidar, intrinsics, img_aug)
     geom_feats, kept, ranks, indices = transform.bev_pool_aux(geom)
     bev = transform.forward_precomputed(
         image_features, points, lidar2image, img_aug, geom_feats, kept, ranks, indices
@@ -227,18 +220,16 @@ def test_bevfusion_model_fuses_camera_and_lidar_branches() -> None:
             points,
             lidar2image,
             camera_intrinsics,
-            camera2lidar,
+            camera2aug_lidar,
             img_aug_matrix,
-            lidar_aug_matrix,
             geom_feats_precomputed=None,
         ):
             del (
                 points,
                 lidar2image,
                 camera_intrinsics,
-                camera2lidar,
+                camera2aug_lidar,
                 img_aug_matrix,
-                lidar_aug_matrix,
                 geom_feats_precomputed,
             )
             batch = x.shape[0]
@@ -308,18 +299,16 @@ def test_bevfusion_validates_runtime_bev_shapes() -> None:
             points,
             lidar2image,
             camera_intrinsics,
-            camera2lidar,
+            camera2aug_lidar,
             img_aug_matrix,
-            lidar_aug_matrix,
             geom_feats_precomputed=None,
         ):
             del (
                 points,
                 lidar2image,
                 camera_intrinsics,
-                camera2lidar,
+                camera2aug_lidar,
                 img_aug_matrix,
-                lidar_aug_matrix,
                 geom_feats_precomputed,
             )
             return x.new_ones((x.shape[0], 80, 8, 8))

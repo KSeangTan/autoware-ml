@@ -15,7 +15,7 @@ class ImageGTBatch(NamedTuple):
     images: Float32[Tensor, "batch_size num_cameras num_channels height width"]
     depth_images: Float32[Tensor, "batch_size num_cameras height width"] | None
     augmented_camera_intrinsics: Float32[Tensor, "batch_size num_cameras 3 3"]
-    image_augmentation_matrices: Float32[Tensor, "batch_size num_cameras 3 3"]
+    image_augmentation_matrices: Float32[Tensor, "batch_size num_cameras 4 4"]
     lidar2images: Float32[Tensor, "batch_size num_cameras 4 4"]
     lidar2cams: Float32[Tensor, "batch_size num_cameras 4 4"]
 
