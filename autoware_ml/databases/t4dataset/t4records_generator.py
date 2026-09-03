@@ -59,6 +59,10 @@ from autoware_ml.utils.dataset import convert_quaternion_to_matrix
 
 logger = logging.getLogger(__name__)
 
+# Max number of past lidar sweeps to concatenate to the current lidar frame. The T4Dataset lidar
+# runs at 10Hz, so 9 past sweeps + 1 current sweep cover all the lidar scans in one second.
+_MAX_SWEEPS = 9
+
 
 class T4RecordsGenerator:
     """RecordsGenerator for T4Dataset."""
@@ -70,7 +74,6 @@ class T4RecordsGenerator:
         self,
         database_root_path: str,
         scenario_data: ScenarioData,
-        max_sweeps: int,
         sample_steps: int,
         lidar_pointcloud_num_features: int,
         database_task_configs: MappingProxyType[TaskType, DatabaseTaskConfig],
@@ -83,8 +86,6 @@ class T4RecordsGenerator:
         Args:
           database_root_path: Root path of the T4 database.
           scenario_data: Scenario data.
-          max_sweeps: Max number of lidar sweeps to include, only for 3D, set to 0
-            if skipping lidar sweep concatenation.
           sample_steps: Number of frames/samples to skip between each sample, set to 1
             if not skipping any samples/frames.
           lidar_pointcloud_num_features: Number of features of the lidar pointcloud.
@@ -98,7 +99,6 @@ class T4RecordsGenerator:
 
         self.database_root_path = Path(database_root_path)
         self.scenario_data = scenario_data
-        self.max_sweeps = max_sweeps
         self.sample_steps = sample_steps
         self.lidar_pointcloud_num_features = lidar_pointcloud_num_features
         self.t4_devkit_dataset = self._construct_t4_devkit_dataset()
@@ -117,7 +117,6 @@ class T4RecordsGenerator:
         self.box3d_ignore_label_index = detection3d_task_config.ignore_label_index
 
         assert sample_steps > 0, "Sample steps must be greater than 0."
-        assert max_sweeps >= 0, "Max sweeps must be greater than or equal to 0."
 
     def _construct_t4_devkit_dataset(self) -> Tier4:
         """
@@ -147,7 +146,7 @@ class T4RecordsGenerator:
 
         records = []
         logger.info(
-            f"Generating dataset records for scenario: {self.scenario_data.scenario_id} with sample steps: {self.sample_steps} and max sweeps: {self.max_sweeps}"
+            f"Generating dataset records for scenario: {self.scenario_data.scenario_id} with sample steps: {self.sample_steps} and max sweeps: {_MAX_SWEEPS}"
         )
 
         for sample_index in range(0, len(self.t4_devkit_dataset.sample), self.sample_steps):
@@ -462,7 +461,7 @@ class T4RecordsGenerator:
             SchemaName.SAMPLE_DATA, current_lidar_sample_data_token
         )
 
-        for _ in range(self.max_sweeps):
+        for _ in range(_MAX_SWEEPS):
             # Stop processing if the current lidar sample data has no previous sample data
             if not current_sample_data_record.prev:
                 break

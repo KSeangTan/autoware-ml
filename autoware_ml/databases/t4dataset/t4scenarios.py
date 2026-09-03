@@ -90,7 +90,6 @@ class T4Scenarios(Scenarios):
             scenario_version=version,
             vehicle_type=vehicle_type,
             location=city,
-            max_sweeps=dataset_params.max_sweeps,
             sample_steps=dataset_params.sample_steps,
         )
 

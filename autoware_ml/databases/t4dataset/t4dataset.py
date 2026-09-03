@@ -75,7 +75,6 @@ def _apply_t4_records_generator(
         database_root_path=t4_records_generator_worker_params.database_root_path,
         scenario_data=t4_records_generator_worker_params.scenario_data,
         sample_steps=t4_records_generator_worker_params.scenario_data.sample_steps,
-        max_sweeps=t4_records_generator_worker_params.scenario_data.max_sweeps,
         lidar_pointcloud_num_features=t4_records_generator_worker_params.lidar_pointcloud_num_features,
         database_task_configs=t4_records_generator_worker_params.database_task_configs,
         box3d_pipelines=t4_records_generator_worker_params.box3d_pipelines,

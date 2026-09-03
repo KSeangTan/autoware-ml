@@ -59,7 +59,7 @@ class TestDatabaseHash(unittest.TestCase):
         scenarios = T4Scenarios(
             scenario_root_path=scenario_root_path or self.scenario_root_path,
             dataset_params=[
-                DatasetParams(dataset_name="db_test", max_sweeps=2, sample_steps=1),
+                DatasetParams(dataset_name="db_test", sample_steps=1),
             ],
         )
         return T4Dataset(

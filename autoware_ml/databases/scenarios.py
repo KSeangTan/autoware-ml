@@ -44,36 +44,26 @@ PathAdapter = Annotated[Path, BeforeValidator(path_adapter)]
 
 class DatasetParams(BaseModel):
     """
-    Parameters for a dataset, for example, max_sweeps and sampling steps
+    Parameters for a dataset, for example, sampling steps
     when preprocessing it.
 
     Attributes:
       dataset_name: Name of the dataset.
-      max_sweeps: Maximum number of sweeps to include.
       sample_steps: Number of steps to sample.
     """
 
     model_config = ConfigDict(frozen=True, strict=True)
 
     dataset_name: str
-    max_sweeps: int
     sample_steps: int
 
     def __str__(self) -> str:
         """String representation of the database version."""
-        return (
-            f"DatasetParams(dataset_name={self.dataset_name}, "
-            f"max_sweeps={self.max_sweeps}, "
-            f"sample_steps={self.sample_steps})"
-        )
+        return f"DatasetParams(dataset_name={self.dataset_name}, sample_steps={self.sample_steps})"
 
     def __eq__(self, other: DatasetParams) -> bool:
         """Compare two database versions by their version and settings."""
-        return (
-            self.dataset_name == other.dataset_name
-            and self.max_sweeps == other.max_sweeps
-            and self.sample_steps == other.sample_steps
-        )
+        return self.dataset_name == other.dataset_name and self.sample_steps == other.sample_steps
 
     def __hash__(self) -> int:
         """Hash the database version by its version and settings."""
@@ -90,7 +80,6 @@ class ScenarioData(BaseModel):
       dataset_name: Name of the dataset.
       scenario_id: ID of the scenario.
       scenario_version: Version of the scenario.
-      max_sweeps: Maximum number of sweeps to include.
       sample_steps: Number of steps to sample.
       vehicle_type: Type of the vehicle.
       location: Location of the scenario.
@@ -102,7 +91,6 @@ class ScenarioData(BaseModel):
     dataset_name: str
     scenario_id: str
     scenario_version: str
-    max_sweeps: int
     sample_steps: int
     vehicle_type: str | None = None
     location: str | None = None
@@ -119,7 +107,6 @@ class ScenarioData(BaseModel):
             f"ScenarioData(dataset_name={self.dataset_name}, "
             f"scenario_id={self.scenario_id}, "
             f"scenario_version={self.scenario_version}, "
-            f"max_sweeps={self.max_sweeps}, "
             f"sample_steps={self.sample_steps}, "
             f"vehicle_type={self.vehicle_type}, "
             f"location={self.location})"
@@ -137,7 +124,6 @@ class ScenarioData(BaseModel):
             self.dataset_name == other.dataset_name
             and self.scenario_id == other.scenario_id
             and self.scenario_version == other.scenario_version
-            and self.max_sweeps == other.max_sweeps
             and self.sample_steps == other.sample_steps
             and self.vehicle_type == other.vehicle_type
             and self.location == other.location
