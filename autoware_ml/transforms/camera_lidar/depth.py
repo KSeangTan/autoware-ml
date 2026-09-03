@@ -151,10 +151,12 @@ class LiDARDepthSparseTransform(MultiTaskBaseTransform):
             lidar2image=lidar2images,
             image_size=(int(height), int(width)),
         )
+        # Expand to (num_cameras, 1, height, width) to match the expected shape of depth maps.
+        depth_images = depth_images.unsqueeze(1)
 
         # Only the depth changes, every other field is carried over unchanged.
         # model_copy does not validate what it is given, so the copy is validated explicitly.
         camera_image_data_with_depth = BaseImages.model_validate(
-            camera_image_data.model_copy(update={"depth_images": depth_images})
+            camera_image_data.model_copy(update={"depth_maps": depth_images})
         )
         return multi_task_gt_sample._replace(camera_image_data=camera_image_data_with_depth)

@@ -29,7 +29,7 @@ from autoware_ml.models.detection3d.encoders.pillars.pillar_feature_net import P
 from autoware_ml.models.detection3d.encoders.pillars.point_pillar_scatter import PointPillarsScatter
 from autoware_ml.models.detection3d.heads.centerhead import CenterHead
 from autoware_ml.models.detection3d.necks.second_fpn import SECONDFPN
-from autoware_ml.models.multi_task_base_model import LogDictConfigs
+from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.preprocessing.detection3d.point_pillar_preprocessor import PointPillarPreprocessor
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.ops.voxelization.voxelization import VoxelsData

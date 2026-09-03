@@ -28,7 +28,6 @@ from autoware_ml.models.detection3d.bevfusion import (
     _runtime_coors_to_voxel_coords,
 )
 from autoware_ml.models.detection3d.fusion import ConvFuser
-from autoware_ml.models.detection3d.view_transforms.depth_lss import DepthLSSTransform
 
 
 class _IdentityHead(nn.Module):
@@ -63,131 +62,6 @@ def test_generalized_lss_fpn_projects_feature_pyramid() -> None:
     assert len(outputs) == 2
     assert outputs[0].shape == (2, 64, 16, 16)
     assert outputs[1].shape == (2, 64, 8, 8)
-
-
-def test_depth_lss_transform_uses_bev_pool(monkeypatch) -> None:
-    calls = {}
-
-    def fake_bev_pool(feats, coords, ranks, batch_size, depth, height, width, is_training):
-        calls["shape"] = (
-            feats.shape,
-            coords.shape,
-            ranks.shape,
-            batch_size,
-            depth,
-            height,
-            width,
-            is_training,
-        )
-        channels = feats.shape[1]
-        return feats.new_zeros((batch_size, channels, depth, height, width))
-
-    monkeypatch.setattr(
-        "autoware_ml.models.detection3d.view_transforms.depth_lss.bev_pool", fake_bev_pool
-    )
-
-    transform = DepthLSSTransform(
-        in_channels=32,
-        out_channels=8,
-        image_size=[64, 64],
-        feature_size=[8, 8],
-        xbound=[-8.0, 8.0, 1.0],
-        ybound=[-8.0, 8.0, 1.0],
-        zbound=[-5.0, 3.0, 8.0],
-        dbound=[1.0, 5.0, 1.0],
-        downsample=1,
-    )
-
-    image_features = torch.randn(2, 3, 32, 8, 8)
-    points = [torch.rand(50, 4) * 8.0 for _ in range(2)]
-    lidar2image = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
-    intrinsics = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
-    camera2aug_lidar = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
-    img_aug = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
-
-    bev = transform(image_features, points, lidar2image, intrinsics, camera2aug_lidar, img_aug)
-    assert bev.shape[0] == 2
-    assert bev.shape[1] == 8 * 1
-    assert transform.nx == (16, 16, 1)
-    assert "shape" in calls
-
-
-def test_depth_lss_transform_emits_lidar_convention_bev_layout(monkeypatch) -> None:
-    def fake_bev_pool(feats, coords, ranks, batch_size, depth, height, width, is_training):
-        channels = feats.shape[1]
-        return feats.new_zeros((batch_size, channels, depth, height, width))
-
-    monkeypatch.setattr(
-        "autoware_ml.models.detection3d.view_transforms.depth_lss.bev_pool", fake_bev_pool
-    )
-
-    transform = DepthLSSTransform(
-        in_channels=32,
-        out_channels=8,
-        image_size=[64, 64],
-        feature_size=[8, 8],
-        xbound=[-8.0, 8.0, 1.0],
-        ybound=[-4.0, 4.0, 1.0],
-        zbound=[-5.0, 3.0, 8.0],
-        dbound=[1.0, 5.0, 1.0],
-        downsample=1,
-    )
-
-    image_features = torch.randn(2, 3, 32, 8, 8)
-    points = [torch.rand(50, 4) * 4.0 for _ in range(2)]
-    lidar2image = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
-    intrinsics = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
-    camera2aug_lidar = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
-    img_aug = torch.eye(4).view(1, 1, 4, 4).repeat(2, 3, 1, 1)
-
-    bev = transform(image_features, points, lidar2image, intrinsics, camera2aug_lidar, img_aug)
-
-    # nx = (X, Y, Z) = (16, 8, 1); the pooled grid must come out in the
-    # (Y, X) layout shared with the lidar branch, not the pooling-native (X, Y).
-    assert transform.nx == (16, 8, 1)
-    assert transform.expected_bev_shape == (8, 16)
-    assert bev.shape == (2, 8, 8, 16)
-
-
-def test_depth_lss_transform_supports_precomputed_pool_metadata(monkeypatch) -> None:
-    calls = {}
-
-    def fake_bev_pool(feats, coords, ranks, batch_size, depth, height, width, is_training):
-        calls["coords"] = coords
-        channels = feats.shape[1]
-        return feats.new_zeros((batch_size, channels, depth, height, width))
-
-    monkeypatch.setattr(
-        "autoware_ml.models.detection3d.view_transforms.depth_lss.bev_pool", fake_bev_pool
-    )
-
-    transform = DepthLSSTransform(
-        in_channels=16,
-        out_channels=4,
-        image_size=[32, 32],
-        feature_size=[4, 4],
-        xbound=[-4.0, 4.0, 1.0],
-        ybound=[-4.0, 4.0, 1.0],
-        zbound=[-2.0, 2.0, 4.0],
-        dbound=[1.0, 3.0, 1.0],
-        downsample=1,
-    )
-
-    image_features = torch.randn(1, 2, 16, 4, 4)
-    points = [torch.rand(30, 4) * 4.0]
-    lidar2image = torch.eye(4).view(1, 1, 4, 4).repeat(1, 2, 1, 1)
-    intrinsics = torch.eye(4).view(1, 1, 4, 4).repeat(1, 2, 1, 1)
-    camera2aug_lidar = torch.eye(4).view(1, 1, 4, 4).repeat(1, 2, 1, 1)
-    img_aug = torch.eye(4).view(1, 1, 4, 4).repeat(1, 2, 1, 1)
-
-    geom = transform.camera_to_lidar_geometry(camera2aug_lidar, intrinsics, img_aug)
-    geom_feats, kept, ranks, indices = transform.bev_pool_aux(geom)
-    bev = transform.forward_precomputed(
-        image_features, points, lidar2image, img_aug, geom_feats, kept, ranks, indices
-    )
-
-    assert bev.shape == (1, 4, 8, 8)
-    assert calls["coords"].shape[1] == 4
 
 
 def test_bevfusion_model_fuses_camera_and_lidar_branches() -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, InstanceOf
 
+from autoware_ml.datamodule.multi_task.dataclasses.images import ImageGTBatch
 from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTBatch
 from autoware_ml.ops.voxelization.voxelization import VoxelsData
 
@@ -17,6 +18,9 @@ class MultiTaskBatchInputs(BaseModel):
     multi_task_gt_batch: InstanceOf[MultiTaskGTBatch]
 
     voxels_data: VoxelsData | None
+
+    # Image data
+    image_data: ImageGTBatch | None
 
     # TODO(Kok Seang): Add input features for 3D segmentation model.
 

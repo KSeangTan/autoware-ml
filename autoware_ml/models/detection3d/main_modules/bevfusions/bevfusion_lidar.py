@@ -18,13 +18,10 @@ from __future__ import annotations
 
 from typing import Sequence, Any
 
-from jaxtyping import Float32, Int32, Int64
+from jaxtyping import Float32, Int32
 import torch
 import torch.nn as nn
 
-from autoware_ml.models.detection3d.main_modules.bevfusions.export_outputs import (
-    export_detection_outputs,
-)
 from autoware_ml.models.detection3d.main_modules.bevfusions.fuser import ConvFuser
 
 
@@ -60,11 +57,22 @@ class BEVFusionLidar(nn.Module):
         self.pts_neck = pts_neck
         self.fuser = fuser
 
+    @property
+    def expected_bev_shape(self) -> tuple[int, int]:
+        """Return the expected ``(height, width)`` of lidar BEV features."""
+        if not hasattr(self.pts_middle_encoder, "bev_output_shape"):
+            raise AttributeError(
+                "The lidar middle encoder does not have the attribute `bev_output_shape`. "
+                "Please ensure that the middle encoder is properly configured to provide "
+                "the expected BEV output shape."
+            )
+        return self.pts_middle_encoder.bev_output_shape  # type: ignore
+
     def forward(
         self,
         voxels: Float32[torch.Tensor, "num_voxels max_num_points C"],
         coords: Int32[torch.Tensor, "num_voxels 4"],
-        num_points: Int32[torch.Tensor, "num_voxels "],
+        num_points: Int32[torch.Tensor, " num_voxels"],
         batch_size: int,
         other_bev_features: Sequence[Float32[torch.Tensor, "batch_size num_channels height width"]]
         | None,
@@ -105,7 +113,7 @@ class BEVFusionLidar(nn.Module):
             The exportable middle encoder that replaced the original, or None when the encoder has
             no exportable variant.
         """
-        self.pts_middle_encoder = self.pts_middle_encoder.prepare_for_export()
+        self.pts_middle_encoder = self.pts_middle_encoder.prepare_for_export()  # type: ignore
         return self.pts_middle_encoder
 
     @staticmethod
@@ -120,7 +128,7 @@ class BEVFusionLidar(nn.Module):
 
         The exported main body is a single-sample graph, so only voxels of the first batch sample
         are kept. Coordinates are converted from the internal ``(batch, z, y, x)`` layout to the
-        runtime ``(z, y, x)`` layout without the batch column.
+        runtime ``(x, y, z)`` layout without the batch column.
 
         Args:
             batch_inputs_dict: Batched model inputs used to derive export tensors.
@@ -135,49 +143,3 @@ class BEVFusionLidar(nn.Module):
         coors = voxel_coords[first_sample][:, 1:].int().contiguous()
         num_points_per_voxel = batch_inputs_dict["num_points"][first_sample].int()
         return voxels, coors, num_points_per_voxel
-
-
-class BEVFusionLidarExportWrapper(nn.Module):
-    """Wrap the lidar-only BEVFusion main body export.
-
-    Used when the image branch is disabled. The wrapper exposes the same
-    single-sample tensor interface as the camera-lidar main body without the
-    image inputs.
-    """
-
-    def __init__(self, model: BEVFusionLidar) -> None:
-        """Initialize the lidar export wrapper.
-
-        Args:
-            model: BEVFusion model instance.
-        """
-        super().__init__()
-        self.model = model
-
-    def forward(
-        self,
-        voxels: Float32[torch.Tensor, "num_voxels max_num_points num_point_features"],
-        coors: Int32[torch.Tensor, "num_voxels 3"],
-        num_points_per_voxel: Int32[torch.Tensor, " num_voxels"],
-    ) -> tuple[
-        Float32[torch.Tensor, "num_box_code num_proposals"],
-        Float32[torch.Tensor, " num_proposals"],
-        Int64[torch.Tensor, " num_proposals"],
-    ]:
-        """Run export-time inference on lidar voxel inputs.
-
-        Args:
-            voxels: Voxel features.
-            coors: Voxel coordinates in ``(z, y, x)`` order without batch column.
-            num_points_per_voxel: Number of points in each voxel.
-
-        Returns:
-            Tuple of ``bbox_pred``, ``score``, and ``label_pred``.
-        """
-        outputs = self.model._forward_with_batch_size(
-            voxels=voxels,
-            num_points=num_points_per_voxel,
-            voxel_coords=BEVFusionLidar.runtime_coors_to_voxel_coords(coors),
-            batch_size=1,
-        )
-        return export_detection_outputs(self.model.bbox_head, outputs)

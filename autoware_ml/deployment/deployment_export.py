@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict
 from omegaconf import DictConfig
 
 from autoware_ml.datamodule.multi_task.multi_task_data_module import MultiTaskDataModule
-from autoware_ml.models.multi_task_base_model import MultiTaskBaseModel
+from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.utils.deploy import (
     resolve_export_specs,
     merge_module_onnx_cfg,
@@ -39,7 +39,7 @@ class DeploymentExport:
         deploy_cfg: DictConfig,
         output_dir: Path,
         datamodule: MultiTaskDataModule,
-        model: MultiTaskBaseModel,
+        model: ModuleBaseModel,
     ) -> None:
         """ """
         self.deploy_cfg = deploy_cfg

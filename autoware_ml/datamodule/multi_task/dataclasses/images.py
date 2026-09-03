@@ -13,8 +13,8 @@ class ImageGTBatch(NamedTuple):
     """Named tuple to represent pointcloud features in a batch size with their batch indices."""
 
     images: Float32[Tensor, "batch_size num_cameras num_channels height width"]
-    depth_images: Float32[Tensor, "batch_size num_cameras height width"] | None
-    augmented_camera_intrinsics: Float32[Tensor, "batch_size num_cameras 3 3"]
+    depth_maps: Float32[Tensor, "batch_size num_cameras 1 height width"] | None
+    camera_intrinsics: Float32[Tensor, "batch_size num_cameras 3 3"]
     image_augmentation_matrices: Float32[Tensor, "batch_size num_cameras 4 4"]
     lidar2images: Float32[Tensor, "batch_size num_cameras 4 4"]
     lidar2cams: Float32[Tensor, "batch_size num_cameras 4 4"]
@@ -42,8 +42,8 @@ class ImageGTBatch(NamedTuple):
         images = torch.cat([sample.images for sample in images_gt_samples], dim=0)
         lidar2images = torch.cat([sample.lidar2images for sample in images_gt_samples], dim=0)
         lidar2cams = torch.cat([sample.lidar2cams for sample in images_gt_samples], dim=0)
-        augmented_camera_intrinsics = torch.cat(
-            [sample.augmented_camera_intrinsics for sample in images_gt_samples], dim=0
+        camera_intrinsics = torch.cat(
+            [sample.camera_intrinsics for sample in images_gt_samples], dim=0
         )
         image_augmentation_matrices = torch.cat(
             [sample.image_augmentation_matrices for sample in images_gt_samples], dim=0
@@ -52,12 +52,12 @@ class ImageGTBatch(NamedTuple):
         # Depth images are optional, but either every sample of the batch carries them or
         # none does, otherwise the batch cannot be built.
         samples_with_depth = [
-            sample.depth_images for sample in images_gt_samples if sample.depth_images is not None
+            sample.depth_maps for sample in images_gt_samples if sample.depth_maps is not None
         ]
         if len(samples_with_depth) == 0:
-            depth_images = None
+            depth_maps = None
         elif len(samples_with_depth) == len(images_gt_samples):
-            depth_images = torch.cat(samples_with_depth, dim=0)
+            depth_maps = torch.stack(samples_with_depth)
         else:
             raise ValueError(
                 "All samples must either carry depth images or none of them, got "
@@ -66,8 +66,8 @@ class ImageGTBatch(NamedTuple):
 
         return ImageGTBatch(
             images=images,
-            depth_images=depth_images,
-            augmented_camera_intrinsics=augmented_camera_intrinsics,
+            depth_maps=depth_maps,
+            camera_intrinsics=camera_intrinsics,
             image_augmentation_matrices=image_augmentation_matrices,
             lidar2cams=lidar2cams,
             lidar2images=lidar2images,
@@ -85,8 +85,8 @@ class ImageGTBatch(NamedTuple):
         """
         return ImageGTBatch(
             images=self.images.to(device),
-            depth_images=(self.depth_images.to(device) if self.depth_images is not None else None),
-            augmented_camera_intrinsics=self.augmented_camera_intrinsics.to(device),
+            depth_maps=(self.depth_maps.to(device) if self.depth_maps is not None else None),
+            camera_intrinsics=self.camera_intrinsics.to(device),
             image_augmentation_matrices=self.image_augmentation_matrices.to(device),
             lidar2cams=self.lidar2cams.to(device),
             lidar2images=self.lidar2images.to(device),

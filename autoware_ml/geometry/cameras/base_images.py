@@ -21,7 +21,7 @@ class BaseImages(BaseModel):
 
     Attributes:
         images: Images in Tensor to represent images for a sample.
-        depth_images: Tensor to represent depth value (distance to cameras) of pixels
+        depth_maps: Tensor to represent depth value (distance to cameras) of pixels
         for each image. None when the sample carries no depth.
         timestamps: Tensor represents the timestamps for each images.
         camera_intrinsics: Tensor represents camera intrinsics for each camera.
@@ -63,7 +63,7 @@ class BaseImages(BaseModel):
     )
 
     images: Float32[torch.Tensor, "num_cameras num_channels height width"]
-    depth_images: Float32[torch.Tensor, "num_cameras height width"] | None = None
+    depth_maps: Float32[torch.Tensor, "num_cameras 1 height width"] | None = None
     timestamps: Float32[torch.Tensor, " num_cameras"]
     camera_intrinsics: Float32[torch.Tensor, "num_cameras 3 3"]
     camera_names: Sequence[str]

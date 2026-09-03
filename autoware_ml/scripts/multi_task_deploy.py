@@ -38,7 +38,7 @@ from autoware_ml.builders.model_builder import (
 from autoware_ml.builders.logger_builder import build_trainer_logger
 from autoware_ml.datamodule.multi_task.multi_task_data_module import MultiTaskDataModule
 from autoware_ml.deployment.deployment_export import DeploymentExport
-from autoware_ml.models.multi_task_base_model import MultiTaskBaseModel
+from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.utils.mlflow_helpers import resolve_deploy_lineage, log_config_params
 from autoware_ml.utils.deploy import (
     validate_cuda_available,
@@ -60,7 +60,7 @@ def deploy(
     deploy_cfg: DictConfig,
     output_dir: Path,
     datamodule: MultiTaskDataModule,
-    model: MultiTaskBaseModel,
+    model: ModuleBaseModel,
 ) -> None:
     """Deploy the trained model for inference.
 

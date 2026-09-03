@@ -20,7 +20,7 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig
 import torch
 
-from autoware_ml.models.multi_task_base_model import MultiTaskBaseModel
+from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.utils.checkpoints import apply_matching_weights
 
@@ -48,7 +48,7 @@ def build_model(
     resume_checkpoint_path: str | None,
     set_eval: bool = False,
     enforce_full_coverage: bool = False,
-) -> MultiTaskBaseModel:
+) -> ModuleBaseModel:
     """
     Build a model from the Hydra configuration.
 
@@ -62,7 +62,7 @@ def build_model(
         enforce_full_coverage: Whether to enforce that all model parameters are covered by the weights.
 
     Returns:
-        Pytorch-Lightning MultiTaskBaseModel for multi-task learning/inference.
+        Pytorch-Lightning ModuleBaseModel for multi-task learning/inference.
     """
     logger.info("Building model...")
     model = instantiate(cfg.model, data_preprocessor=data_preprocessor)

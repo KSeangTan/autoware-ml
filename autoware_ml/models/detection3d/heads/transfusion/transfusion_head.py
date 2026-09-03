@@ -808,7 +808,7 @@ class TransFusionHead(nn.Module):
 
         return MultiTaskPredictions(detection3d_predictions=detection3d_predictions)
 
-    def decode_outputs(self, outputs: TransFusionHeadOutputs) -> MultiTaskPredictions:
+    def decode_outputs(self, outputs: Detection3DHeadOutputs) -> MultiTaskPredictions:
         """Decode predictions into metric-space boxes.
 
         Args:
@@ -817,10 +817,14 @@ class TransFusionHead(nn.Module):
         Returns:
             List of decoded prediction dictionaries, one per batch element.
         """
-        separate_head_outputs = outputs.separate_head_outputs
+        if outputs.transfusion_head_outputs is None:
+            raise ValueError("TransFusionHead outputs are missing from Detection3DHeadOutputs.")
+
+        transfusion_head_outputs = outputs.transfusion_head_outputs
+        separate_head_outputs = transfusion_head_outputs.separate_head_outputs
         batch_scores = separate_head_outputs.heatmaps[..., -self.num_proposals :].sigmoid()
         one_hot = (
-            F.one_hot(outputs.query_labels, num_classes=self.num_classes)
+            F.one_hot(transfusion_head_outputs.query_labels, num_classes=self.num_classes)
             .permute(
                 0, 2, 1
             )  # (batch_size, num_proposal, num_classes) -> (batch_size, num_classes, num_proposals)
@@ -828,7 +832,7 @@ class TransFusionHead(nn.Module):
         )
         # Use proposals from the dense heatmap to calibrate the final scores, where they are only
         # valid when both of them align
-        batch_scores = batch_scores * outputs.query_heatmap_scores * one_hot
+        batch_scores = batch_scores * transfusion_head_outputs.query_heatmap_scores * one_hot
         batch_centers = separate_head_outputs.centers[..., -self.num_proposals :]
         batch_heights = separate_head_outputs.heights[..., -self.num_proposals :]
         batch_dims = separate_head_outputs.dims[..., -self.num_proposals :]

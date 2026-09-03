@@ -16,11 +16,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 
-from jaxtyping import Float32
+from jaxtyping import Bool, Float32, Int64
 import torch
 import torch.nn as nn
+
+from autoware_ml.models.detection3d.view_transforms.depth_lss import (
+    BEVPoolResult,
+    DepthLSSTransform,
+)
 
 
 class BEVFusionCamera(nn.Module):
@@ -36,7 +40,7 @@ class BEVFusionCamera(nn.Module):
         self,
         img_backbone: nn.Module,
         img_neck: nn.Module,
-        view_transform: nn.Module,
+        view_transform: DepthLSSTransform,
     ) -> None:
         """Initialize the camera branch.
 
@@ -49,6 +53,11 @@ class BEVFusionCamera(nn.Module):
         self.img_backbone = img_backbone
         self.img_neck = img_neck
         self.view_transform = view_transform
+
+    @property
+    def expected_bev_shape(self) -> tuple[int, int]:
+        """Return the expected ``(height, width)`` of image BEV features."""
+        return self.view_transform.expected_bev_shape
 
     def extract_image_features(
         self, image_batch: Float32[torch.Tensor, "batch_size num_cams 3 height width"]
@@ -84,25 +93,23 @@ class BEVFusionCamera(nn.Module):
     def forward(
         self,
         image_batch: Float32[torch.Tensor, "batch_size num_cams 3 height width"],
-        points: Sequence[Float32[torch.Tensor, ""]],
-        lidar2img: Sequence[torch.Tensor],
-        camera_intrinsics: Sequence[torch.Tensor],
-        lidar2cam: Sequence[torch.Tensor],
-        geom_feats_precomputed: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+        depth_maps: Float32[torch.Tensor, "batch_size num_cams height width"],
+        camera_intrinsics: Float32[torch.Tensor, "batch_size num_cams 3 3"],
+        aug_lidar2cam: Float32[torch.Tensor, "batch_size num_cams 4 4"],
+        geom_feats_precomputed: BEVPoolResult | None = None,
+        image_features: Float32[
+            torch.Tensor, "batch_size num_cams channels feature_height feature_width"
+        ]
         | None = None,
-        image_feature: torch.Tensor | None = None,
-        img_aug_matrix: torch.Tensor | None = None,
+        img_aug_matrix: Float32[torch.Tensor, "batch_size num_cams 4 4"] | None = None,
     ) -> Float32[torch.Tensor, "batch_size channels height width"]:
         """Encode multiview images into a BEV feature map.
 
         Args:
-            img: Multiview image tensors.
-            points: Per-sample lidar points used for depth guidance.
-            lidar2img: Lidar-to-image projection matrices. The training pipeline bakes image
-                augmentation into these, so the default identity ``img_aug_matrix`` keeps the
-                projection consistent.
+            image_batch: Multiview image tensors.
+            depth_maps: Depth maps for each camera.
             camera_intrinsics: Camera intrinsic matrices.
-            lidar2cam: Lidar-to-camera extrinsics expressed in the lidar frame the BEV grid
+            aug_lidar2cam: Augmented lidar-to-camera extrinsics expressed in the augmented lidar frame the BEV grid
                 is built in. The pipeline composes the inverse of the lidar augmentation into
                 these, so their inverse maps the camera into the augmented lidar frame.
             geom_feats_precomputed: Optional precomputed BEV-pool metadata.
@@ -112,52 +119,35 @@ class BEVFusionCamera(nn.Module):
         Returns:
             Image BEV feature map.
         """
-        if image_feature is None:
-            image_feature = self.extract_image_features(img)
-        batch_size, num_cams = image_feature.shape[:2]
+        if image_features is None:
+            image_features = self.extract_image_features(image_batch)
+        batch_size, num_cams = image_features.shape[:2]
 
-        intrinsics = (
-            torch.stack(list(camera_intrinsics), dim=0).float()
-            if isinstance(camera_intrinsics, (list, tuple))
-            else camera_intrinsics.float()
-        )
-        lidar2cam_tensor = (
-            torch.stack(list(lidar2cam), dim=0).float()
-            if isinstance(lidar2cam, (list, tuple))
-            else lidar2cam.float()
-        )
-        lidar2image = (
-            torch.stack(list(lidar2img), dim=0).float()
-            if isinstance(lidar2img, (list, tuple))
-            else lidar2img.float()
-        )
-        camera2aug_lidar = torch.inverse(lidar2cam_tensor)
+        camera2aug_lidar = torch.inverse(aug_lidar2cam)
         if img_aug_matrix is None:
             img_aug_matrix = (
-                torch.eye(4, device=image_feature.device)
+                torch.eye(4, device=image_features.device)
                 .view(1, 1, 4, 4)
                 .repeat(batch_size, num_cams, 1, 1)
             )
         return self.view_transform(
-            image_feature,
-            points,
-            lidar2image,
-            intrinsics,
-            camera2aug_lidar,
-            img_aug_matrix,
+            image_features=image_features,
+            depth_maps=depth_maps,
+            camera_intrinsics=camera_intrinsics,
+            camera2aug_lidar=camera2aug_lidar,
+            img_aug_matrix=img_aug_matrix,
             geom_feats_precomputed=geom_feats_precomputed,
         )
 
     def forward_export(
         self,
-        points: torch.Tensor,
-        lidar2image: torch.Tensor,
-        img_aug_matrix: torch.Tensor,
-        geom_feats: torch.Tensor,
-        kept: torch.Tensor,
-        ranks: torch.Tensor,
-        indices: torch.Tensor,
-        image_feats: torch.Tensor,
+        image_features: Float32[torch.Tensor, "num_cams channels feature_height feature_width"],
+        depth_maps: Float32[torch.Tensor, "num_cams 1 height width"],
+        geom_feats: Float32[torch.Tensor, "num_frustum_points 4"]
+        | Int64[torch.Tensor, "num_frustum_points 4"],
+        kept: Bool[torch.Tensor, " num_frustum_points"],
+        ranks: Int64[torch.Tensor, " num_kept"],
+        indices: Int64[torch.Tensor, " num_kept"],
     ) -> Float32[torch.Tensor, "1 channels height width"]:
         """Encode a single sample into a BEV feature map with precomputed BEV-pool metadata.
 
@@ -166,33 +156,30 @@ class BEVFusionCamera(nn.Module):
         transform expects.
 
         Args:
-            points: Raw point tensor used for lidar depth guidance.
-            lidar2image: Raw lidar-to-image projection matrices.
-            img_aug_matrix: Image augmentation matrices.
-            geom_feats: Precomputed BEV-pool geometry features.
+            image_features: Precomputed image features for each camera.
+            depth_maps: Depth maps for each camera.
+            geom_feats: Precomputed BEV-pool geometry features; cast to ``long`` here so
+                the runtime may pass them as float.
             kept: Keep mask for pooled features.
             ranks: Sorted BEV ranks.
             indices: Sorting indices aligned with ``ranks``.
-            image_feats: Precomputed image features.
 
         Returns:
             Image BEV feature map for the single exported sample.
         """
         return self.view_transform.forward_precomputed(
-            image_feats.unsqueeze(0),
-            [points],
-            lidar2image.unsqueeze(0),
-            img_aug_matrix.unsqueeze(0),
-            geom_feats.long(),
-            kept,
-            ranks,
-            indices,
+            image_features=image_features.unsqueeze(0),
+            depth_maps=depth_maps.unsqueeze(0),
+            geom_feats=geom_feats.long(),
+            kept=kept,
+            ranks=ranks,
+            indices=indices,
         )
 
     def build_export_geometry(
         self,
         camera_intrinsics: Float32[torch.Tensor, "1 num_cams 4 4"],
-        lidar2cam: Float32[torch.Tensor, "1 num_cams 4 4"],
+        aug_lidar2cam: Float32[torch.Tensor, "1 num_cams 4 4"],
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Precompute the BEV-pool metadata baked into the exported graph.
 
@@ -201,14 +188,14 @@ class BEVFusionCamera(nn.Module):
 
         Args:
             camera_intrinsics: Single-sample camera intrinsic matrices.
-            lidar2cam: Single-sample lidar-to-camera extrinsics.
+            aug_lidar2cam: Single-sample augmented lidar-to-camera extrinsics.
 
         Returns:
             Tuple of geometry features, keep mask, sorted ranks, and sorting indices.
         """
         device = camera_intrinsics.device
         num_cams = camera_intrinsics.shape[1]
-        camera2aug_lidar = torch.inverse(lidar2cam)
+        camera2aug_lidar = torch.inverse(aug_lidar2cam)
         identity_img_aug = torch.eye(4, device=device).view(1, 1, 4, 4).repeat(1, num_cams, 1, 1)
         geom = self.view_transform.camera_to_lidar_geometry(
             camera2aug_lidar,
@@ -225,16 +212,18 @@ class BEVFusionImageBackboneExportWrapper(nn.Module):
     normalization into the graph.
     """
 
-    def __init__(self, camera: BEVFusionCamera) -> None:
+    def __init__(self, bevfusion_camera: BEVFusionCamera) -> None:
         """Initialize the image backbone export wrapper.
 
         Args:
-            camera: BEVFusion camera branch instance.
+            bevfusion_camera: BEVFusion camera branch instance.
         """
         super().__init__()
-        self.camera = camera
+        self.bevfusion_camera = bevfusion_camera
 
-    def forward(self, imgs: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, imgs: Float32[torch.Tensor, "batch_size num_cameras 3 height width"]
+    ) -> Float32[torch.Tensor, "num_cameras channels feature_height feature_width"]:
         """Encode raw multiview images into neck features.
 
         Args:
@@ -244,4 +233,4 @@ class BEVFusionImageBackboneExportWrapper(nn.Module):
             Image neck features of shape ``(N, C, fH, fW)``.
         """
         images = imgs.float() / 255.0
-        return self.camera.extract_image_features(images.unsqueeze(0)).squeeze(0)
+        return self.bevfusion_camera.extract_image_features(images.unsqueeze(0)).squeeze(0)

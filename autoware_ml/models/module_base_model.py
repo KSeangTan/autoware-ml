@@ -66,7 +66,7 @@ class LogDictConfigs(NamedTuple):
     rank_zero_only: bool = False
 
 
-class MultiTaskBaseModel(MetricEvalMixin, L.LightningModule):
+class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
     """Base Lightning Module for all Autoware-ML models.
 
     Provides common functionality for training, validation, and testing with
@@ -170,7 +170,7 @@ class MultiTaskBaseModel(MetricEvalMixin, L.LightningModule):
 
     def compute_metrics(
         self, multi_task_batch_inputs: MultiTaskBatchInputs, multi_task_outputs: MultiTaskOutputs
-    ) -> MappingProxyType[str, Float32[torch.Tensor, " 1"]]:
+    ) -> MappingProxyType[str, Float32[torch.Tensor, " num_losses"]]:
         """Compute metrics.
 
         Args:
@@ -178,7 +178,7 @@ class MultiTaskBaseModel(MetricEvalMixin, L.LightningModule):
             multi_task_outputs: Model outputs from forward().
 
         Returns:
-            MappingProxyType[str, Float32[torch.Tensor, " 1"]]: Dictionary of metrics.
+            MappingProxyType[str, Float32[torch.Tensor, " num_losses"]]: Dictionary of metrics.
             The ``loss`` field is required. Note that users must register metrics in
             the dictionary for proper logging and checkpointing.
         """

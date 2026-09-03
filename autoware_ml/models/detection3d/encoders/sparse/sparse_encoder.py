@@ -251,6 +251,11 @@ class SparseEncoder(nn.Module):
             nn.ReLU(inplace=True),
         )
 
+    @property
+    def bev_output_shape(self) -> tuple[int, int]:
+        """Return the expected ``(height, width)`` of the dense BEV output."""
+        return self.dense_output_shapes[0], self.dense_output_shapes[1]
+
     def forward(
         self,
         voxel_features: Float32[torch.Tensor, "num_voxels num_voxel_channels"],

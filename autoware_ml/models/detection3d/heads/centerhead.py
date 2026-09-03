@@ -284,7 +284,7 @@ class CenterHead(nn.Module):
         gt_bboxes_3d: Float32[torch.Tensor, "batch_size max_num_gt_bboxes num_Box3DFieldIndex"],
         gt_labels_3d: Float32[torch.Tensor, "batch_size max_num_gt_bboxes"],
         gt_valid_bboxes: Int32[torch.Tensor, " batch_size"],
-    ) -> MappingProxyType[str, torch.Tensor]:
+    ) -> MappingProxyType[str, Float32[torch.Tensor, " num_losses"]]:
         """
         Compute CenterPoint heatmap and box losses.
 
