@@ -288,29 +288,6 @@ class TestBEVFusionLidar(_BEVFusionLidarTestCase):
         self.assertFalse(original.exportable)
         self.assertEqual(lidar.expected_bev_shape, self.bev_shape)
 
-    def test_first_sample_voxel_inputs_keeps_first_sample_without_batch_column(self) -> None:
-        """
-        Test that only the voxels of batch sample 0 are kept, the batch column is dropped and the
-        runtime tensors are ``int32``.
-        """
-        voxel_coords = torch.tensor(
-            [[0, 1, 2, 3], [1, 4, 5, 6], [0, 7, 8, 9], [1, 1, 1, 1], [1, 2, 2, 2]],
-            dtype=torch.int64,
-        )
-        voxels = torch.randn(5, 3, self.point_channels)
-        num_points = torch.tensor([3, 1, 2, 3, 1], dtype=torch.int64)
-
-        out_voxels, coors, num_points_per_voxel = BEVFusionLidar.first_sample_voxel_inputs(
-            {"voxel_coords": voxel_coords, "voxels": voxels, "num_points": num_points}
-        )
-
-        torch.testing.assert_close(out_voxels, voxels[[0, 2]])
-        self.assertEqual(coors.dtype, torch.int32)
-        self.assertTrue(coors.is_contiguous())
-        self.assertEqual(coors.tolist(), [[1, 2, 3], [7, 8, 9]])
-        self.assertEqual(num_points_per_voxel.dtype, torch.int32)
-        self.assertEqual(num_points_per_voxel.tolist(), [3, 2])
-
 
 @unittest.skipUnless(
     torch.cuda.is_available(), "The sparse middle encoder runs through spconv CUDA kernels."

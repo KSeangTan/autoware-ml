@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from typing import Sequence, Any
+from typing import Sequence
 
 from jaxtyping import Float32, Int32
 import torch
@@ -115,31 +115,3 @@ class BEVFusionLidar(nn.Module):
         """
         self.pts_middle_encoder = self.pts_middle_encoder.prepare_for_export()  # type: ignore
         return self.pts_middle_encoder
-
-    @staticmethod
-    def first_sample_voxel_inputs(
-        batch_inputs_dict: dict[str, Any],
-    ) -> tuple[
-        Float32[torch.Tensor, "num_voxels max_num_points num_point_features"],
-        Int32[torch.Tensor, "num_voxels 3"],
-        Int32[torch.Tensor, " num_voxels"],
-    ]:
-        """Extract single-sample voxel export inputs in the runtime layout.
-
-        The exported main body is a single-sample graph, so only voxels of the first batch sample
-        are kept. Coordinates are converted from the internal ``(batch, z, y, x)`` layout to the
-        runtime ``(x, y, z)`` layout without the batch column.
-
-        Args:
-            batch_inputs_dict: Batched model inputs used to derive export tensors.
-
-        Returns:
-            Tuple of voxels, runtime-ordered coordinates, and per-voxel point counts for the first
-            sample.
-        """
-        voxel_coords = batch_inputs_dict["voxel_coords"]
-        first_sample = voxel_coords[:, 0] == 0
-        voxels = batch_inputs_dict["voxels"][first_sample]
-        coors = voxel_coords[first_sample][:, 1:].int().contiguous()
-        num_points_per_voxel = batch_inputs_dict["num_points"][first_sample].int()
-        return voxels, coors, num_points_per_voxel
