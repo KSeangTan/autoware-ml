@@ -49,7 +49,7 @@ class TestDatabaseHash(unittest.TestCase):
     def _build_database(
         self,
         scenario_root_path: Path | None = None,
-        root_path: str = "/data/t4datasets",
+        root_path: str = "/data/t4dataset",
         cache_path: str | None = None,
         version: str = "T4Dataset-test-v1.0.0",
         label_names: tuple[str, ...] = ("car", "pedestrian"),
@@ -98,7 +98,7 @@ class TestDatabaseHash(unittest.TestCase):
         reference = self._build_database().database_hash
         relocated = self._build_database(
             scenario_root_path=alternative_root,
-            root_path="/mnt/somewhere/else/t4datasets",
+            root_path="/mnt/somewhere/else/t4dataset",
             cache_path=str(Path(self._tmp_dir.name) / "other_cache"),
         ).database_hash
 
