@@ -29,20 +29,28 @@ class TestConvFuser(unittest.TestCase):
     """Unit tests for the ConvFuser."""
 
     def setUp(self) -> None:
-        """Set up the branch layout and a fuser in eval mode so BatchNorm is deterministic."""
+        """Set up the device, the branch layout and a fuser in eval mode so BatchNorm is deterministic."""
         torch.manual_seed(0)
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.batch_size = 2
         self.in_channels = [4, 6]
         self.out_channels = 8
         self.bev_shape = (8, 8)
-        self.fuser = ConvFuser(in_channels=self.in_channels, out_channels=self.out_channels).eval()
+        self.fuser = (
+            ConvFuser(in_channels=self.in_channels, out_channels=self.out_channels)
+            .to(self.device)
+            .eval()
+        )
         self.bev_features = self._build_bev_features(self.in_channels)
 
     def _build_bev_features(
         self, in_channels: list[int]
     ) -> list[Float32[torch.Tensor, "batch_size channels height width"]]:
         """Build one random BEV feature map per branch with the given channel counts."""
-        return [torch.randn(self.batch_size, channels, *self.bev_shape) for channels in in_channels]
+        return [
+            torch.randn(self.batch_size, channels, *self.bev_shape, device=self.device)
+            for channels in in_channels
+        ]
 
     def _fuse(
         self,
@@ -88,7 +96,7 @@ class TestConvFuser(unittest.TestCase):
 
     def test_forward_depends_on_branch_order(self) -> None:
         """Test that the branches are concatenated in the order given, so swapping them matters."""
-        fuser = ConvFuser(in_channels=[4, 4], out_channels=self.out_channels).eval()
+        fuser = ConvFuser(in_channels=[4, 4], out_channels=self.out_channels).to(self.device).eval()
         first, second = self._build_bev_features([4, 4])
 
         fused = self._fuse(fuser, [first, second])
@@ -99,7 +107,11 @@ class TestConvFuser(unittest.TestCase):
     def test_forward_accepts_more_than_two_branches(self) -> None:
         """Test that any number of branches above one is fused."""
         in_channels = [2, 3, 5]
-        fuser = ConvFuser(in_channels=in_channels, out_channels=self.out_channels).eval()
+        fuser = (
+            ConvFuser(in_channels=in_channels, out_channels=self.out_channels)
+            .to(self.device)
+            .eval()
+        )
 
         fused = self._fuse(fuser, self._build_bev_features(in_channels))
 
@@ -113,7 +125,9 @@ class TestConvFuser(unittest.TestCase):
     def test_forward_rejects_mismatched_spatial_shapes(self) -> None:
         """Test that branches on different BEV grids cannot be concatenated."""
         height, width = self.bev_shape
-        smaller = torch.randn(self.batch_size, self.in_channels[1], height // 2, width // 2)
+        smaller = torch.randn(
+            self.batch_size, self.in_channels[1], height // 2, width // 2, device=self.device
+        )
 
         with self.assertRaises(RuntimeError):
             self.fuser([self.bev_features[0], smaller])
@@ -127,12 +141,16 @@ class TestConvFuser(unittest.TestCase):
             (3, 0, (height - 2, width - 2)),
         ):
             with self.subTest(kernel_size=kernel_size, padding=padding):
-                fuser = ConvFuser(
-                    in_channels=self.in_channels,
-                    out_channels=self.out_channels,
-                    kernel_size=kernel_size,
-                    padding=padding,
-                ).eval()
+                fuser = (
+                    ConvFuser(
+                        in_channels=self.in_channels,
+                        out_channels=self.out_channels,
+                        kernel_size=kernel_size,
+                        padding=padding,
+                    )
+                    .to(self.device)
+                    .eval()
+                )
 
                 fused = self._fuse(fuser, self.bev_features)
 

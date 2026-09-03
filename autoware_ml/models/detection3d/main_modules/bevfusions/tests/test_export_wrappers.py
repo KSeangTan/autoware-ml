@@ -56,8 +56,9 @@ class _ExportDetectionOutputsTestCase(unittest.TestCase):
     """Shared proposal layout and helpers for the export packing test cases."""
 
     def setUp(self) -> None:
-        """Set up the class and proposal layout shared by every export packing test."""
+        """Set up the device and the class and proposal layout shared by every test."""
         torch.manual_seed(0)
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.class_names = ["car", "pedestrian", "cyclist"]
         self.num_classes = len(self.class_names)
         self.num_proposals = 4
@@ -78,17 +79,25 @@ class _ExportDetectionOutputsTestCase(unittest.TestCase):
         """
         num_queries = num_decoder_layers * self.num_proposals
         separate_head_outputs = TransFusionSeparateHeadOutputs(
-            heatmaps=torch.randn(batch_size, self.num_classes, num_queries),
-            centers=torch.randn(batch_size, 2, num_queries),
-            heights=torch.randn(batch_size, 1, num_queries),
-            dims=torch.randn(batch_size, 3, num_queries),
-            rots=torch.randn(batch_size, 2, num_queries),
-            vels=torch.randn(batch_size, 2, num_queries) if with_velocity else None,
+            heatmaps=torch.randn(batch_size, self.num_classes, num_queries, device=self.device),
+            centers=torch.randn(batch_size, 2, num_queries, device=self.device),
+            heights=torch.randn(batch_size, 1, num_queries, device=self.device),
+            dims=torch.randn(batch_size, 3, num_queries, device=self.device),
+            rots=torch.randn(batch_size, 2, num_queries, device=self.device),
+            vels=torch.randn(batch_size, 2, num_queries, device=self.device)
+            if with_velocity
+            else None,
         )
         return TransFusionHeadOutputs(
-            dense_heatmaps=torch.randn(batch_size, self.num_classes, *heatmap_size),
-            query_heatmap_scores=torch.rand(batch_size, self.num_classes, self.num_proposals),
-            query_labels=torch.randint(0, self.num_classes, (batch_size, self.num_proposals)),
+            dense_heatmaps=torch.randn(
+                batch_size, self.num_classes, *heatmap_size, device=self.device
+            ),
+            query_heatmap_scores=torch.rand(
+                batch_size, self.num_classes, self.num_proposals, device=self.device
+            ),
+            query_labels=torch.randint(
+                0, self.num_classes, (batch_size, self.num_proposals), device=self.device
+            ),
             separate_head_outputs=separate_head_outputs,
         )
 
@@ -125,7 +134,9 @@ class TestExportDetectionOutputs(_ExportDetectionOutputsTestCase):
     def setUp(self) -> None:
         """Set up a fake head with the shared proposal layout."""
         super().setUp()
-        self.head = _FakeHead(num_proposals=self.num_proposals, num_classes=self.num_classes)
+        self.head = _FakeHead(num_proposals=self.num_proposals, num_classes=self.num_classes).to(
+            self.device
+        )
 
     def test_packs_last_layer_proposals_into_runtime_tensors(self) -> None:
         """
@@ -193,53 +204,57 @@ class TestExportDetectionOutputsWithTransFusionHead(_ExportDetectionOutputsTestC
         self.point_cloud_range = [0.0, 0.0, -2.0, 16.0, 16.0, 2.0]
         self.voxel_size = [1.0, 1.0, 4.0]
         self.out_size_factor = 1
-        self.head = TransFusionHead(
-            num_proposals=self.num_proposals,
-            auxiliary=True,
-            in_channels=self.in_channels,
-            hidden_channel=8,
-            class_names=self.class_names,
-            num_decoder_layers=self.num_decoder_layers,
-            num_heads=2,
-            feedforward_channels=16,
-            common_heads=MappingProxyType(
-                {
-                    "centers": (2, 2),
-                    "heights": (1, 2),
-                    "dims": (3, 2),
-                    "rots": (2, 2),
-                    "vels": (2, 2),
-                }
-            ),
-            bbox_coder=TransFusionBBoxCoder(
-                pc_range=self.point_cloud_range,
-                out_size_factor=self.out_size_factor,
-                voxel_size=self.voxel_size,
-                score_threshold_groups=None,
-                post_center_range=[-10.0, -10.0, -10.0, 26.0, 26.0, 10.0],
-                code_size=self.num_box_channels,
-            ),
-            assigner=HungarianAssigner3D(
-                cls_cost=ClassificationCost(weight=0.15),
-                reg_cost=BBoxBEVL1Cost(weight=0.25),
-                iou_cost=IoU3DCost(weight=0.25),
+        self.head = (
+            TransFusionHead(
+                num_proposals=self.num_proposals,
+                auxiliary=True,
+                in_channels=self.in_channels,
+                hidden_channel=8,
+                class_names=self.class_names,
+                num_decoder_layers=self.num_decoder_layers,
+                num_heads=2,
+                feedforward_channels=16,
+                common_heads=MappingProxyType(
+                    {
+                        "centers": (2, 2),
+                        "heights": (1, 2),
+                        "dims": (3, 2),
+                        "rots": (2, 2),
+                        "vels": (2, 2),
+                    }
+                ),
+                bbox_coder=TransFusionBBoxCoder(
+                    pc_range=self.point_cloud_range,
+                    out_size_factor=self.out_size_factor,
+                    voxel_size=self.voxel_size,
+                    score_threshold_groups=None,
+                    post_center_range=[-10.0, -10.0, -10.0, 26.0, 26.0, 10.0],
+                    code_size=self.num_box_channels,
+                ),
+                assigner=HungarianAssigner3D(
+                    cls_cost=ClassificationCost(weight=0.15),
+                    reg_cost=BBoxBEVL1Cost(weight=0.25),
+                    iou_cost=IoU3DCost(weight=0.25),
+                    point_cloud_range=self.point_cloud_range,
+                ),
                 point_cloud_range=self.point_cloud_range,
-            ),
-            point_cloud_range=self.point_cloud_range,
-            voxel_size=self.voxel_size,
-            out_size_factor=self.out_size_factor,
-            code_weights=[1.0] * 8 + [0.2, 0.2],
-            min_radius=1,
-            gaussian_overlap=0.1,
-            score_threshold_group_configs=[
-                ScoreThresholdConfig(class_names=self.class_names, score_threshold=0.0)
-            ],
-            post_max_size=8,
-            nms_min_radius=1.0,
-            dense_heatmap_pooling_class_names=[],
-        ).eval()
+                voxel_size=self.voxel_size,
+                out_size_factor=self.out_size_factor,
+                code_weights=[1.0] * 8 + [0.2, 0.2],
+                min_radius=1,
+                gaussian_overlap=0.1,
+                score_threshold_group_configs=[
+                    ScoreThresholdConfig(class_names=self.class_names, score_threshold=0.0)
+                ],
+                post_max_size=8,
+                nms_min_radius=1.0,
+                dense_heatmap_pooling_class_names=[],
+            )
+            .to(self.device)
+            .eval()
+        )
         self.bev_features: Float32[torch.Tensor, "batch_size channels height width"] = torch.randn(
-            1, self.in_channels, self.bev_size, self.bev_size
+            1, self.in_channels, self.bev_size, self.bev_size, device=self.device
         )
 
     def test_packs_real_head_outputs(self) -> None:

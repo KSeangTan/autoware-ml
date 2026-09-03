@@ -93,8 +93,9 @@ class _BEVFusionCameraTestCase(unittest.TestCase):
     """Shared configuration and helpers for the camera branch test cases."""
 
     def setUp(self) -> None:
-        """Set up the image and BEV geometry shared by every camera branch test."""
+        """Set up the device and the image and BEV geometry shared by every camera branch test."""
         torch.manual_seed(0)
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.image_size = 64
         self.feature_size = 8
         self.feature_channels = 32
@@ -118,7 +119,7 @@ class _BEVFusionCameraTestCase(unittest.TestCase):
             ybound=self.ybound,
             zbound=self.zbound,
             dbound=self.dbound,
-        )
+        ).to(self.device)
 
     def _build_camera(
         self, img_backbone: nn.Module | None = None, img_neck: nn.Module | None = None
@@ -126,23 +127,26 @@ class _BEVFusionCameraTestCase(unittest.TestCase):
         """Build a camera branch from stub image modules and the small view transform."""
         return BEVFusionCamera(
             img_backbone=(
-                _StubBackbone(self.feature_channels) if img_backbone is None else img_backbone
+                _StubBackbone(self.feature_channels).to(self.device)
+                if img_backbone is None
+                else img_backbone
             ),
-            img_neck=_StubNeck() if img_neck is None else img_neck,
+            img_neck=_StubNeck().to(self.device) if img_neck is None else img_neck,
             view_transform=self._build_view_transform(),
-        )
+        ).to(self.device)
 
-    @staticmethod
     def _identity_matrices(
-        batch_size: int, num_cams: int, size: int, device: torch.device
+        self, batch_size: int, num_cams: int, size: int
     ) -> Float32[torch.Tensor, "batch_size num_cams size size"]:
         """Build a batch of identity matrices of shape ``(batch_size, num_cams, size, size)``."""
         return (
-            torch.eye(size, device=device).view(1, 1, size, size).repeat(batch_size, num_cams, 1, 1)
+            torch.eye(size, device=self.device)
+            .view(1, 1, size, size)
+            .repeat(batch_size, num_cams, 1, 1)
         )
 
     def _calibration(
-        self, batch_size: int, num_cams: int, device: torch.device
+        self, batch_size: int, num_cams: int
     ) -> tuple[
         Float32[torch.Tensor, "batch_size num_cams 3 3"],
         Float32[torch.Tensor, "batch_size num_cams 4 4"],
@@ -159,7 +163,7 @@ class _BEVFusionCameraTestCase(unittest.TestCase):
         camera_intrinsics = torch.tensor(
             [[focal, 0.0, focal], [0.0, focal, focal], [0.0, 0.0, 1.0]],
             dtype=torch.float32,
-            device=device,
+            device=self.device,
         )
         camera_intrinsics = camera_intrinsics.view(1, 1, 3, 3).repeat(batch_size, num_cams, 1, 1)
 
@@ -171,10 +175,10 @@ class _BEVFusionCameraTestCase(unittest.TestCase):
                 [0.0, 0.0, 0.0, 1.0],
             ],
             dtype=torch.float32,
-            device=device,
+            device=self.device,
         )
         camera2lidar = camera2lidar.view(1, 1, 4, 4).repeat(batch_size, num_cams, 1, 1).clone()
-        camera2lidar[:, :, 1, 3] = torch.linspace(-1.0, 1.0, num_cams, device=device)
+        camera2lidar[:, :, 1, 3] = torch.linspace(-1.0, 1.0, num_cams, device=self.device)
         aug_lidar2cam = torch.inverse(camera2lidar)
         return camera_intrinsics, aug_lidar2cam
 
@@ -188,7 +192,7 @@ class TestBEVFusionCamera(_BEVFusionCameraTestCase):
         self.batch_size, self.num_cams = 2, 3
         self.camera = self._build_camera()
         self.image_batch: Float32[torch.Tensor, "batch_size num_cams 3 height width"] = torch.randn(
-            self.batch_size, self.num_cams, 3, self.image_size, self.image_size
+            self.batch_size, self.num_cams, 3, self.image_size, self.image_size, device=self.device
         )
 
     def test_expected_bev_shape_delegates_to_view_transform(self) -> None:
@@ -223,10 +227,13 @@ class TestBEVFusionCamera(_BEVFusionCameraTestCase):
         for return_tuple in (False, True):
             for return_list in (False, True):
                 with self.subTest(backbone_tuple=return_tuple, neck_list=return_list):
-                    backbone = _StubBackbone(self.feature_channels, return_tuple=return_tuple)
+                    backbone = _StubBackbone(self.feature_channels, return_tuple=return_tuple).to(
+                        self.device
+                    )
                     backbone.load_state_dict(self.camera.img_backbone.state_dict())
                     camera = self._build_camera(
-                        img_backbone=backbone, img_neck=_StubNeck(return_list=return_list)
+                        img_backbone=backbone,
+                        img_neck=_StubNeck(return_list=return_list).to(self.device),
                     )
 
                     torch.testing.assert_close(
@@ -238,8 +245,7 @@ class TestBEVFusionCamera(_BEVFusionCameraTestCase):
         Test that the export geometry equals the view transform's pooling metadata computed from
         the inverted extrinsics and an identity image augmentation.
         """
-        device = self.image_batch.device
-        camera_intrinsics, aug_lidar2cam = self._calibration(1, self.num_cams, device)
+        camera_intrinsics, aug_lidar2cam = self._calibration(1, self.num_cams)
         view_transform = self.camera.view_transform
 
         geom_feats, kept, ranks, indices = self.camera.build_export_geometry(
@@ -250,7 +256,7 @@ class TestBEVFusionCamera(_BEVFusionCameraTestCase):
             view_transform.camera_to_lidar_geometry(
                 torch.inverse(aug_lidar2cam),
                 camera_intrinsics,
-                self._identity_matrices(1, self.num_cams, 4, device),
+                self._identity_matrices(1, self.num_cams, 4),
             )
         )
         self.assertIsInstance(expected, BEVPoolResult)
@@ -261,8 +267,7 @@ class TestBEVFusionCamera(_BEVFusionCameraTestCase):
 
     def test_build_export_geometry_layout(self) -> None:
         """Test dtypes, sizes and rank ordering of the exported pooling metadata."""
-        device = self.image_batch.device
-        camera_intrinsics, aug_lidar2cam = self._calibration(1, self.num_cams, device)
+        camera_intrinsics, aug_lidar2cam = self._calibration(1, self.num_cams)
         view_transform = self.camera.view_transform
         num_frustum_points = self.num_cams * view_transform.depth_bins * self.feature_size**2
 
@@ -284,7 +289,9 @@ class TestBEVFusionCamera(_BEVFusionCameraTestCase):
         self.assertTrue(torch.all(geom_feats[:, 3] == 0))
         # Kept points lie inside the (X, Y, Z) = (16, 8, 1) grid.
         self.assertTrue(torch.all(geom_feats[:, :3] >= 0))
-        self.assertTrue(torch.all(geom_feats[:, :3] < torch.tensor(view_transform.nx)))
+        self.assertTrue(
+            torch.all(geom_feats[:, :3] < torch.tensor(view_transform.nx, device=self.device))
+        )
 
 
 class TestBEVFusionImageBackboneExportWrapper(_BEVFusionCameraTestCase):
@@ -295,13 +302,19 @@ class TestBEVFusionImageBackboneExportWrapper(_BEVFusionCameraTestCase):
         super().setUp()
         self.num_cams = 3
         self.imgs: UInt8[torch.Tensor, "num_cams 3 height width"] = torch.randint(
-            0, 256, (self.num_cams, 3, self.image_size, self.image_size), dtype=torch.uint8
+            0,
+            256,
+            (self.num_cams, 3, self.image_size, self.image_size),
+            dtype=torch.uint8,
+            device=self.device,
         )
 
     def test_normalizes_uint8_images_by_255(self) -> None:
         """Test that the wrapper bakes the ``1 / 255`` normalization into the graph."""
-        camera = self._build_camera(img_backbone=nn.Identity(), img_neck=_PassThroughNeck())
-        wrapper = BEVFusionImageBackboneExportWrapper(camera)
+        camera = self._build_camera(
+            img_backbone=nn.Identity().to(self.device), img_neck=_PassThroughNeck().to(self.device)
+        )
+        wrapper = BEVFusionImageBackboneExportWrapper(camera).to(self.device)
         imgs = self.imgs.clone()
         imgs[0] = 0
         imgs[1] = 255
@@ -317,7 +330,7 @@ class TestBEVFusionImageBackboneExportWrapper(_BEVFusionCameraTestCase):
     def test_output_matches_extract_image_features_without_batch_dim(self) -> None:
         """Test that the wrapper returns the single-sample neck features as ``(N, C, fH, fW)``."""
         camera = self._build_camera().eval()
-        wrapper = BEVFusionImageBackboneExportWrapper(camera)
+        wrapper = BEVFusionImageBackboneExportWrapper(camera).to(self.device)
 
         with torch.no_grad():
             features = wrapper(self.imgs)
@@ -339,9 +352,8 @@ class TestBEVFusionCameraForward(_BEVFusionCameraTestCase):
     def setUp(self) -> None:
         """Set up a camera branch and calibrated multiview inputs on the GPU."""
         super().setUp()
-        self.device = torch.device("cuda:0")
         self.batch_size, self.num_cams = 2, 3
-        self.camera = self._build_camera().to(self.device).eval()
+        self.camera = self._build_camera().eval()
         self.image_batch: Float32[torch.Tensor, "batch_size num_cams 3 height width"] = torch.randn(
             self.batch_size,
             self.num_cams,
@@ -354,7 +366,7 @@ class TestBEVFusionCameraForward(_BEVFusionCameraTestCase):
             self.batch_size, self.num_cams, 1, self.image_size, self.image_size, device=self.device
         )
         self.camera_intrinsics, self.aug_lidar2cam = self._calibration(
-            self.batch_size, self.num_cams, self.device
+            self.batch_size, self.num_cams
         )
 
     def _forward(
@@ -403,13 +415,13 @@ class TestBEVFusionCameraForward(_BEVFusionCameraTestCase):
 
     def test_forward_defaults_to_identity_image_augmentation(self) -> None:
         """Test that omitting ``img_aug_matrix`` equals passing identity augmentation matrices."""
-        identity = self._identity_matrices(self.batch_size, self.num_cams, 4, self.device)
+        identity = self._identity_matrices(self.batch_size, self.num_cams, 4)
 
         torch.testing.assert_close(self._forward(), self._forward(img_aug_matrix=identity))
 
     def test_forward_applies_image_augmentation(self) -> None:
         """Test that a non-identity image augmentation changes where features are pooled."""
-        img_aug_matrix = self._identity_matrices(self.batch_size, self.num_cams, 4, self.device)
+        img_aug_matrix = self._identity_matrices(self.batch_size, self.num_cams, 4)
         img_aug_matrix[..., 0, 3] = 16.0  # Shift the image by 16 pixels along x.
 
         self.assertFalse(
@@ -423,7 +435,7 @@ class TestBEVFusionCameraForward(_BEVFusionCameraTestCase):
             view_transform.camera_to_lidar_geometry(
                 torch.inverse(self.aug_lidar2cam),
                 self.camera_intrinsics,
-                self._identity_matrices(self.batch_size, self.num_cams, 4, self.device),
+                self._identity_matrices(self.batch_size, self.num_cams, 4),
             )
         )
 

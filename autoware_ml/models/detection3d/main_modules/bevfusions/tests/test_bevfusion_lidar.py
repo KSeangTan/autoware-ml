@@ -111,7 +111,7 @@ class _BEVFusionLidarTestCase(unittest.TestCase):
         torch.manual_seed(0)
         self.batch_size = 2
         self.point_channels = 4
-        self.device = torch.device("cpu")
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     def _build_lidar(self, fuser: ConvFuser | None = None) -> BEVFusionLidar:
         """Build a lidar branch from the shared encoders on the test device in eval mode."""
@@ -148,12 +148,17 @@ class _BEVFusionLidarTestCase(unittest.TestCase):
     ) -> Int32[torch.Tensor, " num_voxels"]:
         """Draw distinct flat cell indices per sample and concatenate them over the batch."""
         return torch.stack(
-            [torch.randperm(num_cells)[:num_voxels_per_sample] for _ in range(self.batch_size)]
+            [
+                torch.randperm(num_cells, device=self.device)[:num_voxels_per_sample]
+                for _ in range(self.batch_size)
+            ]
         ).flatten()
 
     def _batch_indices(self, num_voxels_per_sample: int) -> Int32[torch.Tensor, " num_voxels"]:
         """Build the batch index column for a batch with a fixed voxel count per sample."""
-        return torch.arange(self.batch_size).repeat_interleave(num_voxels_per_sample)
+        return torch.arange(self.batch_size, device=self.device).repeat_interleave(
+            num_voxels_per_sample
+        )
 
 
 class TestBEVFusionLidar(_BEVFusionLidarTestCase):
@@ -167,25 +172,29 @@ class TestBEVFusionLidar(_BEVFusionLidarTestCase):
         self.neck_channels = 32
         self.bev_shape = (8, 8)
 
-        self.voxel_encoder = _StubVoxelEncoder(self.point_channels, self.middle_channels)
-        self.middle_encoder = _StubMiddleEncoder(self.bev_shape)
+        self.voxel_encoder = _StubVoxelEncoder(self.point_channels, self.middle_channels).to(
+            self.device
+        )
+        self.middle_encoder = _StubMiddleEncoder(self.bev_shape).to(self.device)
         self.backbone = SECONDBackbone(
             in_channels=self.middle_channels,
             out_channels=[16, 32],
             layer_nums=[1, 1],
             layer_strides=[1, 2],
-        )
+        ).to(self.device)
         self.neck = SECONDFPN(
             in_channels=[16, 32],
             out_channels=[self.neck_channels // 2, self.neck_channels // 2],
             upsample_strides=[1, 2],
-        )
+        ).to(self.device)
 
         num_voxels_per_sample, max_points = 6, 5
         num_voxels = self.batch_size * num_voxels_per_sample
         height, width = self.bev_shape
-        self.voxels = torch.randn(num_voxels, max_points, self.point_channels)
-        self.num_points = torch.randint(1, max_points + 1, (num_voxels,), dtype=torch.int32)
+        self.voxels = torch.randn(num_voxels, max_points, self.point_channels, device=self.device)
+        self.num_points = torch.randint(
+            1, max_points + 1, (num_voxels,), dtype=torch.int32, device=self.device
+        )
         # (batch, x, y, z) coordinates with distinct cells per sample.
         cells = self._distinct_cells(num_voxels_per_sample, height * width)
         self.coords = torch.stack(
@@ -193,20 +202,24 @@ class TestBEVFusionLidar(_BEVFusionLidarTestCase):
                 self._batch_indices(num_voxels_per_sample),
                 cells % width,
                 cells // width,
-                torch.zeros(num_voxels, dtype=torch.int64),
+                torch.zeros(num_voxels, dtype=torch.int64, device=self.device),
             ],
             dim=1,
         ).int()
         self.image_bev: Float32[torch.Tensor, "batch_size channels height width"] = torch.randn(
-            self.batch_size, self.image_channels, *self.bev_shape
+            self.batch_size, self.image_channels, *self.bev_shape, device=self.device
         )
 
     def _build_fuser(self) -> _RecordingConvFuser:
         """Build a recording fuser that merges the image BEV into the middle encoder channels."""
-        return _RecordingConvFuser(
-            in_channels=[self.image_channels, self.middle_channels],
-            out_channels=self.middle_channels,
-        ).eval()
+        return (
+            _RecordingConvFuser(
+                in_channels=[self.image_channels, self.middle_channels],
+                out_channels=self.middle_channels,
+            )
+            .to(self.device)
+            .eval()
+        )
 
     def test_expected_bev_shape_comes_from_middle_encoder(self) -> None:
         """Test that the branch reports the middle encoder's dense BEV shape."""
@@ -216,7 +229,7 @@ class TestBEVFusionLidar(_BEVFusionLidarTestCase):
         """Test that a middle encoder without ``bev_output_shape`` is rejected."""
         lidar = BEVFusionLidar(
             pts_voxel_encoder=self.voxel_encoder,
-            pts_middle_encoder=nn.Identity(),
+            pts_middle_encoder=nn.Identity().to(self.device),
             pts_backbone=self.backbone,
             pts_neck=self.neck,
             fuser=None,
@@ -321,40 +334,36 @@ class TestBEVFusionLidarWithSparseEncoder(_BEVFusionLidarTestCase):
             in_channels=self.point_channels,
             min_norm_values=[*self.point_cloud_range[:3], 0.0],
             max_norm_values=[*self.point_cloud_range[3:], self.max_intensity],
-        )
+        ).to(self.device)
         self.middle_encoder = SparseEncoder(
             in_channels=self.voxel_feature_channels,
             sparse_shape=list(self.sparse_shape),
             dense_output_shapes=[*self.bev_shape, 2],
-        )
+        ).to(self.device)
         self.backbone = SECONDBackbone(
             in_channels=self.middle_channels,
             out_channels=[128, 256],
             layer_nums=[1, 1],
             layer_strides=[1, 2],
-        )
+        ).to(self.device)
         self.neck = SECONDFPN(
             in_channels=[128, 256], out_channels=[256, 256], upsample_strides=[1, 2]
-        )
+        ).to(self.device)
 
         num_voxels_per_sample, max_points = 64, 10
         num_voxels = self.batch_size * num_voxels_per_sample
         height, width, depth = self.sparse_shape
         # (batch, x, y, z) coordinates with distinct cells per sample.
         cells = self._distinct_cells(num_voxels_per_sample, height * width * depth)
-        self.coords = (
-            torch.stack(
-                [
-                    self._batch_indices(num_voxels_per_sample),
-                    (cells // depth) % width,
-                    cells // (depth * width),
-                    cells % depth,
-                ],
-                dim=1,
-            )
-            .int()
-            .to(self.device)
-        )
+        self.coords = torch.stack(
+            [
+                self._batch_indices(num_voxels_per_sample),
+                (cells // depth) % width,
+                cells // (depth * width),
+                cells % depth,
+            ],
+            dim=1,
+        ).int()
         point_min = torch.tensor([*self.point_cloud_range[:3], 0.0], device=self.device)
         point_max = torch.tensor(
             [*self.point_cloud_range[3:], self.max_intensity], device=self.device
@@ -387,7 +396,7 @@ class TestBEVFusionLidarWithSparseEncoder(_BEVFusionLidarTestCase):
         fuser = ConvFuser(
             in_channels=[self.image_channels, self.middle_channels],
             out_channels=self.middle_channels,
-        )
+        ).to(self.device)
 
         bev = self._forward(self._build_lidar(fuser=fuser), other_bev_features=[self.image_bev])
 

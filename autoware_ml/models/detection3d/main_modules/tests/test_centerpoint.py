@@ -170,9 +170,12 @@ class TestCenterPointDetectionModel(unittest.TestCase):
         )
         return MultiTaskBatchInputs(
             multi_task_gt_batch=MultiTaskGTBatch(
-                point_cloud_gt_batch=None, detection3d_gt_batch=detection3d_gt_batch
+                point_cloud_gt_batch=None,
+                detection3d_gt_batch=detection3d_gt_batch,
+                image_gt_batch=None,
             ),
             voxels_data=voxels_data,
+            image_data=None,
         )
 
     def test_centerpoint_forward_compute_metrics_and_decode_run(self) -> None:
