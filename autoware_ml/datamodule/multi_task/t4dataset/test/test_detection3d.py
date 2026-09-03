@@ -268,7 +268,7 @@ class T4Detection3DTaskDataSampleTest(BaseT4Detection3DTaskTestCase):
             task.get_data_sample(0)
 
 
-class T4Detection3DTaskValidMaskTest(BaseT4Detection3DTaskTestCase):
+class T4Detection3DTaskBoxPassthroughTest(BaseT4Detection3DTaskTestCase):
     """Tests that T4Detection3DTask hands every annotated box to the pipeline."""
 
     def build_partially_valid_samples(self) -> Sequence[Sequence[Mapping[str, Any]]]:
