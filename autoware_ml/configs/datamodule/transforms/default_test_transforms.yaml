@@ -24,7 +24,7 @@ pipeline:
 
     points_range: ${point_cloud_range}
 
-  - _target-: autoware_ml.transforms.boxes3d.filters.BBoxesPhysicalFilter
+  - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesPhysicalFilter
     _convert_: all
 
     max_absolute_speed: 150.0 # m/s, 540 km/h
