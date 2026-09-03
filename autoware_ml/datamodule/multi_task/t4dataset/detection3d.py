@@ -85,9 +85,17 @@ class T4Detection3DTask(BaseDatasetTask):
         selected_row = self.dataset_records_dataframe.item(
             idx, DatasetTableSchema.BOXES_3D.name
         ).struct
-        # ``writable=True`` forces polars to hand out a copy instead of a read-only view into its
-        # own Arrow buffers: the arrays below are turned into tensors that share this memory, and
-        # the transform pipeline mutates them in place.
+        # Every ``to_numpy`` below passes ``writable=True``. Without it polars returns a zero-copy,
+        # read-only view over the Arrow buffers the dataframe itself owns, and:
+        #   - ``LidarBBoxes3D.from_numpy`` wraps these arrays with ``torch.from_numpy``, which
+        #     aliases rather than copies, so the tensors would point straight at dataframe memory.
+        #     Torch has no read-only tensor, so it drops the flag and warns; any in-place write by
+        #     the transform pipeline would then corrupt the records for every later epoch.
+        #   - Under forked dataloader workers that write also faults the shared page, silently
+        #     desyncing one worker's boxes from the dataset.
+        # The ``astype(copy=False)`` calls cannot save us here: the schema dtypes already match
+        # (see Box3DDatasetSchema), so they are no-ops that preserve the read-only view. The forced
+        # copy costs one memcpy of a single sample's boxes, freed once collation pads the batch.
         gt_bboxes_3d = (
             selected_row.field(Box3DDatasetSchema.BOX3D_PARAMS.name)
             .to_numpy(writable=True)
