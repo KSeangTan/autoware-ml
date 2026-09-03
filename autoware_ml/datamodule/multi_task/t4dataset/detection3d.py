@@ -85,14 +85,17 @@ class T4Detection3DTask(BaseDatasetTask):
         selected_row = self.dataset_records_dataframe.item(
             idx, DatasetTableSchema.BOXES_3D.name
         ).struct
+        # ``writable=True`` forces polars to hand out a copy instead of a read-only view into its
+        # own Arrow buffers: the arrays below are turned into tensors that share this memory, and
+        # the transform pipeline mutates them in place.
         gt_bboxes_3d = (
             selected_row.field(Box3DDatasetSchema.BOX3D_PARAMS.name)
-            .to_numpy()
+            .to_numpy(writable=True)
             .astype(np.float32, copy=False)
         )
         gt_bboxes_labels = (
             selected_row.field(Box3DDatasetSchema.BOX3D_LABEL_INDEX.name)
-            .to_numpy()
+            .to_numpy(writable=True)
             .astype(np.int32, copy=False)
         )
         gt_bboxes_label_names = selected_row.field(
@@ -100,7 +103,7 @@ class T4Detection3DTask(BaseDatasetTask):
         ).to_list()
         gt_bboxes_num_lidar_points = (
             selected_row.field(Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTS.name)
-            .to_numpy()
+            .to_numpy(writable=True)
             .astype(np.int32, copy=False)
         )
         gt_bboxes_attributes = selected_row.field(

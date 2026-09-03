@@ -170,10 +170,7 @@ class CenterHead(nn.Module):
         feature_height, feature_width = feature_map_size
 
         # Movement of tensors to the correct device and type
-        # Get only the first K params for ground truths
-        gt_bboxes_3d[:, :, : self.box_code_size] = gt_bboxes_3d[:, :, : self.box_code_size].to(
-            device=device
-        )
+        gt_bboxes_3d = gt_bboxes_3d.to(device=device)
         gt_labels_3d = gt_labels_3d.to(device=device, dtype=torch.long)
         gt_valid_bboxes = gt_valid_bboxes.to(device=device)
 
