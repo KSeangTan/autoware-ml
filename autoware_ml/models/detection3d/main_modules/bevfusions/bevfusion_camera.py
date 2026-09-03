@@ -70,7 +70,7 @@ class BEVFusionCamera(nn.Module):
         Returns:
             Neck feature tensor consumed by the view transform.
         """
-        batch_size, num_cams, channels, image_height, image_width = image_batch.shape[:2]
+        batch_size, num_cams, channels, image_height, image_width = image_batch.shape
         flat_images = image_batch.view(batch_size * num_cams, channels, image_height, image_width)
         image_features = self.img_backbone(flat_images)
         if isinstance(image_features, torch.Tensor):

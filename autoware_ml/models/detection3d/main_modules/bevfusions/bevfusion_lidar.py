@@ -100,7 +100,7 @@ class BEVFusionLidar(nn.Module):
         )
 
         if other_bev_features is not None and self.fuser is not None:
-            concat_bev_features = [other_bev_features, bev_features]
+            concat_bev_features = [*other_bev_features, bev_features]
             bev_features = self.fuser(concat_bev_features)
 
         bev_features = self.pts_neck(self.pts_backbone(bev_features))
