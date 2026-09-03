@@ -88,9 +88,12 @@ class TestMultiTaskEvalOutput(unittest.TestCase):
         )
         self.multi_task_batch_inputs = MultiTaskBatchInputs(
             multi_task_gt_batch=MultiTaskGTBatch(
-                point_cloud_gt_batch=None, detection3d_gt_batch=detection3d_gt_batch
+                point_cloud_gt_batch=None,
+                detection3d_gt_batch=detection3d_gt_batch,
+                image_gt_batch=None,
             ),
             voxels_data=None,
+            image_data=None,
         )
 
     def test_detection3d_gt_batch_assertion(self):
@@ -100,8 +103,10 @@ class TestMultiTaskEvalOutput(unittest.TestCase):
             multi_task_gt_batch=MultiTaskGTBatch(
                 point_cloud_gt_batch=None,
                 detection3d_gt_batch=None,
+                image_gt_batch=None,
             ),
             voxels_data=None,
+            image_data=None,
         )
         with self.assertRaises(ValueError):
             multi_task_eval_output(

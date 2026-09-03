@@ -96,13 +96,11 @@ class BaseT4Detection3DTaskTestCase(unittest.TestCase):
     def build_task(
         self,
         samples: Sequence[Sequence[Mapping[str, Any]]],
-        filter_valid_masks: bool = True,
     ) -> T4Detection3DTask:
         """Build a task over the given samples.
 
         Args:
             samples: The 3D bounding box records of every sample, one inner sequence per row.
-            filter_valid_masks: Whether the task drops boxes whose validity flag is unset.
 
         Returns:
             The T4Detection3DTask under test.
@@ -110,7 +108,6 @@ class BaseT4Detection3DTaskTestCase(unittest.TestCase):
         return T4Detection3DTask(
             database_root_path=DATABASE_ROOT_PATH,
             dataset_records_dataframe=self.build_dataset_records_dataframe(samples),
-            filter_valid_masks=filter_valid_masks,
         )
 
     def assert_bboxes_3d(self, multi_task_gt_sample: MultiTaskGTSample) -> BaseBBoxes3D:
@@ -272,7 +269,7 @@ class T4Detection3DTaskDataSampleTest(BaseT4Detection3DTaskTestCase):
 
 
 class T4Detection3DTaskValidMaskTest(BaseT4Detection3DTaskTestCase):
-    """Tests for the validity mask policy of T4Detection3DTask."""
+    """Tests that T4Detection3DTask hands every annotated box to the pipeline."""
 
     def build_partially_valid_samples(self) -> Sequence[Sequence[Mapping[str, Any]]]:
         """Build one sample holding a valid, an invalid, and a second valid bounding box.
@@ -294,40 +291,28 @@ class T4Detection3DTaskValidMaskTest(BaseT4Detection3DTaskTestCase):
             ]
         ]
 
-    def test_drops_invalid_boxes_by_default(self) -> None:
-        """The validity flag of the dataset is honoured unless it is explicitly disabled."""
+    def test_keeps_the_boxes_whose_validity_flag_is_unset(self) -> None:
+        """The validity flag of the dataset no longer drops boxes at the task level."""
         task = self.build_task(samples=self.build_partially_valid_samples())
-
-        detection3d_gt_bboxes_3d = self.assert_bboxes_3d(task.get_data_sample(0))
-
-        self.assertEqual(list(detection3d_gt_bboxes_3d.bbox_label_names), ["car", "pedestrian"])
-
-    def test_keeps_the_per_box_fields_aligned_when_dropping(self) -> None:
-        """Labels, point counts and attributes follow the boxes that survive the mask."""
-        task = self.build_task(samples=self.build_partially_valid_samples())
-
-        detection3d_gt_bboxes_3d = self.assert_bboxes_3d(task.get_data_sample(0))
-
-        self.assertEqual(detection3d_gt_bboxes_3d.bbox_labels.tolist(), [0, 2])
-        self.assertEqual(detection3d_gt_bboxes_3d.bbox_num_lidar_points.tolist(), [12, 8])
-        self.assertEqual(
-            self.assert_bbox_attributes(detection3d_gt_bboxes_3d),
-            [["vehicle_state.moving"], []],
-        )
-
-    def test_keeps_invalid_boxes_when_the_mask_is_disabled(self) -> None:
-        """Disabling the mask keeps the boxes the default policy drops."""
-        task = self.build_task(
-            samples=self.build_partially_valid_samples(),
-            filter_valid_masks=False,
-        )
 
         detection3d_gt_bboxes_3d = self.assert_bboxes_3d(task.get_data_sample(0))
 
         self.assertEqual(
             list(detection3d_gt_bboxes_3d.bbox_label_names), ["car", "truck", "pedestrian"]
         )
+
+    def test_keeps_the_per_box_fields_aligned(self) -> None:
+        """Labels, point counts and attributes stay aligned with the boxes they describe."""
+        task = self.build_task(samples=self.build_partially_valid_samples())
+
+        detection3d_gt_bboxes_3d = self.assert_bboxes_3d(task.get_data_sample(0))
+
+        self.assertEqual(detection3d_gt_bboxes_3d.bbox_labels.tolist(), [0, 1, 2])
         self.assertEqual(detection3d_gt_bboxes_3d.bbox_num_lidar_points.tolist(), [12, 5, 8])
+        self.assertEqual(
+            self.assert_bbox_attributes(detection3d_gt_bboxes_3d),
+            [["vehicle_state.moving"], ["vehicle_state.parked"], []],
+        )
 
 
 class T4Detection3DTaskDatasetRecordsTest(BaseT4Detection3DTaskTestCase):
@@ -363,14 +348,14 @@ class T4Detection3DTaskDatasetRecordsTest(BaseT4Detection3DTaskTestCase):
 
         self.assertEqual(str(task), "T4Detection3DTask")
 
-    def test_log_dataset_info_reports_total_and_valid_counts(self) -> None:
-        """The logged summary separates the annotated boxes from the valid ones."""
+    def test_log_dataset_info_reports_total_and_lidar_point_counts(self) -> None:
+        """The logged summary separates the annotated boxes from those holding lidar points."""
         task = self.build_task(
             samples=[
                 [
-                    self.build_box3d_record("car", 0, valid=True),
-                    self.build_box3d_record("car", 0, valid=False),
-                    self.build_box3d_record("pedestrian", 1, valid=True),
+                    self.build_box3d_record("car", 0, num_lidar_points=10),
+                    self.build_box3d_record("car", 0, num_lidar_points=0),
+                    self.build_box3d_record("pedestrian", 1, num_lidar_points=3),
                 ]
             ],
         )
@@ -379,6 +364,10 @@ class T4Detection3DTaskDatasetRecordsTest(BaseT4Detection3DTaskTestCase):
             task.log_dataset_info()
 
         logged_output = "\n".join(captured_logs.output)
+        self.assertIn("Number of bboxes per class in the dataset: ", logged_output)
+        self.assertIn(
+            "Number of bboxes after filtering num_lidar_points > 0 per class: ", logged_output
+        )
         self.assertIn("'car': 2", logged_output)
         self.assertIn("'car': 1", logged_output)
         self.assertIn("'pedestrian': 1", logged_output)

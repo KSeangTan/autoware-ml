@@ -35,6 +35,8 @@ class DataPreprocessor:
         multi_task_batch_inputs = MultiTaskBatchInputs(
             multi_task_gt_batch=multi_task_gt_batch,
             voxels_data=None,  # Placeholder for voxelization
+            # The collated image batch is passed through as-is, it is None for lidar-only models
+            image_data=multi_task_gt_batch.image_gt_batch,
         )
         for module in self.preprocessor_modules:
             multi_task_batch_inputs = module(

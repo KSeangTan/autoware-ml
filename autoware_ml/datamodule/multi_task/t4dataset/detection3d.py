@@ -22,20 +22,17 @@ class T4Detection3DTask(BaseDatasetTask):
         self,
         database_root_path: str,
         dataset_records_dataframe: pl.DataFrame | None,
-        filter_valid_masks: bool = True,
     ) -> None:
         """
         Initialize the T4Detection3DTask class.
         Args:
           database_root_path: Root directory of the dataset.
           dataset_records_dataframe: Polars DataFrame of dataset records to be processed for 3D detection in the T4 dataset.
-          filter_valid_masks: Whether to filter out invalid bounding boxes based on valid_mask.
         """
         super().__init__(
             database_root_path=database_root_path,
             dataset_records_dataframe=dataset_records_dataframe,
         )
-        self.filter_valid_masks = filter_valid_masks
 
     def pre_filter_dataset_records(
         self, dataset_records_dataframe: pl.DataFrame | None
@@ -101,11 +98,6 @@ class T4Detection3DTask(BaseDatasetTask):
         gt_bboxes_label_names = selected_row.field(
             Box3DDatasetSchema.BOX3D_LABEL_NAME.name
         ).to_list()
-        gt_bboxes_valid = (
-            selected_row.field(Box3DDatasetSchema.BOX3D_VALID.name)
-            .to_numpy()
-            .astype(np.bool_, copy=False)
-        )
         gt_bboxes_num_lidar_points = (
             selected_row.field(Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTS.name)
             .to_numpy()
@@ -121,23 +113,8 @@ class T4Detection3DTask(BaseDatasetTask):
             )  # Zero shape of (0, 10) for empty bboxes
             gt_bboxes_labels = np.zeros((0,), dtype=np.int32)
             gt_bboxes_label_names = []
-            gt_bboxes_valid = np.zeros((0,), dtype=np.bool_)
             gt_bboxes_num_lidar_points = np.zeros((0,), dtype=np.int32)
             gt_bboxes_attributes = []
-
-        elif self.filter_valid_masks:
-            # Filter out invalid bounding boxes based on the valid mask if filter_valid_masks is True
-            gt_bboxes_3d = gt_bboxes_3d[gt_bboxes_valid]
-            gt_bboxes_labels = gt_bboxes_labels[gt_bboxes_valid]
-            gt_bboxes_label_names = [
-                name for i, name in enumerate(gt_bboxes_label_names) if gt_bboxes_valid[i]
-            ]
-            gt_bboxes_num_lidar_points = gt_bboxes_num_lidar_points[gt_bboxes_valid]
-            gt_bboxes_attributes = [
-                attributes
-                for i, attributes in enumerate(gt_bboxes_attributes)
-                if gt_bboxes_valid[i]
-            ]
 
         detection3d_bboxes_3d = LidarBBoxes3D.from_numpy(
             bbox_params=gt_bboxes_3d,
@@ -165,7 +142,7 @@ class T4Detection3DTask(BaseDatasetTask):
             logger.warning("Dataset records dataframe is not available.")
             return
 
-        # Log the number of bboxes per class, before and after filtering valid bboxes
+        # Log the number of bboxes per class, before and after filtering by num_lidar_points
         class_counts = (
             self.dataset_records_dataframe.select(DatasetTableSchema.BOXES_3D.name)
             .explode(DatasetTableSchema.BOXES_3D.name)
@@ -174,7 +151,9 @@ class T4Detection3DTask(BaseDatasetTask):
             .agg(
                 [
                     pl.len().alias("count"),
-                    pl.col(Box3DDatasetSchema.BOX3D_VALID.name).sum().alias("valid_count"),
+                    (pl.col(Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTS.name) > 0)
+                    .sum()
+                    .alias("valid_count"),
                 ]
             )
             .sort("count", descending=True)
@@ -184,4 +163,6 @@ class T4Detection3DTask(BaseDatasetTask):
         valid_counts = dict(zip(class_names, class_counts["valid_count"].to_list()))
 
         logger.info(f"Number of bboxes per class in the dataset: {total_counts}")
-        logger.info(f"Number of bboxes per class in valid bboxes: {valid_counts}")
+        logger.info(
+            f"Number of bboxes after filtering num_lidar_points > 0 per class: {valid_counts}"
+        )
