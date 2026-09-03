@@ -57,7 +57,7 @@ model:
   _target_: autoware_ml.models.detection3d.main_modules.centerpoint.CenterPointDetectionModel
   metrics: ${metrics}
   log_dict_configs:
-    _target_: autoware_ml.models.multi_task_base_model.LogDictConfigs
+    _target_: autoware_ml.models.module_base_model.LogDictConfigs
     _convert_: all
     on_step: true
     on_epoch: true
