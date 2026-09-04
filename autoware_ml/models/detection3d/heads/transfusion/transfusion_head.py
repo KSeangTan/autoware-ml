@@ -134,12 +134,22 @@ class SeparateHead1D(nn.Module):
     query dimension.
     """
 
-    def __init__(self, in_channels: int, heads: MappingProxyType[str, tuple[int, int]]) -> None:
+    def __init__(
+        self,
+        in_channels: int,
+        heads: MappingProxyType[str, tuple[int, int]],
+        hidden_channels: int,
+        norm_eps: float = 1e-3,
+        norm_momentum: float = 0.01,
+    ) -> None:
         """Initialize the per-query prediction heads.
 
         Args:
             in_channels: Input feature dimension.
             heads: Mapping from head name to ``(out_channels, num_convs)``.
+            hidden_channels: Width of the intermediate branch layers.
+            norm_eps: Epsilon used by the branch batch-normalization layers.
+            norm_momentum: Momentum used by the branch batch-normalization layers.
         """
         super().__init__()
         self.heads = nn.ModuleDict()
@@ -147,10 +157,12 @@ class SeparateHead1D(nn.Module):
             layers: list[nn.Module] = []
             current_channels = in_channels
             for _ in range(max(num_convs - 1, 0)):
-                layers.append(nn.Conv1d(current_channels, in_channels, kernel_size=1, bias=False))
-                layers.append(nn.BatchNorm1d(in_channels, eps=1e-3, momentum=0.01))
+                layers.append(
+                    nn.Conv1d(current_channels, hidden_channels, kernel_size=1, bias=False)
+                )
+                layers.append(nn.BatchNorm1d(hidden_channels, eps=norm_eps, momentum=norm_momentum))
                 layers.append(nn.ReLU(inplace=True))
-                current_channels = in_channels
+                current_channels = hidden_channels
             layers.append(nn.Conv1d(current_channels, out_channels, kernel_size=1))
             self.heads[name] = nn.Sequential(*layers)
 
@@ -212,6 +224,10 @@ class TransFusionHead(nn.Module):
         heatmap_init_bias: float = -2.19,
         nms_kernel_size: int = 3,
         use_velocity: bool = True,
+        head_hidden_channels: int | None = None,
+        norm_eps: float = 1e-3,
+        norm_momentum: float = 0.01,
+        use_bf16_cross_attention: bool = False,
     ) -> None:
         """Initialize the TransFusion detection head.
 
@@ -261,6 +277,14 @@ class TransFusionHead(nn.Module):
             heatmap_init_bias: Initial bias used by the dense heatmap branch.
             nms_kernel_size: Kernel size used for local-maximum suppression.
             use_velocity: Whether the head predicts object velocity.
+            head_hidden_channels: Width of the prediction-branch hidden layers.
+                Defaults to ``hidden_channel``.
+            norm_eps: Epsilon used by the head's batch-normalization layers
+                (shared block, dense heatmap head, prediction branches).
+            norm_momentum: Momentum used by the head's batch-normalization layers
+                (shared block, dense heatmap head, prediction branches).
+            use_bf16_cross_attention: Whether export emits fusion-ready attention and uses bf16 for
+                the long cross-attention core. Requires ``deploy.onnx.precision=fp16``.
         """
         super().__init__()
         self.num_proposals = num_proposals
@@ -286,6 +310,13 @@ class TransFusionHead(nn.Module):
         self.loss_heatmap_weight = loss_heatmap_weight
         self.heatmap_init_bias = heatmap_init_bias
         self.use_velocity = use_velocity
+        self.head_hidden_channels = (
+            head_hidden_channels if head_hidden_channels is not None else hidden_channel
+        )
+        self.norm_eps = norm_eps
+        self.norm_momentum = norm_momentum
+        self.use_bf16_cross_attention = use_bf16_cross_attention
+        self.required_onnx_precision = "fp16" if use_bf16_cross_attention else None
         if nms_type not in {None, "circle"}:
             raise ValueError(f"Unsupported TransFusion NMS type: {nms_type!r}")
         self.nms_type = nms_type
@@ -299,7 +330,7 @@ class TransFusionHead(nn.Module):
         )
         self.shared_block = nn.Sequential(
             nn.Conv2d(in_channels, hidden_channel, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(hidden_channel, eps=1e-3, momentum=0.01),
+            nn.BatchNorm2d(hidden_channel, eps=norm_eps, momentum=norm_momentum),
             nn.ReLU(inplace=True),
         )
         self.dense_heatmap_head = self._build_dense_heatmaps(hidden_channel)
@@ -350,7 +381,13 @@ class TransFusionHead(nn.Module):
 
         prediction_heads = nn.ModuleList(
             [
-                SeparateHead1D(in_channels, MappingProxyType(prediction_head_configs))
+                SeparateHead1D(
+                    in_channels,
+                    MappingProxyType(prediction_head_configs),
+                    hidden_channels=self.head_hidden_channels,
+                    norm_eps=self.norm_eps,
+                    norm_momentum=self.norm_momentum,
+                )
                 for _ in range(num_decoder_layers)
             ]
         )
@@ -367,7 +404,12 @@ class TransFusionHead(nn.Module):
             nn.Module: Dense heatmap head.
         """
         dense_heatmap_head = nn.Sequential(
-            ConvModule(in_channels, in_channels),
+            ConvModule(
+                in_channels,
+                in_channels,
+                norm_eps=self.norm_eps,
+                norm_momentum=self.norm_momentum,
+            ),
             nn.Conv2d(in_channels, self.num_classes, kernel_size=3, padding=1),
         )
         nn.init.constant_(dense_heatmap_head[-1].bias, self.heatmap_init_bias)  # type: ignore
@@ -1288,7 +1330,7 @@ class TransFusionHead(nn.Module):
             loss_bbox=self.loss_bbox_weight * loss_bbox,
         )
 
-    def prepare_for_export(self) -> "TransFusionHead":
+    def prepare_for_export(self) -> TransFusionHead:
         """Return an export-ready copy with attention replaced by exportable equivalents.
 
         Returns:
@@ -1300,7 +1342,14 @@ class TransFusionHead(nn.Module):
             return head
         for decoder_layer in head.decoder:
             if isinstance(decoder_layer.self_attn, nn.MultiheadAttention):
-                decoder_layer.self_attn = ExportableMultiheadAttention(decoder_layer.self_attn)
+                decoder_layer.self_attn = ExportableMultiheadAttention(
+                    decoder_layer.self_attn,
+                    fuse_attention=head.use_bf16_cross_attention,
+                )
             if isinstance(decoder_layer.cross_attn, nn.MultiheadAttention):
-                decoder_layer.cross_attn = ExportableMultiheadAttention(decoder_layer.cross_attn)
+                decoder_layer.cross_attn = ExportableMultiheadAttention(
+                    decoder_layer.cross_attn,
+                    fuse_attention=head.use_bf16_cross_attention,
+                    use_bf16=head.use_bf16_cross_attention,
+                )
         return head

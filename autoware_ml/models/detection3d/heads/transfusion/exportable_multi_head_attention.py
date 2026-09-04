@@ -23,12 +23,17 @@ import torch.nn.functional as F
 class ExportableMultiheadAttention(nn.Module):
     """ONNX/TensorRT-friendly equivalent of ``nn.MultiheadAttention``.
 
-    The runtime math and weights are unchanged, but the exported graph avoids
-    PyTorch's fused MultiheadAttention decomposition that TensorRT produces NaNs
-    for in the TransHead decoder.
+    The default path retains an explicitly stabilized attention graph. The optional fused path
+    emits the direct MatMul-Softmax-MatMul pattern recognized by TensorRT and can run its
+    attention core in bf16.
     """
 
-    def __init__(self, attention: nn.MultiheadAttention) -> None:
+    def __init__(
+        self,
+        attention: nn.MultiheadAttention,
+        fuse_attention: bool = False,
+        use_bf16: bool = False,
+    ) -> None:
         """Copy trained weights from a batch-first MultiheadAttention module."""
         super().__init__()
         if not attention.batch_first:
@@ -40,6 +45,10 @@ class ExportableMultiheadAttention(nn.Module):
         self.num_heads = attention.num_heads
         self.head_dim = self.embed_dim // self.num_heads
         self.dropout = attention.dropout
+        self.fuse_attention = fuse_attention
+        self.use_bf16 = use_bf16
+        if use_bf16 and not fuse_attention:
+            raise ValueError("bf16 attention requires the fusion-ready attention path.")
         self.q_proj = nn.Linear(self.embed_dim, self.embed_dim)
         self.k_proj = nn.Linear(self.embed_dim, self.embed_dim)
         self.v_proj = nn.Linear(self.embed_dim, self.embed_dim)
@@ -83,13 +92,25 @@ class ExportableMultiheadAttention(nn.Module):
         k = self._project(self.k_proj, key)
         v = self._project(self.v_proj, value)
 
-        scale = self.head_dim**0.5
-        attention = torch.matmul(q.float() / scale, k.float().transpose(-2, -1))
-        attention = attention - attention.max(dim=-1, keepdim=True).values
+        if self.fuse_attention:
+            q = q / self.head_dim**0.5
+            if self.use_bf16:
+                q = q.to(torch.bfloat16)
+                k = k.to(torch.bfloat16)
+                v = v.to(torch.bfloat16)
+            attention = torch.matmul(q, k.transpose(-2, -1))
+        else:
+            attention = torch.matmul(q.float() / self.head_dim**0.5, k.float().transpose(-2, -1))
+            attention = attention - attention.max(dim=-1, keepdim=True).values
         attention = attention.softmax(dim=-1)
         if self.training and self.dropout > 0.0:
             attention = F.dropout(attention, p=self.dropout)
-        attended = torch.matmul(attention.to(v.dtype), v)
+        if self.fuse_attention:
+            attended = torch.matmul(attention, v)
+        else:
+            attended = torch.matmul(attention.to(v.dtype), v)
+        if self.use_bf16:
+            attended = attended.to(query.dtype)
         attended = (
             attended.transpose(1, 2)
             .contiguous()
