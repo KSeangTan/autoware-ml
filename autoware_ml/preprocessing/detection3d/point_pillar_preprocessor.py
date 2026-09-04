@@ -40,6 +40,9 @@ class PointPillarPreprocessor(DataPreprocessorModule):
             in meters.
         max_num_points: Maximum number of points kept per pillar.
         max_voxels: Maximum number of pillars retained per sample.
+        eval_max_voxels: Maximum number of pillars retained per sample during
+            evaluation and inference. Required before the preprocessor runs in
+            evaluation mode.
         voxelization_z_order_first: If ``True``, this preprocessor will transpose [x, y, z]
             coordinates to [z, y, x] in coords from voxelization.
             This is used for backward-compatible, and will be removed very soon.
@@ -54,6 +57,7 @@ class PointPillarPreprocessor(DataPreprocessorModule):
         max_num_points: int,
         max_voxels: int,
         voxelization_z_order_first: bool = False,
+        eval_max_voxels: int | None = None,
         default_point_channels: int = 4,
     ) -> None:
         super().__init__()
@@ -61,6 +65,7 @@ class PointPillarPreprocessor(DataPreprocessorModule):
         self.point_cloud_range = point_cloud_range
         self.max_num_points = max_num_points
         self.max_voxels = max_voxels
+        self.eval_max_voxels = eval_max_voxels
         self.voxelization_z_order_first = voxelization_z_order_first
         self._default_point_channels = default_point_channels
 
@@ -110,7 +115,7 @@ class PointPillarPreprocessor(DataPreprocessorModule):
             voxel_size=voxel_size,
             point_cloud_range=point_cloud_range,
             max_num_points=self.max_num_points,
-            max_voxels=self.max_voxels,
+            max_voxels=self.max_voxels if is_training else self.eval_max_voxels,
         )
 
         # Handle the case where no voxels are generated

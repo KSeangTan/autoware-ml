@@ -13,6 +13,7 @@ datamodule:
     points: list
     gt_boxes: list
     gt_labels: list
+    gt_num_points: list
 model:
   _target_: autoware_ml.models.detection3d.centerpoint.CenterPointDetectionModel
   metrics: ${dataset.detection3d.metrics}
@@ -105,4 +106,5 @@ data_preprocessing:
       voxel_size: ${voxel_size}
       point_cloud_range: ${point_cloud_range}
       max_num_points: 32
-      max_voxels: 96000
+      max_voxels: 120000
+      eval_max_voxels: 160000

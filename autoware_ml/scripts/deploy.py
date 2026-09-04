@@ -20,10 +20,11 @@ from pathlib import Path
 
 import hydra
 import lightning as L
+import torch
 from mlflow.entities import RunStatus
 from mlflow.tracking import MlflowClient
 from omegaconf import DictConfig, OmegaConf
-import torch
+
 from autoware_ml.utils.checkpoints import apply_matching_weights
 from autoware_ml.utils.deploy import (
     build_tensorrt_engine,
@@ -37,9 +38,15 @@ from autoware_ml.utils.deploy import (
     supports_export_stage,
     validate_cuda_available,
 )
+from autoware_ml.utils.onnx_precision import (
+    convert_onnx_precision,
+    resolve_onnx_precision,
+    should_convert_precision,
+)
 from autoware_ml.utils.mlflow_helpers import (
     AUTOWARE_ML_RUN_ID_ENV,
     build_run_metadata,
+    get_git_sha,
     get_user_config_name,
     load_run_context,
     log_config_params,
@@ -48,6 +55,13 @@ from autoware_ml.utils.mlflow_helpers import (
     should_enable_logger,
     write_run_config_artifacts,
     write_run_metadata,
+)
+from autoware_ml.utils.onnx_meta import release_to_model_version, stamp_onnx_meta
+from autoware_ml.utils.onnx_precision import (
+    convert_onnx_precision,
+    resolve_onnx_precision,
+    should_convert_precision,
+    validate_module_onnx_precision,
 )
 from autoware_ml.utils.runtime import (
     configure_torch_runtime,
@@ -69,6 +83,15 @@ def main(cfg: DictConfig) -> None:
         raise ValueError("--weights <path> (repeatable) must be specified.")
     if "deploy" not in cfg:
         raise ValueError("Config must define a 'deploy' section.")
+
+    release = cfg.get("release", None)
+    release_to_model_version(release)  # a malformed release must fail before exporting
+    if release is None:
+        logger.warning(
+            "Deploying without --release — artifacts will be stamped 'unversioned' "
+            "(model_version 0). If this model is intended for production, re-run "
+            "deploy with an explicit --release vMAJOR.MINOR.PATCH."
+        )
 
     log_configuration(cfg)
     work_dir = resolve_work_dir()
@@ -199,6 +222,7 @@ def main(cfg: DictConfig) -> None:
             logger=logger,
         )
 
+        export_git_sha = get_git_sha()
         logger.info("Preparing export inputs...")
         export_specs = resolve_export_specs(datamodule, model, device)
         onnx_exported_paths: list[Path] = []
@@ -216,6 +240,7 @@ def main(cfg: DictConfig) -> None:
                         "deploy.onnx.enabled=true. Disable the stage or use a supported model."
                     )
                 else:
+                    validate_module_onnx_precision(export_spec.module, module_onnx_cfg)
                     export_to_onnx(
                         export_spec.module,
                         export_spec.args,
@@ -230,6 +255,34 @@ def main(cfg: DictConfig) -> None:
                     modify_graph_cfg = module_onnx_cfg.get("modify_graph", None)
                     if should_modify_graph(modify_graph_cfg):
                         module_onnx_path = modify_onnx_graph(module_onnx_path, modify_graph_cfg)
+
+                    # Precision conversion runs last so graph modifiers keep operating on the
+                    # fp32 export they were written against.
+                    if should_convert_precision(module_onnx_cfg):
+                        module_onnx_path = convert_onnx_precision(
+                            module_onnx_path, resolve_onnx_precision(module_onnx_cfg)
+                        )
+                    metainfo_cfg = module_onnx_cfg.get("metainfo", None)
+                    stamp_onnx_meta(
+                        module_onnx_path,
+                        config_name=config_name,
+                        module=module_name,
+                        release=release,
+                        export_git_sha=export_git_sha,
+                        metainfo=(
+                            OmegaConf.to_container(metainfo_cfg, resolve=True)
+                            if metainfo_cfg is not None
+                            else None
+                        ),
+                        tracker="mlflow" if mlflow_client is not None else None,
+                        run_id=deploy_run_id,
+                    )
+                    logger.info(
+                        "Stamped %s metadata: release=%s, commit=%s",
+                        module_name,
+                        release or "unversioned",
+                        export_git_sha,
+                    )
 
             if should_export_stage(deploy_cfg.tensorrt):
                 if not supports_export_stage(export_spec, "tensorrt"):
