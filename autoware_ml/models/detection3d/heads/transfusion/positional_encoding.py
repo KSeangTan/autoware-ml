@@ -33,14 +33,15 @@ class LearnedPositionalEncoding(nn.Module):
         """
         super().__init__()
         self.proj = nn.Sequential(
-            nn.Linear(input_channels, embed_dims),
+            nn.Conv1d(input_channels, embed_dims, kernel_size=1),
+            nn.BatchNorm1d(embed_dims),
             nn.ReLU(inplace=True),
-            nn.Linear(embed_dims, embed_dims),
+            nn.Conv1d(embed_dims, embed_dims, kernel_size=1),
         )
 
     def forward(
-        self, bev_positions: Float32[torch.Tensor, "B H W"]
-    ) -> Float32[torch.Tensor, "B H W"]:
+        self, bev_positions: Float32[torch.Tensor, "batch_size tokens channels"]
+    ) -> Float32[torch.Tensor, "batch_size tokens embed_dims"]:
         """Encode BEV positions into query embeddings.
 
         Args:
@@ -49,4 +50,5 @@ class LearnedPositionalEncoding(nn.Module):
         Returns:
             Learned positional embeddings.
         """
-        return self.proj(bev_positions)
+        # It applied positional embedding to tokens since each token represent H*W position.
+        return self.proj(bev_positions.transpose(1, 2)).transpose(1, 2)

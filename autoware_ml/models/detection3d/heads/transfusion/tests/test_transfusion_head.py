@@ -15,11 +15,16 @@
 """Unit tests for TransFusionHead."""
 
 import math
+import tempfile
 import unittest
+from pathlib import Path
 from types import MappingProxyType
 from typing import Sequence
 
 from jaxtyping import Bool, Float32, Int32
+from omegaconf import OmegaConf
+from onnx import TensorProto
+import onnx
 import torch
 
 from autoware_ml.dataclasses.detection3d.head_targets import TransFusionHeadTargets
@@ -27,6 +32,9 @@ from autoware_ml.dataclasses.detection3d.predictions import Detection3DSamplePre
 from autoware_ml.dataclasses.detection3d.head_outputs import (
     Detection3DHeadOutputs,
     TransFusionHeadOutputs,
+)
+from autoware_ml.models.detection3d.heads.transfusion.exportable_multi_head_attention import (
+    ExportableMultiheadAttention,
 )
 from autoware_ml.models.detection3d.heads.transfusion.transfusion_head import (
     NMSGroupConfig,
@@ -40,6 +48,7 @@ from autoware_ml.models.detection3d.task_modules.match_costs import (
     ClassificationCost,
     IoU3DCost,
 )
+from autoware_ml.utils.onnx_precision import validate_module_onnx_precision
 
 
 class TestTransFusionHead(unittest.TestCase):
@@ -124,6 +133,7 @@ class TestTransFusionHead(unittest.TestCase):
         nms_type: str | None = None,
         nms_group_configs: Sequence[NMSGroupConfig] | None = None,
         post_center_range: Sequence[float] | None = None,
+        use_bf16_cross_attention: bool = False,
     ) -> TransFusionHead:
         """
         Build a TransFusionHead from the setUp parameters.
@@ -180,7 +190,25 @@ class TestTransFusionHead(unittest.TestCase):
             nms_type=nms_type,
             nms_group_configs=nms_group_configs,
             use_velocity=use_velocity,
+            use_bf16_cross_attention=use_bf16_cross_attention,
         ).to(self.device)
+
+    def _export_attention(
+        self, attention: ExportableMultiheadAttention, output_path: Path
+    ) -> onnx.ModelProto:
+        """Export one attention module on its own so the tests can inspect its ONNX graph."""
+        query = torch.randn(1, 3, self.hidden_channel, device=self.device)
+        key = torch.randn(1, 5, self.hidden_channel, device=self.device)
+        torch.onnx.export(
+            attention,
+            (query, key, key),
+            output_path,
+            input_names=["query", "key", "value"],
+            output_names=["output"],
+            opset_version=17,
+            dynamo=False,
+        )
+        return onnx.load(output_path)
 
     def _build_bev_features(
         self,
@@ -234,7 +262,10 @@ class TestTransFusionHead(unittest.TestCase):
         """Decode a fresh forward pass into the per-sample predictions, unwrapping the option."""
         head = self.transfusion_head if transfusion_head is None else transfusion_head
         sample_predictions = head.decode_outputs(
-            self._build_head_outputs(head)
+            Detection3DHeadOutputs(
+                center_head_outputs=None,
+                transfusion_head_outputs=self._build_head_outputs(head),
+            )
         ).detection3d_predictions
         assert sample_predictions is not None
         return sample_predictions
@@ -847,6 +878,102 @@ class TestTransFusionHead(unittest.TestCase):
                     ScoreThresholdConfig(class_names=["car", "pedestrian"], score_threshold=0.5),
                 ]
             )
+
+    def test_bf16_export_emits_the_fusion_pattern(self) -> None:
+        """
+        Test that the bf16 export declares an fp16 requirement, fuses only the cross-attention
+        core, and emits the bare MatMul-Softmax-MatMul pattern TensorRT recognizes.
+        """
+        transfusion_head = self._build_transfusion_head(
+            use_bf16_cross_attention=True
+        ).prepare_for_export()
+        self_attention = transfusion_head.decoder[0].self_attn
+        cross_attention = transfusion_head.decoder[0].cross_attn
+
+        self.assertEqual(transfusion_head.required_onnx_precision, "fp16")
+        self.assertTrue(self_attention.fuse_attention)
+        self.assertFalse(self_attention.use_bf16)
+        self.assertTrue(cross_attention.fuse_attention)
+        self.assertTrue(cross_attention.use_bf16)
+        validate_module_onnx_precision(transfusion_head, OmegaConf.create({"precision": "fp16"}))
+
+        with tempfile.TemporaryDirectory() as export_dir:
+            model = self._export_attention(
+                cross_attention, Path(export_dir) / "cross_attention.onnx"
+            )
+
+        # The fused path drops the max-subtraction used to stabilize the explicit graph.
+        self.assertFalse(any(node.op_type in {"ReduceMax", "Sub"} for node in model.graph.node))
+        # One cast per attention input: query, key, and value.
+        bf16_casts = sum(
+            any(
+                attribute.name == "to" and attribute.i == TensorProto.BFLOAT16
+                for attribute in node.attribute
+            )
+            for node in model.graph.node
+            if node.op_type == "Cast"
+        )
+        self.assertEqual(bf16_casts, 3)
+
+        softmax = next(node for node in model.graph.node if node.op_type == "Softmax")
+        producers = {output: node for node in model.graph.node for output in node.output}
+        self.assertEqual(producers[softmax.input[0]].op_type, "MatMul")
+        consumers = [node for node in model.graph.node if softmax.output[0] in node.input]
+        self.assertEqual(len(consumers), 1)
+        self.assertEqual(consumers[0].op_type, "MatMul")
+
+    def test_bf16_export_rejects_a_non_fp16_precision(self) -> None:
+        """Test that a bf16 head refuses to export under any precision other than fp16."""
+        transfusion_head = self._build_transfusion_head(
+            use_bf16_cross_attention=True
+        ).prepare_for_export()
+
+        with self.assertRaisesRegex(
+            ValueError, "TransFusionHead requires deploy.onnx.precision='fp16'"
+        ):
+            validate_module_onnx_precision(
+                transfusion_head, OmegaConf.create({"precision": "fp32"})
+            )
+
+    def test_default_export_keeps_the_explicit_attention(self) -> None:
+        """
+        Test that the default export declares no precision requirement and keeps the explicit,
+        max-subtracted attention graph without any bf16 cast.
+        """
+        transfusion_head = self._build_transfusion_head().prepare_for_export()
+        cross_attention = transfusion_head.decoder[0].cross_attn
+
+        self.assertIsNone(transfusion_head.required_onnx_precision)
+        self.assertFalse(cross_attention.fuse_attention)
+        self.assertFalse(cross_attention.use_bf16)
+
+        with tempfile.TemporaryDirectory() as export_dir:
+            model = self._export_attention(
+                cross_attention, Path(export_dir) / "explicit_cross_attention.onnx"
+            )
+
+        producers = {output: node for node in model.graph.node for output in node.output}
+        softmax = next(node for node in model.graph.node if node.op_type == "Softmax")
+        subtract = producers[softmax.input[0]]
+        self.assertEqual(subtract.op_type, "Sub")
+        self.assertEqual(producers[subtract.input[1]].op_type, "ReduceMax")
+
+        consumers = [node for node in model.graph.node if softmax.output[0] in node.input]
+        self.assertEqual(len(consumers), 1)
+        self.assertEqual(consumers[0].op_type, "Cast")
+        cast_consumers = [node for node in model.graph.node if consumers[0].output[0] in node.input]
+        self.assertEqual(len(cast_consumers), 1)
+        self.assertEqual(cast_consumers[0].op_type, "MatMul")
+        self.assertFalse(
+            any(
+                any(
+                    attribute.name == "to" and attribute.i == TensorProto.BFLOAT16
+                    for attribute in node.attribute
+                )
+                for node in model.graph.node
+                if node.op_type == "Cast"
+            )
+        )
 
 
 if __name__ == "__main__":

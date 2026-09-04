@@ -62,17 +62,24 @@ class TestLearnedPositionalEncoding(unittest.TestCase):
         self.assertEqual(embeddings.shape, (self.batch_size, self.num_positions, self.embed_dims))
         self.assertTrue(torch.isfinite(embeddings).all())
 
-    def test_forward_accepts_any_leading_shape(self) -> None:
+    def test_forward_accepts_any_token_count(self) -> None:
         """
         Test that the module only cares about the trailing coordinate axis, so callers can hand it
         queries (batch, num_proposals, 2) or keys (batch, height*width, 2) alike.
-        """
-        flat_positions = torch.rand(4, self.input_channels, device=self.device)
-        gridded_positions = torch.rand(2, 3, 5, self.input_channels, device=self.device)
 
-        self.assertEqual(self.positional_encoding(flat_positions).shape, (4, self.embed_dims))
+        The Conv1d stack transposes the token and channel axes internally, so the input rank is
+        fixed at three; only the token count is free.
+        """
+        query_positions = torch.rand(self.batch_size, 4, self.input_channels, device=self.device)
+        key_positions = torch.rand(self.batch_size, 3 * 5, self.input_channels, device=self.device)
+
         self.assertEqual(
-            self.positional_encoding(gridded_positions).shape, (2, 3, 5, self.embed_dims)
+            self.positional_encoding(query_positions).shape,
+            (self.batch_size, 4, self.embed_dims),
+        )
+        self.assertEqual(
+            self.positional_encoding(key_positions).shape,
+            (self.batch_size, 3 * 5, self.embed_dims),
         )
 
     def test_encodes_each_position_independently(self) -> None:
@@ -83,7 +90,13 @@ class TestLearnedPositionalEncoding(unittest.TestCase):
 
         Moving a single position is what makes this bite: a term that mixes positions but stays
         permutation equivariant, such as adding the batch mean, would survive a permutation check.
+
+        This holds at inference only. The BatchNorm1d normalizes over the batch and token axes, so
+        while training every position's embedding does depend on the rest of the batch; eval mode
+        swaps those batch statistics for the fixed running ones.
         """
+        self.positional_encoding.eval()
+
         embeddings = self.positional_encoding(self.bev_positions)
         moved_positions = self.bev_positions.clone()
         moved_positions[0, 0] += 5.0
@@ -130,12 +143,16 @@ class TestLearnedPositionalEncoding(unittest.TestCase):
         """
         modules = list(self.positional_encoding.proj)
 
-        self.assertEqual(len(modules), 3)
-        self.assertIsInstance(modules[0], nn.Linear)
-        self.assertIsInstance(modules[1], nn.ReLU)
-        self.assertIsInstance(modules[2], nn.Linear)
-        self.assertEqual(modules[0].in_features, self.input_channels)
-        self.assertEqual(modules[2].out_features, self.embed_dims)
+        self.assertEqual(len(modules), 4)
+        self.assertIsInstance(modules[0], nn.Conv1d)
+        self.assertIsInstance(modules[1], nn.BatchNorm1d)
+        self.assertIsInstance(modules[2], nn.ReLU)
+        self.assertIsInstance(modules[3], nn.Conv1d)
+        self.assertEqual(modules[0].in_channels, self.input_channels)
+        self.assertEqual(modules[3].out_channels, self.embed_dims)
+        # Kernel size one keeps every token's embedding a function of its own coordinate.
+        self.assertEqual(modules[0].kernel_size, (1,))
+        self.assertEqual(modules[3].kernel_size, (1,))
 
     def test_gradients_reach_the_positions_and_the_parameters(self) -> None:
         """Test that the encoding is differentiable, since it is learned alongside the decoder."""
