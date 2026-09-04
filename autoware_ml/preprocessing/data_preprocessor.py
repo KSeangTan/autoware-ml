@@ -20,7 +20,7 @@ class DataPreprocessor:
         self.preprocessor_modules = preprocessor_modules
 
     def __call__(
-        self, multi_task_gt_batch: MultiTaskGTBatch, is_training: bool
+        self, multi_task_gt_batch: MultiTaskGTBatch, *, is_training: bool
     ) -> MultiTaskBatchInputs:
         """Apply runtime preprocessing to the input batch.
 
