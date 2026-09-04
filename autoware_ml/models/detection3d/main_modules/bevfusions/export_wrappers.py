@@ -19,7 +19,7 @@ import torch.nn.functional as F
 from autoware_ml.dataclasses.detection3d.head_outputs import (
     TransFusionHeadOutputs,
 )
-from autoware_ml.models.detection3d.heads.transfusion.transfusion_head import TransFusionHead
+from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import TransFusionHead
 
 
 # TODO(Kok Seang): Move this to a more appropriate location, e.g. in the head module.

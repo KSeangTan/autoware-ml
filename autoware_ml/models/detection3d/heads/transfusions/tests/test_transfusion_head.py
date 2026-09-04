@@ -33,10 +33,10 @@ from autoware_ml.dataclasses.detection3d.head_outputs import (
     Detection3DHeadOutputs,
     TransFusionHeadOutputs,
 )
-from autoware_ml.models.detection3d.heads.transfusion.exportable_multi_head_attention import (
+from autoware_ml.models.detection3d.heads.transfusions.exportable_multi_head_attention import (
     ExportableMultiheadAttention,
 )
-from autoware_ml.models.detection3d.heads.transfusion.transfusion_head import (
+from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import (
     NMSGroupConfig,
     ScoreThresholdConfig,
     TransFusionHead,

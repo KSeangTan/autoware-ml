@@ -49,7 +49,7 @@ from autoware_ml.models.detection3d.main_modules.bevfusions.bevfusion_camera imp
     BEVFusionCamera,
     BEVFusionImageBackboneExportWrapper,
 )
-from autoware_ml.models.detection3d.heads.transfusion.transfusion_head import TransFusionHead
+from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import TransFusionHead
 from autoware_ml.models.detection3d.main_modules.bevfusions.export_wrappers import (
     export_detection_outputs,
 )

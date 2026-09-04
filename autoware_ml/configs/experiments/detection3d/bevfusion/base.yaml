@@ -129,7 +129,7 @@ model:
   camera_network: null
 
   bbox_head:
-    _target_: autoware_ml.models.detection3d.heads.transfusion.transfusion_head.TransFusionHead
+    _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.TransFusionHead
     num_proposals: ???
     auxiliary: true
     in_channels: 512

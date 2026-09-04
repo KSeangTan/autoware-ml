@@ -167,7 +167,7 @@ model:
       output_shape: [256, 256]
       assume_valid_grid_coord: true
   bbox_head:
-    _target_: autoware_ml.models.detection3d.heads.transfusion.TransFusionHead
+    _target_: autoware_ml.models.detection3d.heads.transfusions.TransFusionHead
     num_proposals: ${num_proposals}
     auxiliary: true
     in_channels: 128

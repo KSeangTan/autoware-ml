@@ -34,10 +34,10 @@ from autoware_ml.datamodule.multi_task.dataclasses.detection3d import Detection3
 from autoware_ml.datamodule.multi_task.dataclasses.images import ImageGTBatch
 from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTBatch
 from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
-from autoware_ml.models.detection3d.heads.transfusion.exportable_multi_head_attention import (
+from autoware_ml.models.detection3d.heads.transfusions.exportable_multi_head_attention import (
     ExportableMultiheadAttention,
 )
-from autoware_ml.models.detection3d.heads.transfusion.transfusion_head import (
+from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import (
     ScoreThresholdConfig,
     TransFusionHead,
 )

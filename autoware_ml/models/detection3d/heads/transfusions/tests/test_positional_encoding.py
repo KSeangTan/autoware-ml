@@ -20,7 +20,7 @@ from jaxtyping import Float32
 import torch
 import torch.nn as nn
 
-from autoware_ml.models.detection3d.heads.transfusion.positional_encoding import (
+from autoware_ml.models.detection3d.heads.transfusions.positional_encoding import (
     LearnedPositionalEncoding,
 )
 

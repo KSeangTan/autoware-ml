@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 
 import torch
 
-from autoware_ml.models.detection3d.heads.transfusion import TransFusionHead
+from autoware_ml.models.detection3d.heads.transfusions import TransFusionHead
 from autoware_ml.models.detection3d.ptv3 import (
     PTv3BEVEncoder,
     PTv3BEVProjection,

@@ -15,7 +15,7 @@ from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
 from autoware_ml.models.detection3d.encoders.sparse import SparseConv3d as NativeSparseConv3d
 from autoware_ml.models.detection3d.encoders.sparse import SubMConv3d as NativeSubMConv3d
 from autoware_ml.models.detection3d.encoders.voxel import HardSimpleVoxelSinCosEncoder
-from autoware_ml.models.detection3d.heads.transfusion import (
+from autoware_ml.models.detection3d.heads.transfusions import (
     ExportableMultiheadAttention,
     TransFusionHead,
 )

@@ -27,7 +27,7 @@ from autoware_ml.dataclasses.detection3d.head_outputs import (
     TransFusionHeadOutputs,
     TransFusionSeparateHeadOutputs,
 )
-from autoware_ml.models.detection3d.heads.transfusion.transfusion_head import (
+from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import (
     ScoreThresholdConfig,
     TransFusionHead,
 )

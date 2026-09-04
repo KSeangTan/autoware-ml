@@ -19,10 +19,10 @@ import unittest
 from jaxtyping import Float32
 import torch
 
-from autoware_ml.models.detection3d.heads.transfusion.exportable_multi_head_attention import (
+from autoware_ml.models.detection3d.heads.transfusions.exportable_multi_head_attention import (
     ExportableMultiheadAttention,
 )
-from autoware_ml.models.detection3d.heads.transfusion.transfusion_decoder_layer import (
+from autoware_ml.models.detection3d.heads.transfusions.transfusion_decoder_layer import (
     TransFusionDecoderLayer,
 )
 

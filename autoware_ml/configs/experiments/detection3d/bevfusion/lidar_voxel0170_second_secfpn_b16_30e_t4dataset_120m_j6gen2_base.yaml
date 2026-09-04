@@ -44,43 +44,43 @@ model:
     nms_type: circle
     nms_min_radius: 0.25
     nms_group_configs:
-      - _target_: autoware_ml.models.detection3d.heads.transfusion.transfusion_head.NMSGroupConfig
+      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.NMSGroupConfig
         class_names: [car, truck, bus]
         nms_radius: 0.25
         max_size: 300
-      - _target_: autoware_ml.models.detection3d.heads.transfusion.transfusion_head.NMSGroupConfig
+      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.NMSGroupConfig
         class_names: [bicycle]
         nms_radius: 0.0
         max_size: 50
-      - _target_: autoware_ml.models.detection3d.heads.transfusion.transfusion_head.NMSGroupConfig
+      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.NMSGroupConfig
         class_names: [pedestrian]
         nms_radius: 0.0
         max_size: 100
-      - _target_: autoware_ml.models.detection3d.heads.transfusion.transfusion_head.NMSGroupConfig
+      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.NMSGroupConfig
         class_names: [traffic_cone]
         nms_radius: 0.0
         max_size: 100
-      - _target_: autoware_ml.models.detection3d.heads.transfusion.transfusion_head.NMSGroupConfig
+      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.NMSGroupConfig
         class_names: [barrier]
         nms_radius: 0.0
         max_size: 50
     score_threshold_group_configs:
-      - _target_: autoware_ml.models.detection3d.heads.transfusion.transfusion_head.ScoreThresholdConfig
+      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.ScoreThresholdConfig
         class_names: [car]
         score_threshold: 0.015
-      - _target_: autoware_ml.models.detection3d.heads.transfusion.transfusion_head.ScoreThresholdConfig
+      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.ScoreThresholdConfig
         class_names: [truck, bus]
         score_threshold: 0.010
-      - _target_: autoware_ml.models.detection3d.heads.transfusion.transfusion_head.ScoreThresholdConfig
+      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.ScoreThresholdConfig
         class_names: [bicycle]
         score_threshold: 0.020
-      - _target_: autoware_ml.models.detection3d.heads.transfusion.transfusion_head.ScoreThresholdConfig
+      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.ScoreThresholdConfig
         class_names: [pedestrian]
         score_threshold: 0.030
-      - _target_: autoware_ml.models.detection3d.heads.transfusion.transfusion_head.ScoreThresholdConfig
+      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.ScoreThresholdConfig
         class_names: [traffic_cone]
         score_threshold: 0.040
-      - _target_: autoware_ml.models.detection3d.heads.transfusion.transfusion_head.ScoreThresholdConfig
+      - _target_: autoware_ml.models.detection3d.heads.transfusions.transfusion_head.ScoreThresholdConfig
         class_names: [barrier]
         score_threshold: 0.020
     bbox_coder:

@@ -16,7 +16,7 @@ from jaxtyping import Float32
 import torch.nn as nn
 import torch
 
-from autoware_ml.models.detection3d.heads.transfusion.positional_encoding import (
+from autoware_ml.models.detection3d.heads.transfusions.positional_encoding import (
     LearnedPositionalEncoding,
 )
 
@@ -77,15 +77,25 @@ class TransFusionDecoderLayer(nn.Module):
         Returns:
             Refined query tensor.
         """
+        # As in nn.TransformerDecoderLayer, the residual stream stays position-free and the
+        # positional embeddings are added to q/k/v at every attention call.
         query_tokens = query.transpose(1, 2)
         key_tokens = key.transpose(1, 2)
-        query_tokens = query_tokens + self.query_pos_encoding(query_pos)
-        key_tokens = key_tokens + self.key_pos_encoding(key_pos)
+        query_pos_embed = self.query_pos_encoding(query_pos)
+        key_pos_embed = self.key_pos_encoding(key_pos)
 
-        attended, _ = self.self_attn(query_tokens, query_tokens, query_tokens)
+        attended, _ = self.self_attn(
+            query_tokens + query_pos_embed,
+            query_tokens + query_pos_embed,
+            query_tokens + query_pos_embed,
+        )
         query_tokens = self.norm1(query_tokens + self.dropout(attended))
 
-        attended, _ = self.cross_attn(query_tokens, key_tokens, key_tokens)
+        attended, _ = self.cross_attn(
+            query_tokens + query_pos_embed,
+            key_tokens + key_pos_embed,
+            key_tokens + key_pos_embed,
+        )
         query_tokens = self.norm2(query_tokens + self.dropout(attended))
 
         ffn_output = self.ffn(query_tokens)

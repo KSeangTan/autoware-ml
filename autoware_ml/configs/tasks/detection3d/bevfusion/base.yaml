@@ -82,7 +82,7 @@ model:
     out_channels: [256, 256]
     upsample_strides: [1, 2]
   bbox_head:
-    _target_: autoware_ml.models.detection3d.heads.transfusion.TransFusionHead
+    _target_: autoware_ml.models.detection3d.heads.transfusions.TransFusionHead
     num_proposals: ???
     auxiliary: true
     in_channels: 512
