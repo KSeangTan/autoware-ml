@@ -6,7 +6,7 @@ from collections import Counter
 
 from autoware_ml.metrics.base import EvalStage, Metric
 from autoware_ml.metrics.detection3d.naming import label_metric_name
-from autoware_ml.metrics.detection3d.structures import DetectionState
+from autoware_ml.metrics.detection3d.matching import DetectionState
 
 
 class BoxCounts(Metric[DetectionState]):
