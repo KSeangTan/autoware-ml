@@ -98,7 +98,7 @@ def log_configuration(cfg: DictConfig) -> None:
     logger.info(OmegaConf.to_yaml(cfg))
     logger.info("=" * 80)
     # Log polars number of threads
-    logger.info(f"POLARS_MAX_THREADS: {pl.thread_pool_size}")
+    logger.info(f"POLARS_MAX_THREADS: {pl.thread_pool_size()}")
 
 
 def resolve_work_dir() -> Path:

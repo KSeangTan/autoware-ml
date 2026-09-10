@@ -1,4 +1,4 @@
-_target_: autoware_ml.datamodule.base.DataLoaderConfig
+_target_: autoware_ml.datamodule.base_data_module.DataLoaderConfig
 _convert_: all
 
 pin_memory: true
