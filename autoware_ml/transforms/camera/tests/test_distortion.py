@@ -20,7 +20,7 @@ from jaxtyping import Float32
 import torch
 from torch import Tensor
 
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.camera.distortion import UndistortImage
 
@@ -44,7 +44,7 @@ class TestUndistortImage(unittest.TestCase):
         self,
         distortion_coefficients: list[Float32[Tensor, " num_coefficients"]] | None = None,
         num_cameras: int = 2,
-    ) -> MultiTaskGTSample:
+    ) -> ModelGTSample:
         """Build a minimal sample holding only camera image data.
 
         Args:
@@ -53,7 +53,7 @@ class TestUndistortImage(unittest.TestCase):
             num_cameras: Number of cameras the sample holds.
 
         Returns:
-            MultiTaskGTSample holding random images and the test camera calibration.
+            ModelGTSample holding random images and the test camera calibration.
         """
         if distortion_coefficients is None:
             distortion_coefficients = [self.distortion_coefficients.clone()] * num_cameras
@@ -72,7 +72,7 @@ class TestUndistortImage(unittest.TestCase):
             augmented_camera_intrinsics=self.camera_intrinsic.repeat(num_cameras, 1, 1),
             image_augmentation_matrices=torch.eye(4).repeat(num_cameras, 1, 1),
         )
-        return MultiTaskGTSample(
+        return ModelGTSample(
             lidar_point_cloud_samples=None,
             image_samples=None,
             point_cloud_data=None,

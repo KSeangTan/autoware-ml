@@ -9,10 +9,8 @@ from torchvision.io import decode_image
 
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import (
-    ImageSample,
-    MultiTaskGTSample,
-)
+from autoware_ml.dataclasses.geometry.images import ImageSample
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.types.geometry import ImageChannel
 
 
@@ -32,14 +30,14 @@ class LoadImageFromFile(MultiTaskBaseTransform):
         self.color_type = color_type
         self.normalize_to_unit = normalize_to_unit
 
-    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Load only the first image data from the current sample.
 
         Args:
-            multi_task_gt_sample: MultiTaskGTSample instance containing `image_samples`.
+            multi_task_gt_sample: ModelGTSample instance containing `image_samples`.
 
         Returns:
-            Updated MultiTaskGTSample instance with a loaded `camera_image_data`.
+            Updated ModelGTSample instance with a loaded `camera_image_data`.
         """
         assert multi_task_gt_sample.image_samples is not None
         image_sample = multi_task_gt_sample.image_samples[0]
@@ -101,14 +99,14 @@ class LoadMultiViewImagesFromFiles(MultiTaskBaseTransform):
         self.color_type = color_type
         self.camera_order = camera_order
 
-    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Load only the first image data from the current sample.
 
         Args:
-            multi_task_gt_sample: MultiTaskGTSample instance containing `image_samples`.
+            multi_task_gt_sample: ModelGTSample instance containing `image_samples`.
 
         Returns:
-            Updated MultiTaskGTSample instance with a loaded `camera_image_data`.
+            Updated ModelGTSample instance with a loaded `camera_image_data`.
         """
         assert multi_task_gt_sample.image_samples is not None
         # Reorder image_samples based on camera_order.

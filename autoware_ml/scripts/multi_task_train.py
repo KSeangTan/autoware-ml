@@ -33,7 +33,7 @@ from autoware_ml.builders.database_builder import build_database, build_datamodu
 from autoware_ml.builders.mlflow_builder import build_mlflow_run_context
 from autoware_ml.builders.model_builder import build_model, build_data_preprocessor
 from autoware_ml.builders.logger_builder import build_trainer_logger
-from autoware_ml.datamodule.multi_task.multi_task_data_module import MultiTaskDataModule
+from autoware_ml.datamodule.base_data_module import BaseDataModule
 from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.utils.runtime import (
     configure_torch_runtime,
@@ -54,7 +54,7 @@ def train(
     trainer: L.Trainer,
     cfg: DictConfig,
     model: ModuleBaseModel,
-    datamodule: MultiTaskDataModule,
+    datamodule: BaseDataModule,
     checkpoint_dir: str,
     resume_checkpoint_path: str | None,
 ) -> float:

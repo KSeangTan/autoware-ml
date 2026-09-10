@@ -67,6 +67,7 @@ class DatasetTableSchema:
     LOCATION = DatasetTableColumn("location", pl.String)
     VEHICLE_TYPE = DatasetTableColumn("vehicle_type", pl.String)
     SCENARIO_NAME = DatasetTableColumn("scenario_name", pl.String)
+    TRAFFIC_CONE_BARRIER_STATUS = DatasetTableColumn("traffic_cone_barrier_status", pl.Boolean)
 
     # LiDAR Frames Schema
     LIDAR_FRAMES = DatasetTableColumn(

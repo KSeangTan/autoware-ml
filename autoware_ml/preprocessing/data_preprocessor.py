@@ -2,8 +2,8 @@ from typing import Sequence
 
 from torch import nn
 
-from autoware_ml.dataclasses.multi_task_batch_inputs import MultiTaskBatchInputs
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTBatch
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 
 
 class DataPreprocessor:
@@ -19,20 +19,18 @@ class DataPreprocessor:
     def __init__(self, preprocessor_modules: Sequence[nn.Module]) -> None:
         self.preprocessor_modules = preprocessor_modules
 
-    def __call__(
-        self, multi_task_gt_batch: MultiTaskGTBatch, *, is_training: bool
-    ) -> MultiTaskBatchInputs:
+    def __call__(self, multi_task_gt_batch: ModelGTBatch, *, is_training: bool) -> ModelBatchInputs:
         """Apply runtime preprocessing to the input batch.
 
         Args:
-            multi_task_gt_batch (MultiTaskGTBatch): The input batch of data to be preprocessed.
+            multi_task_gt_batch (ModelGTBatch): The input batch of data to be preprocessed.
             is_training (bool): Set True if DataPreprocessor is run in the training mode.
 
         Returns:
-            MultiTaskBatchInputs: The batch of data after running the list of preprocessor_modules.
+            ModelBatchInputs: The batch of data after running the list of preprocessor_modules.
         """
         # Build a MultiTaskFeatures instance from the input batch
-        multi_task_batch_inputs = MultiTaskBatchInputs(
+        multi_task_batch_inputs = ModelBatchInputs(
             multi_task_gt_batch=multi_task_gt_batch,
             voxels_data=None,  # Placeholder for voxelization
             # The collated image batch is passed through as-is, it is None for lidar-only models

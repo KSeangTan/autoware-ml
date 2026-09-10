@@ -2,124 +2,22 @@ from __future__ import annotations
 
 from typing import Sequence, NamedTuple
 
-from jaxtyping import Float32, Int32
+from jaxtyping import Int32
 import torch
-from torch import Tensor
 
-from autoware_ml.datamodule.multi_task.dataclasses.detection3d import (
+from autoware_ml.dataclasses.batch.detection3d import (
     Detection3DGTBatch,
 )
-from autoware_ml.datamodule.multi_task.dataclasses.images import ImageGTBatch
-from autoware_ml.datamodule.multi_task.dataclasses.segmentation3d import Segmentation3DGTSample
-from autoware_ml.datamodule.multi_task.dataclasses.transformation import LiDARTransformationSample
+from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTSample
+from autoware_ml.dataclasses.geometry.transformation import LiDARTransformationSample
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.geometry.points.base_points import BasePoints
 from autoware_ml.geometry.cameras.base_images import BaseImages
+from autoware_ml.dataclasses.geometry.images import ImageGTBatch, ImageSample
+from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch, LiDARPointCloudSample
 
 
-class PointCloudGTBatch(NamedTuple):
-    """Named tuple to represent pointcloud features in a batch size with their batch indices."""
-
-    points: Float32[
-        Tensor, "batch_size*num_points num_features"
-    ]  # (B*P, number of features for each point)
-    batch_indices: Int32[Tensor, " batch_size*num_points"]  # (B*P, ), batch indices for each point
-
-    @staticmethod
-    def collate_gt_samples(
-        point_gt_samples: Sequence[BasePoints],
-    ) -> PointCloudGTBatch | None:
-        """
-        Collate a sequence of points (BasePoints) into a single PointCloudGTBatch.
-
-        Args:
-          point_gt_samples: Sequence of points (BasePoints) to be collated.
-
-        Returns:
-          PointCloudGTBatch: Collated point cloud GT batch.
-        """
-        if len(point_gt_samples) == 0:
-            return None
-
-        # Concatenate all points from the sequence of point_gt_samples
-        points = torch.cat([sample.points for sample in point_gt_samples], dim=0)
-
-        # Convert it to (0, 0, 0, 1, 1, 1, 2, 2, 2, ...) for each point in the batch
-        batch_indices = torch.cat(
-            [
-                torch.full(
-                    (point.points.shape[0],), i, dtype=torch.int32, device=point.points.device
-                )
-                for i, point in enumerate(point_gt_samples)
-            ],
-            dim=0,
-        )
-
-        if points.shape[0] != batch_indices.shape[0]:
-            raise ValueError(
-                "Mismatch between number of points and batch indices. "
-                f"Points shape: {points.shape}, Batch indices shape: {batch_indices.shape}"
-            )
-
-        return PointCloudGTBatch(
-            points=points,
-            batch_indices=batch_indices,
-        )
-
-    def to_device(self, device: torch.device) -> PointCloudGTBatch:
-        """
-        Move the PointCloudGTBatch to the specified device.
-
-        Args:
-          device: The target device to move the batch to.
-
-        Returns:
-          PointCloudGTBatch: The batch moved to the specified device.
-        """
-        return PointCloudGTBatch(
-            points=self.points.to(device),
-            batch_indices=self.batch_indices.to(device),
-        )
-
-
-class LiDARPointCloudSample(NamedTuple):
-    """
-    Named tuple to represent a single row of LiDAR point cloud data,
-    which contains the dataset record for the LiDAR point cloud task.
-    """
-
-    point_cloud_path: str
-    timestamp: float
-    # Transformation matrix from LiDAR sensor frame to ego pose of this LiDAR sensor frame
-    sensor_to_ego_pose_matrix: Float32[Tensor, "4 4"]  # (4, 4)
-    # Transformation matrix from ego pose of this LiDAR sensor frame to global frame
-    lidar_to_ego_pose_to_global_matrix: Float32[Tensor, "4 4"]  # (4, 4)
-    # Transformation matrix from the main lidar sensor to other lidar sweeps at this frame
-    lidar_sensor_to_lidar_sweep_matrix: Float32[Tensor, "4 4"]  # (4, 4)
-
-
-class ImageSample(NamedTuple):
-    """
-    Named tuple to represent a single row of image data, which contains the dataset record for the
-    image task.
-    """
-
-    image_path: str
-    camera_name: str
-    timestamp: float
-    # Transformation matrix for camera_intrinsics
-    camera_intrinsic: Float32[Tensor, "3 3"]
-    # Transformation matrix for lidar to camera
-    lidar2cam: Float32[Tensor, "4 4"]
-    # Transformation matrix for lidar to image
-    lidar2image: Float32[Tensor, "4 4"]
-    distortion_model: str
-    # Distortion coefficients following the OpenCV convention ``(k1, k2, p1, p2[, k3[, ...]])``.
-    # The length varies by distortion model (4, 5, 8, 12 or 14), empty for undistorted images.
-    distortion_coefficients: Float32[Tensor, " num_coefficients"]
-
-
-class MultiTaskGTSample(NamedTuple):
+class ModelGTSample(NamedTuple):
     """
     Named tuple to represent a single row/sample of multi-task data when inputting to the
     multi-task model.
@@ -148,10 +46,10 @@ class MultiTaskGTSample(NamedTuple):
     io_processing_time: float = 0.0
 
 
-class MultiTaskGTBatch(NamedTuple):
+class ModelGTBatch(NamedTuple):
     """
     Named tuple to represent a batch of multi-task data after collating from sequence of
-    MultiTaskGTSample when inputting to the multi-task model.
+    ModelGTSample when inputting to the multi-task model.
     """
 
     # 3D branch
@@ -166,17 +64,17 @@ class MultiTaskGTBatch(NamedTuple):
     # Summed io_processing_time of every sample collated into this batch.
     io_processing_time: float = 0.0
 
-    def to_device(self, device: torch.device) -> MultiTaskGTBatch:
+    def to_device(self, device: torch.device) -> ModelGTBatch:
         """
-        Move the MultiTaskGTBatch to the specified device.
+        Move the ModelGTBatch to the specified device.
 
         Args:
           device: The target device to move the batch to.
 
         Returns:
-          MultiTaskGTBatch: The batch moved to the specified device.
+          ModelGTBatch: The batch moved to the specified device.
         """
-        return MultiTaskGTBatch(
+        return ModelGTBatch(
             point_cloud_gt_batch=self.point_cloud_gt_batch.to_device(device)
             if self.point_cloud_gt_batch is not None
             else None,
@@ -203,17 +101,17 @@ class MultiTaskGTBatch(NamedTuple):
         elif self.image_gt_batch is not None:
             return self.image_gt_batch.images.shape[0]
         else:
-            raise ValueError("Cannot infer batch size from an empty MultiTaskGTBatch.")
+            raise ValueError("Cannot infer batch size from an empty ModelGTBatch.")
 
     @staticmethod
     def collate_pointcloud_gt_samples(
-        gt_samples: Sequence[MultiTaskGTSample],
+        gt_samples: Sequence[ModelGTSample],
     ) -> PointCloudGTBatch | None:
         """
         Collate a sequence of point cloud GT samples into a PointCloudGTBatch.
 
         Args:
-          gt_samples: Sequence of MultiTaskGTSample to be collated.
+          gt_samples: Sequence of ModelGTSample to be collated.
 
         Returns:
           PointCloudGTBatch: Collated point cloud GT batch.
@@ -236,13 +134,13 @@ class MultiTaskGTBatch(NamedTuple):
 
     @staticmethod
     def collate_detection3d_gt_samples(
-        gt_samples: Sequence[MultiTaskGTSample], max_num_3d_gt_bboxes: int
+        gt_samples: Sequence[ModelGTSample], max_num_3d_gt_bboxes: int
     ) -> Detection3DGTBatch | None:
         """
         Collate a sequence of detection3d GT samples into a Detection3DGTBatch.
 
         Args:
-          gt_samples: Sequence of MultiTaskGTSample to be collated.
+          gt_samples: Sequence of ModelGTSample to be collated.
           max_num_3d_gt_bboxes: The maximum number of 3D ground truth bounding boxes
             for each sample in the batch.
 
@@ -271,12 +169,12 @@ class MultiTaskGTBatch(NamedTuple):
         return detection3d_gt_batch
 
     @staticmethod
-    def collate_image_gt_samples(gt_samples: Sequence[MultiTaskGTSample]) -> ImageGTBatch | None:
+    def collate_image_gt_samples(gt_samples: Sequence[ModelGTSample]) -> ImageGTBatch | None:
         """
-        Collate sequence of MultiTaskGTSample into a ImagesGtBatch
+        Collate sequence of ModelGTSample into a ImagesGtBatch
 
         Args:
-          gt_samples: Sequence of MultiTaskGTSample to be collated.
+          gt_samples: Sequence of ModelGTSample to be collated.
           max_num_3d_gt_bboxes: The maximum number of 3D ground truth bounding boxes
             for each sample in the batch.
 
@@ -303,29 +201,29 @@ class MultiTaskGTBatch(NamedTuple):
 
     @staticmethod
     def collate_gt_samples(
-        gt_samples: Sequence[MultiTaskGTSample], max_num_3d_gt_bboxes: int
-    ) -> MultiTaskGTBatch:
+        gt_samples: Sequence[ModelGTSample], max_num_3d_gt_bboxes: int
+    ) -> ModelGTBatch:
         """
-        Collate a sequence of MultiTaskGTSample into a MultiTaskGTBatch.
+        Collate a sequence of ModelGTSample into a ModelGTBatch.
 
         Args:
-          gt_samples: Sequence of MultiTaskGTSample to be collated.
+          gt_samples: Sequence of ModelGTSample to be collated.
 
         Returns:
-          MultiTaskGTBatch: Collated multi-task GT batch.
+          ModelGTBatch: Collated multi-task GT batch.
         """
         # Collate point cloud GT batch
-        point_cloud_gt_batch = MultiTaskGTBatch.collate_pointcloud_gt_samples(gt_samples)
+        point_cloud_gt_batch = ModelGTBatch.collate_pointcloud_gt_samples(gt_samples)
 
         # Collate detection3d GT batch
-        detection3d_gt_batch = MultiTaskGTBatch.collate_detection3d_gt_samples(
+        detection3d_gt_batch = ModelGTBatch.collate_detection3d_gt_samples(
             gt_samples=gt_samples, max_num_3d_gt_bboxes=max_num_3d_gt_bboxes
         )
 
         # Collate image gt batch
-        image_gt_batch = MultiTaskGTBatch.collate_image_gt_samples(gt_samples=gt_samples)
+        image_gt_batch = ModelGTBatch.collate_image_gt_samples(gt_samples=gt_samples)
 
-        return MultiTaskGTBatch(
+        return ModelGTBatch(
             point_cloud_gt_batch=point_cloud_gt_batch,
             detection3d_gt_batch=detection3d_gt_batch,
             image_gt_batch=image_gt_batch,

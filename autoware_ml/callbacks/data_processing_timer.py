@@ -22,7 +22,7 @@ from typing import Any
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.callbacks import Callback
 
-from autoware_ml.dataclasses.multi_task_batch_inputs import MultiTaskBatchInputs
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.types.dataset import SplitType
 
 METRIC_NAME = "data_processing_total_time"
@@ -31,9 +31,9 @@ METRIC_NAME = "data_processing_total_time"
 class DataProcessingTimer(Callback):
     """Record the sample loading and transform time carried on each batch.
 
-    ``MultiTaskBaseDataset`` measures loading plus transform time per sample
+    ``BaseDataset`` measures loading plus transform time per sample
     inside the dataloader worker, and the collate function sums those per-sample
-    values into ``MultiTaskGTBatch.io_processing_time``. This callback reads that
+    values into ``ModelGTBatch.io_processing_time``. This callback reads that
     field and logs it, which is why the timing lives on the batch at all:
     Lightning forbids ``self.log()`` inside ``on_after_batch_transfer()``, where
     the batch first becomes available to the module.
@@ -71,7 +71,7 @@ class DataProcessingTimer(Callback):
         stage: str,
         trainer: Trainer,
         pl_module: LightningModule,
-        batch: MultiTaskBatchInputs,
+        batch: ModelBatchInputs,
         batch_idx: int,
     ) -> None:
         """Accumulate one batch's IO processing time and log it on the interval.

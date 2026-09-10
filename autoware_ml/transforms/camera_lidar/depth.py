@@ -24,7 +24,7 @@ from jaxtyping import Float32
 import torch
 from torch import Tensor
 
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
 
@@ -126,15 +126,15 @@ class LiDARDepthSparseTransform(MultiTaskBaseTransform):
         flat_depth.scatter_(dim=0, index=flat_indices, src=hit_distances)
         return flat_depth.view(num_cams, height, width)
 
-    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Build the sparse depth maps of every camera from the lidar points.
 
         Args:
-            multi_task_gt_sample: MultiTaskGTSample instance containing `point_cloud_data` and
+            multi_task_gt_sample: ModelGTSample instance containing `point_cloud_data` and
                 `camera_image_data`.
 
         Returns:
-            Updated MultiTaskGTSample instance with `depth_images` set in `camera_image_data`.
+            Updated ModelGTSample instance with `depth_images` set in `camera_image_data`.
         """
         assert multi_task_gt_sample.point_cloud_data is not None
         assert multi_task_gt_sample.camera_image_data is not None

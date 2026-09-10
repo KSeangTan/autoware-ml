@@ -21,10 +21,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import (
-    LiDARPointCloudSample,
-    MultiTaskGTSample,
-)
+from autoware_ml.dataclasses.geometry.point_clouds import LiDARPointCloudSample
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.transforms.point_cloud.loading import LoadPointsFromFile
 from autoware_ml.types.geometry import PointFeatureName
 
@@ -51,9 +49,9 @@ class TestLoadPointsFromFile(unittest.TestCase):
 
     def build_multi_task_gt_sample(
         self, lidar_point_cloud_samples: list[LiDARPointCloudSample]
-    ) -> MultiTaskGTSample:
+    ) -> ModelGTSample:
         """Build a minimal sample holding only the LiDAR file metadata the loader reads."""
-        return MultiTaskGTSample(
+        return ModelGTSample(
             lidar_point_cloud_samples=lidar_point_cloud_samples,
             image_samples=None,
             point_cloud_data=None,

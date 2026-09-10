@@ -1,376 +1,179 @@
-# Copyright 2026 TIER IV, Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+import logging
+import numpy as np
+import polars as pl
 
-"""T4Dataset 3D detection dataset and datamodule.
+from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
+from autoware_ml.databases.schemas.box3d_schemas import Box3DDatasetSchema
+from autoware_ml.datamodule.base_dataset_task import BaseDatasetTask
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
+from autoware_ml.types.geometry import Box3DFieldIndex, Box3DCenterCoordinateType
 
-This module exposes lidar detection datasets and datamodules backed by
-T4Dataset annotations and sensor metadata.
-"""
-
-from __future__ import annotations
-
-from collections.abc import Mapping
-from dataclasses import dataclass
-import math
-import os
-import pickle
-from typing import Any
-
-from torch.utils.data import DataLoader
-
-from autoware_ml.datamodule.base import DataModule, Dataset
-from autoware_ml.datamodule.common.detection3d import (
-    build_detection_dataloader,
-    load_detection_data_infos,
-    resolve_data_path,
-    resolve_sweep_paths,
-)
-from autoware_ml.datamodule.common.serialization import SerializedSampleList
-from autoware_ml.transforms.base import TransformsCompose
-from autoware_ml.transforms.boxes3d.annotations import (
-    box_is_physical,
-    normalize_filter_attributes,
-    resolve_detection_class,
-    sanitize_velocity,
-)
+logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class FrameSamplingConfig:
-    """Configuration for repeat-factor frame sampling."""
-
-    repeat_sampling_factor: float
-    object_bev_range: list[float]
-    low_pedestrian_height_threshold: float
-    low_pedestrian_bev_range: list[float]
-    low_pedestrian_category_name: str = "low_pedestrian"
-
-
-def coerce_frame_sampling(
-    cfg: FrameSamplingConfig | Mapping[str, Any] | None,
-) -> FrameSamplingConfig | None:
-    """Normalize frame-sampling settings to ``FrameSamplingConfig``.
-
-    Args:
-        cfg: Frame-sampling settings as a dataclass, a mapping, or ``None``.
-
-    Returns:
-        The settings as ``FrameSamplingConfig``, or ``None`` when disabled.
+class T4Detection3DTask(BaseDatasetTask):
     """
-    if cfg is None:
-        return None
-    if isinstance(cfg, FrameSamplingConfig):
-        return cfg
-    if isinstance(cfg, Mapping):
-        return FrameSamplingConfig(**dict(cfg))
-    raise TypeError(
-        "Expected frame sampling config to be a FrameSamplingConfig, mapping, or None, "
-        f"got {type(cfg)!r}."
-    )
-
-
-def compute_frame_sampling_weights(
-    data_infos: list[dict[str, Any]],
-    class_names: list[str],
-    name_mapping: Mapping[str, str],
-    frame_sampling: FrameSamplingConfig | None,
-    filter_attributes: list[list[str]] | None = None,
-) -> list[float]:
-    """Compute repeat-factor sampling weights for T4 detection samples.
-
-    Args:
-        data_infos: Annotation records of the split.
-        class_names: Detector class names in label order.
-        name_mapping: Raw category to detector class mapping.
-        frame_sampling: Repeat-factor settings, or ``None`` to disable weighting.
-        filter_attributes: Class and attribute name pairs excluded from class counting.
-
-    Returns:
-        One sampling weight per sample, uniform when weighting is disabled.
-    """
-    if frame_sampling is None:
-        return [1.0] * len(data_infos)
-    normalized_filter_attributes = normalize_filter_attributes(filter_attributes)
-
-    sampling_categories = [*class_names, frame_sampling.low_pedestrian_category_name]
-    category_frame_counts = {category: 0 for category in sampling_categories}
-    category_box_counts = {category: 0 for category in sampling_categories}
-    frame_categories = []
-
-    for sample in data_infos:
-        categories = _sample_sampling_categories(
-            sample,
-            class_names,
-            name_mapping,
-            frame_sampling,
-            normalized_filter_attributes,
-        )
-        frame_categories.append(categories)
-        for category, count in categories.items():
-            if count <= 0:
-                continue
-            category_frame_counts[category] += 1
-            category_box_counts[category] += count
-
-    total_boxes = sum(category_box_counts.values())
-    if total_boxes == 0:
-        raise ValueError("Cannot compute frame sampling weights for a dataset with no valid boxes.")
-
-    category_factors = {}
-    for category in sampling_categories:
-        frame_fraction = category_frame_counts[category] / len(data_infos)
-        box_fraction = category_box_counts[category] / total_boxes
-        if frame_fraction == 0.0 or box_fraction == 0.0:
-            category_factors[category] = 1.0
-            continue
-        category_fraction = math.sqrt(frame_fraction * box_fraction)
-        category_factors[category] = max(
-            1.0,
-            math.sqrt(frame_sampling.repeat_sampling_factor / category_fraction),
-        )
-
-    frame_weights = []
-    for categories in frame_categories:
-        weight = 1.0
-        for category, count in categories.items():
-            if count > 0:
-                weight = max(weight, category_factors[category])
-        frame_weights.append(weight)
-    return frame_weights
-
-
-def _sample_sampling_categories(
-    sample: Mapping[str, Any],
-    class_names: list[str],
-    name_mapping: Mapping[str, str],
-    frame_sampling: FrameSamplingConfig,
-    filter_attributes: frozenset[tuple[str, str]],
-) -> dict[str, int]:
-    """Return sampling category counts for one frame."""
-    categories = {*class_names, frame_sampling.low_pedestrian_category_name}
-    category_counts = {category: 0 for category in categories}
-
-    for instance in sample.get("instances", []):
-        mapped_name = resolve_detection_class(
-            instance,
-            class_names=class_names,
-            name_mapping=name_mapping,
-            label_to_category=sample.get("label_to_category"),
-            filter_attributes=filter_attributes,
-        )
-        if mapped_name is None:
-            continue
-        box = instance.get("bbox_3d")
-        if box is None or not box_is_physical(box, sanitize_velocity(instance.get("velocity"))):
-            continue
-        # A box with no lidar points gives no supervision (the point-count train
-        # filters drop it), so it must not inflate the frame's sampling weight.
-        if int(instance.get("num_lidar_pts", 0)) <= 0:
-            continue
-        if not _box_center_in_bev_range(box, frame_sampling.object_bev_range):
-            continue
-
-        category = mapped_name
-        if _is_low_pedestrian(mapped_name, box, frame_sampling):
-            category = frame_sampling.low_pedestrian_category_name
-        category_counts[category] += 1
-
-    return category_counts
-
-
-def _is_low_pedestrian(
-    mapped_name: str,
-    box: list[float],
-    frame_sampling: FrameSamplingConfig,
-) -> bool:
-    """Return whether a mapped box belongs to the low-pedestrian sampling bucket."""
-    return (
-        mapped_name == "pedestrian"
-        and float(box[5]) < frame_sampling.low_pedestrian_height_threshold
-        and _box_center_in_bev_range(box, frame_sampling.low_pedestrian_bev_range)
-    )
-
-
-def _box_center_in_bev_range(box: list[float], bev_range: list[float]) -> bool:
-    """Check whether a box center is inside ``[x_min, y_min, x_max, y_max]``."""
-    x, y = float(box[0]), float(box[1])
-    return bev_range[0] <= x <= bev_range[2] and bev_range[1] <= y <= bev_range[3]
-
-
-class T4Detection3DDataset(Dataset):
-    """Load T4Dataset lidar samples for 3D object detection.
-
-    The dataset returns metadata consumed by transform pipelines that load
-    lidar points and detection annotations on demand.
+    Dataset task for 3D detection in the T4 dataset.
+    This class defines how to process the dataset records for 3D detection in the T4 dataset and retrieve the necessary information for training and evaluation.
     """
 
     def __init__(
         self,
-        data_root: str,
-        ann_file: str,
-        class_names: list[str],
-        name_mapping: Mapping[str, str],
-        filter_attributes: list[list[str]] | None = None,
-        frame_sampling: FrameSamplingConfig | None = None,
-        dataset_transforms: TransformsCompose | None = None,
+        database_root_path: str,
+        dataset_records_dataframe: pl.DataFrame | None,
     ) -> None:
-        """Initialize the T4 detection dataset.
-
+        """
+        Initialize the T4Detection3DTask class.
         Args:
-            data_root: Dataset root directory.
-            ann_file: Annotation file path.
-            class_names: Ordered detector class names.
-            name_mapping: Mapping from dataset labels to detector labels.
-            filter_attributes: Raw class-attribute pairs excluded from detection targets.
-            frame_sampling: Optional repeat-factor frame sampling settings.
-            dataset_transforms: Optional dataset transform pipeline.
+          database_root_path: Root directory of the dataset.
+          dataset_records_dataframe: Polars DataFrame of dataset records to be processed for 3D detection in the T4 dataset.
         """
-        super().__init__(dataset_transforms=dataset_transforms)
-        self.data_root = data_root
-        self.class_names = class_names
-        self.name_mapping = name_mapping
-        self.frame_sampling = frame_sampling
-
-        with open(ann_file, "rb") as file:
-            data = pickle.load(file)
-        data_infos = load_detection_data_infos(data)
-        self.frame_weights = compute_frame_sampling_weights(
-            data_infos,
-            self.class_names,
-            self.name_mapping,
-            self.frame_sampling,
-            filter_attributes=filter_attributes,
-        )
-        # Serialize last: frame_weights above must run on the live list.
-        self.data_infos = SerializedSampleList(data_infos)
-
-    def __len__(self) -> int:
-        """Return the number of annotated samples.
-
-        Returns:
-            Number of samples available in the annotation file.
-        """
-        return len(self.data_infos)
-
-    def get_data_info(self, index: int) -> dict[str, Any]:
-        """Build one T4 detection metadata record.
-
-        Args:
-            index: Dataset sample index.
-
-        Returns:
-            Metadata dictionary consumed by detection transform pipelines.
-        """
-        sample = self.data_infos[index]
-        return {
-            "instances": sample.get("instances", []),
-            "class_names": self.class_names,
-            "name_mapping": self.name_mapping,
-            "sample_token": sample["token"],
-            "timestamp": sample.get("timestamp"),
-            "lidar_path": resolve_data_path(self.data_root, sample["lidar_path"]),
-            "num_pts_feats": int(sample["lidar_points"].get("num_pts_feats", 5)),
-            "sweeps": resolve_sweep_paths(sample, self.data_root),
-        }
-
-
-class T4Detection3DDataModule(DataModule):
-    """Create T4Dataset dataloaders for 3D object detection.
-
-    The datamodule configures split-specific datasets and transforms for lidar
-    detection experiments on T4Dataset.
-    """
-
-    def __init__(
-        self,
-        data_root: str,
-        train_ann_file: str,
-        val_ann_file: str,
-        test_ann_file: str,
-        class_names: list[str],
-        name_mapping: Mapping[str, str],
-        filter_attributes: list[list[str]] | None = None,
-        train_frame_sampling: FrameSamplingConfig | Mapping[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        """Initialize the T4 detection datamodule.
-
-        Args:
-            data_root: Dataset root directory.
-            train_ann_file: Training annotation file path.
-            val_ann_file: Validation annotation file path.
-            test_ann_file: Test annotation file path.
-            class_names: Ordered detector class names.
-            name_mapping: Mapping from dataset labels to detector labels.
-            filter_attributes: Raw class-attribute pairs excluded from detection targets.
-            train_frame_sampling: Optional repeat-factor frame sampling
-                settings applied only to the training split.
-            **kwargs: Additional base datamodule configuration.
-        """
-        super().__init__(**kwargs)
-        self.data_root = data_root
-        self.class_names = class_names
-        self.name_mapping = name_mapping
-        self.filter_attributes = filter_attributes
-        self.train_frame_sampling = coerce_frame_sampling(train_frame_sampling)
-
-        def resolve_ann_file(ann_file: str) -> str:
-            """Return ``ann_file`` absolute, joined to the data root when relative.
-
-            Args:
-                ann_file: Annotation file path, absolute or relative to the data root.
-
-            Returns:
-                The absolute annotation file path.
-            """
-            return ann_file if os.path.isabs(ann_file) else os.path.join(data_root, ann_file)
-
-        self.ann_files = {
-            "train": resolve_ann_file(train_ann_file),
-            "val": resolve_ann_file(val_ann_file),
-            "test": resolve_ann_file(test_ann_file),
-            "predict": resolve_ann_file(test_ann_file),
-        }
-
-    def _create_dataset(
-        self, split: str, dataset_transforms: TransformsCompose | None = None
-    ) -> Dataset:
-        """Instantiate the dataset for one split.
-
-        Args:
-            split: Dataset split name.
-            dataset_transforms: Optional transform pipeline for the split.
-
-        Returns:
-            Instantiated dataset for the requested split.
-        """
-        return T4Detection3DDataset(
-            data_root=self.data_root,
-            ann_file=self.ann_files[split],
-            class_names=self.class_names,
-            name_mapping=self.name_mapping,
-            filter_attributes=self.filter_attributes,
-            frame_sampling=self.train_frame_sampling if split == "train" else None,
-            dataset_transforms=dataset_transforms,
+        super().__init__(
+            database_root_path=database_root_path,
+            dataset_records_dataframe=dataset_records_dataframe,
         )
 
-    def _create_dataloader(self, split: str) -> DataLoader:
-        """Create a detection dataloader with optional train RFS sampling."""
-        return build_detection_dataloader(
-            dataset=getattr(self, f"{split}_dataset"),
-            dataloader_cfg=getattr(self, f"{split}_dataloader_cfg"),
-            is_train=split == "train",
-            train_frame_sampling=self.train_frame_sampling,
-            collate_fn=self.collate_fn,
+    def pre_filter_dataset_records(
+        self, dataset_records_dataframe: pl.DataFrame | None
+    ) -> pl.DataFrame | None:
+        """
+        Pre-filter the dataset records dataframe for 3D detection in the T4 dataset.
+        This method filters the dataset records dataframe to only include columns related to 3D bounding boxes.
+
+        Args:
+          dataset_records_dataframe: Polars DataFrame of dataset records to be filtered for 3D detection in the T4 dataset.
+        Returns:
+          Polars DataFrame of filtered dataset records for 3D detection in the T4 dataset
+        """
+        if dataset_records_dataframe is None:
+            return None
+
+        # Filter the dataset records dataframe to only include columns related to 3D bounding boxes
+        filtered_dataset_records_dataframe = dataset_records_dataframe.select(
+            [
+                DatasetTableSchema.BOXES_3D.name,
+                # Add other necessary columns for 3D detection as needed
+            ]
+        )
+        return filtered_dataset_records_dataframe
+
+    def __str__(self) -> str:
+        """
+        String representation of the dataset type.
+
+        Returns:
+          str: String representation of the dataset type.
+        """
+        return "T4Detection3DTask"
+
+    def get_data_sample(self, idx: int) -> ModelGTSample:
+        """
+        Process the dataset records dataframe for 3D detection in the T4 dataset.
+
+        Args:
+          dataset_records_dataframe: Polars DataFrame of dataset records to be processed.
+          idx: Index of the specific record to be processed.
+
+        Returns:
+          MultiTaskDataRow: Processed multi-task data row for 3D detection in the T4 dataset.
+        """
+        if self.dataset_records_dataframe is None:
+            raise ValueError("Dataset records dataframe is not available.")
+
+        # Retrieve the specific row from the dataset records dataframe based on the given index
+        selected_row = self.dataset_records_dataframe.item(
+            idx, DatasetTableSchema.BOXES_3D.name
+        ).struct
+        # Every ``to_numpy`` below passes ``writable=True``. Without it polars returns a zero-copy,
+        # read-only view over the Arrow buffers the dataframe itself owns, and:
+        #   - ``LidarBBoxes3D.from_numpy`` wraps these arrays with ``torch.from_numpy``, which
+        #     aliases rather than copies, so the tensors would point straight at dataframe memory.
+        #     Torch has no read-only tensor, so it drops the flag and warns; any in-place write by
+        #     the transform pipeline would then corrupt the records for every later epoch.
+        #   - Under forked dataloader workers that write also faults the shared page, silently
+        #     desyncing one worker's boxes from the dataset.
+        # The ``astype(copy=False)`` calls cannot save us here: the schema dtypes already match
+        # (see Box3DDatasetSchema), so they are no-ops that preserve the read-only view. The forced
+        # copy costs one memcpy of a single sample's boxes, freed once collation pads the batch.
+        gt_bboxes_3d = (
+            selected_row.field(Box3DDatasetSchema.BOX3D_PARAMS.name)
+            .to_numpy(writable=True)
+            .astype(np.float32, copy=False)
+        )
+        gt_bboxes_labels = (
+            selected_row.field(Box3DDatasetSchema.BOX3D_LABEL_INDEX.name)
+            .to_numpy(writable=True)
+            .astype(np.int32, copy=False)
+        )
+        gt_bboxes_label_names = selected_row.field(
+            Box3DDatasetSchema.BOX3D_LABEL_NAME.name
+        ).to_list()
+        gt_bboxes_num_lidar_points = (
+            selected_row.field(Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTS.name)
+            .to_numpy(writable=True)
+            .astype(np.int32, copy=False)
+        )
+        gt_bboxes_attributes = selected_row.field(
+            Box3DDatasetSchema.BOX3D_ATTRIBUTES.name
+        ).to_list()
+
+        if not len(gt_bboxes_3d):
+            gt_bboxes_3d = np.zeros(
+                (0, len(Box3DFieldIndex)), dtype=np.float32
+            )  # Zero shape of (0, 10) for empty bboxes
+            gt_bboxes_labels = np.zeros((0,), dtype=np.int32)
+            gt_bboxes_label_names = []
+            gt_bboxes_num_lidar_points = np.zeros((0,), dtype=np.int32)
+            gt_bboxes_attributes = []
+
+        detection3d_bboxes_3d = LidarBBoxes3D.from_numpy(
+            bbox_params=gt_bboxes_3d,
+            bbox_labels=gt_bboxes_labels,
+            bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
+            bbox_label_names=gt_bboxes_label_names,
+            bbox_num_lidar_points=gt_bboxes_num_lidar_points,
+            bbox_attributes=gt_bboxes_attributes,
+        )
+
+        return ModelGTSample(
+            lidar_point_cloud_samples=None,
+            point_cloud_data=None,
+            detection3d_gt_bboxes_3d=detection3d_bboxes_3d,
+            segmentation3d_gt_sample=None,
+            image_samples=None,
+            camera_image_data=None,
+        )
+
+    def log_dataset_info(self) -> None:
+        """
+        Log and print dataset information for the specific task.
+        """
+        if self.dataset_records_dataframe is None:
+            logger.warning("Dataset records dataframe is not available.")
+            return
+
+        # Log the number of bboxes per class, before and after filtering by num_lidar_points
+        class_counts = (
+            self.dataset_records_dataframe.select(DatasetTableSchema.BOXES_3D.name)
+            .explode(DatasetTableSchema.BOXES_3D.name)
+            .unnest(DatasetTableSchema.BOXES_3D.name)
+            .group_by(Box3DDatasetSchema.BOX3D_LABEL_NAME.name)
+            .agg(
+                [
+                    pl.len().alias("count"),
+                    (pl.col(Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTS.name) > 0)
+                    .sum()
+                    .alias("valid_count"),
+                ]
+            )
+            .sort("count", descending=True)
+        )
+        class_names = class_counts[Box3DDatasetSchema.BOX3D_LABEL_NAME.name].to_list()
+        total_counts = dict(zip(class_names, class_counts["count"].to_list()))
+        valid_counts = dict(zip(class_names, class_counts["valid_count"].to_list()))
+
+        logger.info(f"Number of bboxes per class in the dataset: {total_counts}")
+        logger.info(
+            f"Number of bboxes after filtering num_lidar_points > 0 per class: {valid_counts}"
         )

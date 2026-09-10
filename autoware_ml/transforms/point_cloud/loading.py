@@ -14,7 +14,7 @@
 
 
 """
-Point-cloud loading transforms to support MultiTaskGTSample.
+Point-cloud loading transforms to support ModelGTSample.
 The code is modified from mmdetection3d.
 """
 
@@ -28,10 +28,8 @@ import torch
 from autoware_ml.geometry.points.base_points import BasePoints
 from autoware_ml.geometry.points.lidar_points import LiDARPoints
 from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import (
-    MultiTaskGTSample,
-    LiDARPointCloudSample,
-)
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+from autoware_ml.dataclasses.geometry.point_clouds import LiDARPointCloudSample
 from autoware_ml.types.geometry import PointFeatureName, PointFieldIndex
 
 
@@ -118,18 +116,18 @@ class LoadPointsFromFile(MultiTaskBaseTransform):
             timestamp=timestamp,
         )
 
-    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Load point data from the current sample at the current sweep.
 
         Args:
-            multi_task_gt_sample: MultiTaskGTSample instance containing `lidar_point_cloud_samples`.
+            multi_task_gt_sample: ModelGTSample instance containing `lidar_point_cloud_samples`.
 
         Returns:
-            Updated MultiTaskGTSample instance with a loaded `point_cloud_data` array.
+            Updated ModelGTSample instance with a loaded `point_cloud_data` array.
         """
         # Load the first index of the point cloud file, and reshape it to (N, load_dim)
         if not multi_task_gt_sample.lidar_point_cloud_samples:
-            raise ValueError("No lidar point cloud samples found in the MultiTaskGTSample.")
+            raise ValueError("No lidar point cloud samples found in the ModelGTSample.")
 
         # Always select 0 for the point cloud at the current frame.
         lidar_points = self.load_points_from_samples(
@@ -175,20 +173,20 @@ class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
         self.bev_remove_radius = bev_remove_radius
         self.use_timestamp_difference = use_timestamp_difference
 
-    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Load multi-sweep point data from the current sample.
 
         Args:
-            multi_task_gt_sample: MultiTaskGTSample instance containing `lidar_point_cloud_samples`.
+            multi_task_gt_sample: ModelGTSample instance containing `lidar_point_cloud_samples`.
 
         Returns:
-            Updated MultiTaskGTSample instance with a loaded `point_cloud_data` array.
+            Updated ModelGTSample instance with a loaded `point_cloud_data` array.
         """
         if not multi_task_gt_sample.lidar_point_cloud_samples:
-            raise ValueError("No lidar point cloud samples found in the MultiTaskGTSample.")
+            raise ValueError("No lidar point cloud samples found in the ModelGTSample.")
 
         if multi_task_gt_sample.point_cloud_data is None:
-            raise ValueError("Point cloud data is not available in the MultiTaskGTSample.")
+            raise ValueError("Point cloud data is not available in the ModelGTSample.")
 
         current_frame_point_cloud_data = multi_task_gt_sample.point_cloud_data
         available_sweeps_nums = min(

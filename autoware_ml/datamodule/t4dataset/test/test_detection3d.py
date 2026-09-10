@@ -22,8 +22,8 @@ import polars as pl
 
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDatasetSchema
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
-from autoware_ml.datamodule.multi_task.t4dataset.detection3d import T4Detection3DTask
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+from autoware_ml.datamodule.t4dataset.detection3d import T4Detection3DTask
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.types.geometry import Box3DFieldIndex
 
@@ -31,7 +31,7 @@ from autoware_ml.types.geometry import Box3DFieldIndex
 DATABASE_ROOT_PATH = "/nonexistent/database/root"
 
 # Logger of the module under test, used to capture what log_dataset_info reports.
-DETECTION3D_LOGGER_NAME = "autoware_ml.datamodule.multi_task.t4dataset.detection3d"
+DETECTION3D_LOGGER_NAME = "autoware_ml.datamodule.t4dataset.detection3d"
 
 
 class BaseT4Detection3DTaskTestCase(unittest.TestCase):
@@ -110,7 +110,7 @@ class BaseT4Detection3DTaskTestCase(unittest.TestCase):
             dataset_records_dataframe=self.build_dataset_records_dataframe(samples),
         )
 
-    def assert_bboxes_3d(self, multi_task_gt_sample: MultiTaskGTSample) -> BaseBBoxes3D:
+    def assert_bboxes_3d(self, multi_task_gt_sample: ModelGTSample) -> BaseBBoxes3D:
         """Assert the sample carries 3D bounding boxes, and return them.
 
         ``detection3d_gt_bboxes_3d`` is optional on the sample, so every dereference below goes

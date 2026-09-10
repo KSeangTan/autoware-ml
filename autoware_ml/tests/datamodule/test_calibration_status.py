@@ -19,7 +19,6 @@ from __future__ import annotations
 import pickle
 
 from autoware_ml.datamodule.nuscenes.calibration_status import NuscenesCalibrationStatusDataset
-from autoware_ml.datamodule.t4dataset.calibration_status import T4CalibrationStatusDataset
 from autoware_ml.utils.calibration import CalibrationData, CalibrationStatus
 
 
@@ -86,38 +85,3 @@ class TestNuscenesCalibrationStatusDataset:
 
         second = dataset.get_data_info(1)
         assert second["img_path"] == str(tmp_path / "samples/CAM_BACK/image.jpg")
-
-
-class TestT4CalibrationStatusDataset:
-    def test_get_data_info_returns_calibration_data_only(self, tmp_path) -> None:
-        ann_file = tmp_path / "infos.pkl"
-        sample = {
-            "image": {
-                "img_path": "image.jpg",
-                "cam2img": [[900.0, 0.0, 300.0], [0.0, 900.0, 200.0], [0.0, 0.0, 1.0]],
-                "lidar2cam": [
-                    [1.0, 0.0, 0.0, 1.0],
-                    [0.0, 1.0, 0.0, 2.0],
-                    [0.0, 0.0, 1.0, 3.0],
-                    [0.0, 0.0, 0.0, 1.0],
-                ],
-                "distortion_coeffs": [0.0, 0.0, 0.0, 0.0, 0.0],
-            },
-            "lidar_points": {"lidar_path": "points.bin"},
-        }
-        with open(ann_file, "wb") as file:
-            pickle.dump({"data_list": [sample]}, file)
-
-        dataset = T4CalibrationStatusDataset(data_root=str(tmp_path), ann_file=str(ann_file))
-
-        output = dataset.get_data_info(0)
-
-        assert output["img_path"] == str(tmp_path / "image.jpg")
-        assert output["lidar_path"] == str(tmp_path / "points.bin")
-        assert output["num_pts_feats"] == 5
-        assert output["gt_calibration_status"] == CalibrationStatus.CALIBRATED.value
-        assert output["metadata"] == sample
-        assert "camera_matrix" not in output
-        assert "distortion_coeffs" not in output
-        assert "lidar_to_camera_transformation" not in output
-        assert isinstance(output["calibration_data"], CalibrationData)

@@ -16,7 +16,7 @@ datamodule:
     gt_labels: list
     gt_num_points: list
 model:
-  _target_: autoware_ml.models.detection3d.transfusions.TransFusionDetectionModel
+  _target_: autoware_ml.models.detection3d.main_modules.transfusion.TransFusionDetectionModel
   metrics: ${dataset.detection3d.metrics}
   pts_voxel_encoder:
     _target_: autoware_ml.models.detection3d.encoders.voxel.HardSimpleVoxelSinCosEncoder

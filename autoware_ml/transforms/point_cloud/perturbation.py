@@ -22,9 +22,7 @@ from typing import Any
 import numpy as np
 
 from autoware_ml.transforms.base import BaseTransform
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import (
-    MultiTaskGTSample,
-)
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.points.base_points import BasePoints
 from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
 
@@ -156,7 +154,7 @@ class PointsRandomShuffle(MultiTaskBaseTransform):
         """Initialize the PointsRandomShuffle transform."""
         super().__init__(probability=None)
 
-    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Randomly shuffle points in the point cloud."""
         # This is checked in the _validate_required_keys()
         point_cloud_data: BasePoints = multi_task_gt_sample.point_cloud_data  # type: ignore[reportOptionalMemberAccess]

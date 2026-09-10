@@ -30,14 +30,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from autoware_ml.dataclasses.detection3d.predictions import Detection3DSamplePredictions
-from autoware_ml.dataclasses.detection3d.head_targets import TransFusionHeadTargets
-from autoware_ml.dataclasses.detection3d.head_outputs import (
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
+from autoware_ml.dataclasses.models.detection3d.head_targets import TransFusionHeadTargets
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     Detection3DHeadOutputs,
     TransFusionHeadOutputs,
     TransFusionSeparateHeadOutputs,
 )
-from autoware_ml.dataclasses.multi_task_predictions import MultiTaskPredictions
+from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.losses.detection3d.focal import SigmoidFocalLoss
 from autoware_ml.losses.detection3d.gaussian_focal import GaussianFocalLoss
 from autoware_ml.models.common.layers.conv import ConvModule
@@ -810,7 +810,7 @@ class TransFusionHead(nn.Module):
         scores: Float32[torch.Tensor, "batch_size num_proposals"],
         class_ids: Int64[torch.Tensor, "batch_size num_proposals"],
         keep_masks: Bool[torch.Tensor, "batch_size num_proposals"],
-    ) -> MultiTaskPredictions:
+    ) -> ModelPredictions:
         """
         Apply the keep mask and repackage the batched proposals as per-sample predictions.
 
@@ -831,7 +831,7 @@ class TransFusionHead(nn.Module):
                 marks a proposal to emit as a detection.
 
         Returns:
-            One Detection3DSamplePredictions per batch element, wrapped in MultiTaskPredictions.
+            One Detection3DSamplePredictions per batch element, wrapped in ModelPredictions.
         """
         batch_size = bbox_predictions.shape[0]
         # Iterate over the batch and create a list of Detection3dPredictions for each sample.
@@ -848,9 +848,9 @@ class TransFusionHead(nn.Module):
                 )
             )
 
-        return MultiTaskPredictions(detection3d_predictions=detection3d_predictions)
+        return ModelPredictions(detection3d_predictions=detection3d_predictions)
 
-    def decode_outputs(self, outputs: Detection3DHeadOutputs) -> MultiTaskPredictions:
+    def decode_outputs(self, outputs: Detection3DHeadOutputs) -> ModelPredictions:
         """Decode predictions into metric-space boxes.
 
         Args:

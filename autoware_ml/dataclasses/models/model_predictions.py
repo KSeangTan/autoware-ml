@@ -8,10 +8,10 @@ from jaxtyping import Float32
 from pydantic import BaseModel, ConfigDict
 import torch
 
-from autoware_ml.dataclasses.detection3d.predictions import Detection3DSamplePredictions
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 
 
-class MultiTaskPredictions(BaseModel):
+class ModelPredictions(BaseModel):
     """
     Dataclass to save decoded predictions from multi-task models.
 
@@ -36,7 +36,7 @@ class MultiTaskPredictions(BaseModel):
         ]
     ]:
         """
-        Convert the MultiTaskPredictions to a list of dictionaries.
+        Convert the ModelPredictions to a list of dictionaries.
         Note that this method is primarily for compatibility with the existing detection metric,
         which expects a list of dictionaries.
         Returns:

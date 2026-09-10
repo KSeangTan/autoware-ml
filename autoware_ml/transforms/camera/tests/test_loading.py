@@ -21,10 +21,8 @@ import unittest
 import torch
 from torchvision.io import write_png
 
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import (
-    ImageSample,
-    MultiTaskGTSample,
-)
+from autoware_ml.dataclasses.geometry.images import ImageSample
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.camera.loading import (
     LoadImageFromFile,
@@ -80,16 +78,16 @@ class BaseCameraLoadingTestCase(unittest.TestCase):
             distortion_coefficients=torch.zeros(5, dtype=torch.float32),
         )
 
-    def build_multi_task_gt_sample(self, image_samples: list[ImageSample]) -> MultiTaskGTSample:
+    def build_multi_task_gt_sample(self, image_samples: list[ImageSample]) -> ModelGTSample:
         """Build a sample holding only the given image metadata.
 
         Args:
             image_samples: Image metadata the loading transforms read.
 
         Returns:
-            MultiTaskGTSample with no camera image data loaded yet.
+            ModelGTSample with no camera image data loaded yet.
         """
-        return MultiTaskGTSample(
+        return ModelGTSample(
             lidar_point_cloud_samples=None,
             image_samples=image_samples,
             point_cloud_data=None,

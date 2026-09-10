@@ -83,6 +83,8 @@ class ScenarioData(BaseModel):
       sample_steps: Number of steps to sample.
       vehicle_type: Type of the vehicle.
       location: Location of the scenario.
+      traffic_cone_barrier_status: Temporarly boolean value to mention if traffic_cone/barriers
+          are annotated in a scenario.
     """
 
     # Set model config to frozen and strict
@@ -94,6 +96,8 @@ class ScenarioData(BaseModel):
     sample_steps: int
     vehicle_type: str | None = None
     location: str | None = None
+    # This is a temporary fix for T4Dataset
+    traffic_cone_barrier_status: bool | None = None
 
     def __str__(self) -> str:
         """
@@ -127,6 +131,7 @@ class ScenarioData(BaseModel):
             and self.sample_steps == other.sample_steps
             and self.vehicle_type == other.vehicle_type
             and self.location == other.location
+            and self.traffic_cone_barrier_status == other.traffic_cone_barrier_status
         )
 
     def __hash__(self) -> int:

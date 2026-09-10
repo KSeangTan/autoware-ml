@@ -91,3 +91,24 @@ class ImageGTBatch(NamedTuple):
             lidar2cams=self.lidar2cams.to(device),
             lidar2images=self.lidar2images.to(device),
         )
+
+
+class ImageSample(NamedTuple):
+    """
+    Named tuple to represent a single row of image data, which contains the dataset record for the
+    image task.
+    """
+
+    image_path: str
+    camera_name: str
+    timestamp: float
+    # Transformation matrix for camera_intrinsics
+    camera_intrinsic: Float32[Tensor, "3 3"]
+    # Transformation matrix for lidar to camera
+    lidar2cam: Float32[Tensor, "4 4"]
+    # Transformation matrix for lidar to image
+    lidar2image: Float32[Tensor, "4 4"]
+    distortion_model: str
+    # Distortion coefficients following the OpenCV convention ``(k1, k2, p1, p2[, k3[, ...]])``.
+    # The length varies by distortion model (4, 5, 8, 12 or 14), empty for undistorted images.
+    distortion_coefficients: Float32[Tensor, " num_coefficients"]

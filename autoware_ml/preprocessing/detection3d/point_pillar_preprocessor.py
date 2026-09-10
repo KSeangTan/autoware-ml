@@ -21,7 +21,7 @@ from typing import Sequence
 import torch
 
 
-from autoware_ml.dataclasses.multi_task_batch_inputs import MultiTaskBatchInputs
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.preprocessing.data_preprocessor_modules import DataPreprocessorModule
 from autoware_ml.ops.voxelization.voxelization import hard_voxelize, VoxelsData
 
@@ -71,25 +71,25 @@ class PointPillarPreprocessor(DataPreprocessorModule):
 
     def __call__(
         self,
-        multi_task_batch_inputs: MultiTaskBatchInputs,
+        multi_task_batch_inputs: ModelBatchInputs,
         is_training: bool,
-    ) -> MultiTaskBatchInputs:
+    ) -> ModelBatchInputs:
         """
         Process batch data and convert to multi_task_input_features for downstream tasks.
 
         Args:
-            multi_task_batch_inputs (MultiTaskBatchInputs): Batch data containing ground truths and
+            multi_task_batch_inputs (ModelBatchInputs): Batch data containing ground truths and
             input features.
             is_training (bool): Flag indicating whether the model is in training mode.
 
         Returns:
-            MultiTaskBatchInputs: The processed input features for downstream tasks
+            ModelBatchInputs: The processed input features for downstream tasks
             generating voxelization with VoxelData.
         """
 
         multi_task_gt_batch = multi_task_batch_inputs.multi_task_gt_batch
         if multi_task_gt_batch.point_cloud_gt_batch is None:
-            raise ValueError("MultiTaskGTBatch must contain point cloud data for voxelization.")
+            raise ValueError("ModelGTBatch must contain point cloud data for voxelization.")
 
         points = multi_task_gt_batch.point_cloud_gt_batch.points
         if not len(points):

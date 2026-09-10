@@ -27,9 +27,9 @@ from onnx import TensorProto
 import onnx
 import torch
 
-from autoware_ml.dataclasses.detection3d.head_targets import TransFusionHeadTargets
-from autoware_ml.dataclasses.detection3d.predictions import Detection3DSamplePredictions
-from autoware_ml.dataclasses.detection3d.head_outputs import (
+from autoware_ml.dataclasses.models.detection3d.head_targets import TransFusionHeadTargets
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     Detection3DHeadOutputs,
     TransFusionHeadOutputs,
 )

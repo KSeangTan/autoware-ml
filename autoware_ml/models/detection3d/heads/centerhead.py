@@ -15,13 +15,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from autoware_ml.dataclasses.detection3d.predictions import Detection3DSamplePredictions
-from autoware_ml.dataclasses.detection3d.head_outputs import (
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     Detection3DHeadOutputs,
     CenterHeadOutputs,
 )
-from autoware_ml.dataclasses.detection3d.head_targets import CenterHeadTargets
-from autoware_ml.dataclasses.multi_task_predictions import MultiTaskPredictions
+from autoware_ml.dataclasses.models.detection3d.head_targets import CenterHeadTargets
+from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.losses.detection3d.gaussian_focal import GaussianFocalLoss
 from autoware_ml.models.common.layers.conv import ConvModule
 from autoware_ml.models.detection3d.task_modules.heatmap import (
@@ -439,9 +439,9 @@ class CenterHead(nn.Module):
         keep_masks: Bool[torch.Tensor, "batch_size num_classes max_num_bboxes"],
         max_num_bboxes: int,
         batch_size: int,
-    ) -> MultiTaskPredictions:
+    ) -> ModelPredictions:
         """
-        Filter the predictions based on the keep_masks and return a MultiTaskPredictions object.
+        Filter the predictions based on the keep_masks and return a ModelPredictions object.
         """
         # (batch_size, num_classes, max_num_bboxes) -> (batch_size, num_classes*max_num_bboxes)
         flatten_keep_masks = keep_masks.reshape(batch_size, -1)
@@ -487,7 +487,7 @@ class CenterHead(nn.Module):
                 )
             )
 
-        return MultiTaskPredictions(detection3d_predictions=detection3d_predictions)
+        return ModelPredictions(detection3d_predictions=detection3d_predictions)
 
     def _decode_heatmap_outputs(
         self, center_head_outputs: CenterHeadOutputs
@@ -506,7 +506,7 @@ class CenterHead(nn.Module):
         heatmaps = heatmaps * (pooled == heatmaps)
         return heatmaps
 
-    def decode_outputs(self, outputs: Detection3DHeadOutputs) -> MultiTaskPredictions:
+    def decode_outputs(self, outputs: Detection3DHeadOutputs) -> ModelPredictions:
         """
         Decode dense head outputs into 3D boxes, scores, and labels.
         """
@@ -564,7 +564,7 @@ class CenterHead(nn.Module):
             post_max_sizes=[self.post_max_size] * num_classes,
             min_radii=[self.nms_min_radius] * num_classes,
         )
-        # Filter the predictions based on the keep_masks and return MultiTaskPredictions
+        # Filter the predictions based on the keep_masks and return ModelPredictions
         multi_task_predictions = self._filter_bbox_predictions(
             flatten_bboxes_predictions=flatten_bboxes_predictions,
             scores=top_scores,

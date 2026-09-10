@@ -14,7 +14,7 @@
 
 from abc import ABC, abstractmethod
 
-from autoware_ml.dataclasses.multi_task_batch_inputs import MultiTaskBatchInputs
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 
 
 class DataPreprocessorModule(ABC):
@@ -23,17 +23,17 @@ class DataPreprocessorModule(ABC):
     @abstractmethod
     def __call__(
         self,
-        multi_task_batch_inputs: MultiTaskBatchInputs,
+        multi_task_batch_inputs: ModelBatchInputs,
         is_training: bool,
-    ) -> MultiTaskBatchInputs:
+    ) -> ModelBatchInputs:
         """
         Process batch data and convert to multi_task_batch_inputs for downstream tasks.
 
         Args:
-            multi_task_batch_inputs (MultiTaskBatchInputs): The input features after processing.
+            multi_task_batch_inputs (ModelBatchInputs): The input features after processing.
             is_training (bool): Flag indicating whether the model is in training mode.
 
         Returns:
-            MultiTaskBatchInputs: The processed input features ready for downstream tasks.
+            ModelBatchInputs: The processed input features ready for downstream tasks.
         """
         raise NotImplementedError

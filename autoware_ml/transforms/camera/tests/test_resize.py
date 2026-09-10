@@ -21,7 +21,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.camera.resize import (
     CropAndScale,
@@ -54,11 +54,11 @@ class CameraImageDataTestCase(unittest.TestCase):
             dtype=torch.float32,
         )
 
-    def build_multi_task_gt_sample(self) -> MultiTaskGTSample:
+    def build_multi_task_gt_sample(self) -> ModelGTSample:
         """Build a minimal sample holding only camera image data.
 
         Returns:
-            MultiTaskGTSample holding random images and the test camera calibration.
+            ModelGTSample holding random images and the test camera calibration.
         """
         homogeneous_intrinsic = torch.eye(4, dtype=torch.float32)
         homogeneous_intrinsic[:3, :3] = self.camera_intrinsic
@@ -79,7 +79,7 @@ class CameraImageDataTestCase(unittest.TestCase):
                 self.num_cameras, 1, 1
             ),
         )
-        return MultiTaskGTSample(
+        return ModelGTSample(
             lidar_point_cloud_samples=None,
             image_samples=None,
             point_cloud_data=None,

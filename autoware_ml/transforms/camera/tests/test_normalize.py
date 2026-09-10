@@ -21,7 +21,7 @@ from pydantic import ValidationError
 import torch
 from torch import Tensor
 
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.camera.normalize import NormalizeMultiviewImage
 
@@ -32,14 +32,14 @@ class TestNormalizeMultiviewImage(unittest.TestCase):
     def build_multi_task_gt_sample(
         self,
         images: Float32[Tensor, "num_cameras num_channels height width"],
-    ) -> MultiTaskGTSample:
+    ) -> ModelGTSample:
         """Build a minimal sample holding only camera image data.
 
         Args:
             images: Images the sample holds.
 
         Returns:
-            MultiTaskGTSample holding the given images and identity camera matrices.
+            ModelGTSample holding the given images and identity camera matrices.
         """
         num_cameras = images.shape[0]
         camera_image_data = BaseImages(
@@ -54,7 +54,7 @@ class TestNormalizeMultiviewImage(unittest.TestCase):
             augmented_camera_intrinsics=torch.eye(3).repeat(num_cameras, 1, 1),
             image_augmentation_matrices=torch.eye(4).repeat(num_cameras, 1, 1),
         )
-        return MultiTaskGTSample(
+        return ModelGTSample(
             lidar_point_cloud_samples=None,
             image_samples=None,
             point_cloud_data=None,

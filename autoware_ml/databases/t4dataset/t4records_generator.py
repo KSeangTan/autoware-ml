@@ -189,6 +189,7 @@ class T4RecordsGenerator:
             vehicle_type=self.scenario_data.vehicle_type,
             timestamp_seconds=microseconds2seconds(sample.timestamp),
             scenario_name=scene_record.name,
+            traffic_cone_barrier_status=self.scenario_data.traffic_cone_barrier_status,
         )
 
     def _extract_boxes_3d_annotations(

@@ -3,10 +3,10 @@ Modules to save raw outputs from multi-task models.
 """
 
 from pydantic import BaseModel, ConfigDict
-from autoware_ml.dataclasses.detection3d.head_outputs import Detection3DHeadOutputs
+from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
 
 
-class MultiTaskOutputs(BaseModel):
+class ModelOutputs(BaseModel):
     """
     Dataclass to save raw outputs from multi-task models.
 

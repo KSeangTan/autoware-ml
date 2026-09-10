@@ -23,7 +23,7 @@ from jaxtyping import Float32
 import torch
 import torch.nn as nn
 
-from autoware_ml.dataclasses.detection3d.head_outputs import (
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     TransFusionHeadOutputs,
     TransFusionSeparateHeadOutputs,
 )

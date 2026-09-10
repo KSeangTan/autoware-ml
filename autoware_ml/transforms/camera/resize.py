@@ -36,7 +36,7 @@ import torch
 from torch import Tensor
 from torchvision.transforms import v2
 
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
 
@@ -199,14 +199,14 @@ class CropAndScale(ImageSpaceTransform):
         super().__init__(probability=probability)
         self.crop_ratio = crop_ratio
 
-    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Crop and scale every camera image and update its augmented intrinsics.
 
         Args:
-            multi_task_gt_sample: MultiTaskGTSample instance containing `camera_image_data`.
+            multi_task_gt_sample: ModelGTSample instance containing `camera_image_data`.
 
         Returns:
-            Updated MultiTaskGTSample instance with a cropped and scaled `camera_image_data`.
+            Updated ModelGTSample instance with a cropped and scaled `camera_image_data`.
         """
         assert multi_task_gt_sample.camera_image_data is not None
         camera_image_data = multi_task_gt_sample.camera_image_data
@@ -293,14 +293,14 @@ class ResizeMultiviewImages(ImageSpaceTransform):
         super().__init__(probability=None)
         self.target_size = tuple(target_size)
 
-    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Resize every camera image and scale its augmented intrinsics accordingly.
 
         Args:
-            multi_task_gt_sample: MultiTaskGTSample instance containing `camera_image_data`.
+            multi_task_gt_sample: ModelGTSample instance containing `camera_image_data`.
 
         Returns:
-            Updated MultiTaskGTSample instance with a resized `camera_image_data`.
+            Updated ModelGTSample instance with a resized `camera_image_data`.
         """
         assert multi_task_gt_sample.camera_image_data is not None
         camera_image_data = multi_task_gt_sample.camera_image_data
@@ -357,14 +357,14 @@ class PadMultiViewImage(ImageSpaceTransform):
         self.size_divisor = size_divisor
         self.pad_value = pad_value
 
-    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Pad every camera image to the configured size.
 
         Args:
-            multi_task_gt_sample: MultiTaskGTSample instance containing `camera_image_data`.
+            multi_task_gt_sample: ModelGTSample instance containing `camera_image_data`.
 
         Returns:
-            Updated MultiTaskGTSample instance with a padded `camera_image_data`.
+            Updated ModelGTSample instance with a padded `camera_image_data`.
 
         Raises:
             ValueError: If the images are larger than the size they are padded to.
@@ -455,14 +455,14 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
         self.random_horizontal_flip = random_horizontal_flip
         self.rotation_range = tuple(rotation_range) if rotation_range is not None else (0.0, 0.0)
 
-    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Augment every camera image and update its augmented intrinsics.
 
         Args:
-            multi_task_gt_sample: MultiTaskGTSample instance containing `camera_image_data`.
+            multi_task_gt_sample: ModelGTSample instance containing `camera_image_data`.
 
         Returns:
-            Updated MultiTaskGTSample instance with an augmented `camera_image_data`.
+            Updated ModelGTSample instance with an augmented `camera_image_data`.
         """
         assert multi_task_gt_sample.camera_image_data is not None
         camera_image_data = multi_task_gt_sample.camera_image_data

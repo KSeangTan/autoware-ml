@@ -20,7 +20,7 @@ from jaxtyping import Float32
 import torch
 from torch import Tensor
 
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.geometry.points.lidar_points import LiDARPoints
 from autoware_ml.transforms.camera_lidar.depth import LiDARDepthSparseTransform
@@ -74,7 +74,7 @@ class TestLiDARDepthSparseTransform(unittest.TestCase):
         self,
         points_xyz: Float32[Tensor, "num_points 3"],
         camera_translations: Float32[Tensor, "num_cameras 3"] | None = None,
-    ) -> MultiTaskGTSample:
+    ) -> ModelGTSample:
         """Build a sample with the given points and cameras.
 
         Args:
@@ -83,7 +83,7 @@ class TestLiDARDepthSparseTransform(unittest.TestCase):
                 by default.
 
         Returns:
-            MultiTaskGTSample holding the points and cameras with consistent projections.
+            ModelGTSample holding the points and cameras with consistent projections.
         """
         if camera_translations is None:
             camera_translations = torch.zeros((1, 3), dtype=torch.float32)
@@ -117,7 +117,7 @@ class TestLiDARDepthSparseTransform(unittest.TestCase):
             ],
             timestamp=0.0,
         )
-        return MultiTaskGTSample(
+        return ModelGTSample(
             lidar_point_cloud_samples=None,
             image_samples=None,
             point_cloud_data=point_cloud_data,

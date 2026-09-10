@@ -1,12 +1,12 @@
 import logging
 
+from dataclasses import dataclass
 import lightning as L
 from torch.utils.data import DataLoader
 
 from autoware_ml.databases.database_interface import DatabaseInterface
-from autoware_ml.datamodule.base import DataLoaderConfig
-from autoware_ml.datamodule.multi_task.multi_task_base_dataset import (
-    MultiTaskBaseDataset,
+from autoware_ml.datamodule.base_dataset import (
+    BaseDataset,
 )
 from autoware_ml.datamodule.splitters.splitter_interface import SplitterInterface
 from autoware_ml.types.dataset import SplitType
@@ -14,17 +14,53 @@ from autoware_ml.types.dataset import SplitType
 logger = logging.getLogger(__name__)
 
 
-class MultiTaskDataModule(L.LightningDataModule):
+@dataclass
+class DataLoaderConfig:
+    """Store configuration values for one dataloader.
+
+    Attributes:
+        batch_size: Number of samples per batch.
+        num_workers: Number of worker processes used by the dataloader.
+        pin_memory: Whether to pin host memory before device transfer.
+        persistent_workers: Whether worker processes stay alive across epochs.
+        shuffle: Whether the dataloader shuffles samples.
+        drop_last: Whether to drop the final incomplete batch.
+    """
+
+    batch_size: int = 1
+    num_workers: int = 1
+    pin_memory: bool = False
+    persistent_workers: bool = False
+    shuffle: bool = False
+    drop_last: bool = False
+
+    def to_dataloader_kwargs(self) -> dict[str, int | bool]:
+        """Convert to keyword arguments accepted by ``DataLoader``.
+
+        Returns:
+            Dictionary of DataLoader constructor keyword arguments.
+        """
+        return {
+            "batch_size": self.batch_size,
+            "shuffle": self.shuffle,
+            "num_workers": self.num_workers,
+            "pin_memory": self.pin_memory,
+            "persistent_workers": self.persistent_workers and self.num_workers > 0,
+            "drop_last": self.drop_last,
+        }
+
+
+class BaseDataModule(L.LightningDataModule):
     """Base LightningDataModule for multi-task learning that can be shared by multiple datasets."""
 
     def __init__(
         self,
         database: DatabaseInterface,
         splitter: SplitterInterface,
-        train_dataset: MultiTaskBaseDataset | None,
-        validation_dataset: MultiTaskBaseDataset | None,
-        test_dataset: MultiTaskBaseDataset | None,
-        predict_dataset: MultiTaskBaseDataset | None,
+        train_dataset: BaseDataset | None,
+        validation_dataset: BaseDataset | None,
+        test_dataset: BaseDataset | None,
+        predict_dataset: BaseDataset | None,
         train_dataloader: DataLoaderConfig | None,
         validation_dataloader: DataLoaderConfig | None,
         test_dataloader: DataLoaderConfig | None,

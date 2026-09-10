@@ -28,11 +28,11 @@ from jaxtyping import Float32, Int32
 import torch
 import torch.nn as nn
 
-from autoware_ml.dataclasses.multi_task_batch_inputs import MultiTaskBatchInputs
-from autoware_ml.dataclasses.multi_task_outputs import MultiTaskOutputs
-from autoware_ml.datamodule.multi_task.dataclasses.detection3d import Detection3DGTBatch
-from autoware_ml.datamodule.multi_task.dataclasses.images import ImageGTBatch
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTBatch
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
+from autoware_ml.dataclasses.geometry.images import ImageGTBatch
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
 from autoware_ml.models.detection3d.heads.transfusions.exportable_multi_head_attention import (
     ExportableMultiheadAttention,
@@ -385,10 +385,10 @@ class _BEVFusionDetectionModelTestCase(unittest.TestCase):
         self,
         voxels_data: VoxelsData | None,
         image_data: ImageGTBatch | None = None,
-    ) -> MultiTaskBatchInputs:
+    ) -> ModelBatchInputs:
         """Build batch inputs with detection ground truth and the given modality inputs."""
-        return MultiTaskBatchInputs(
-            multi_task_gt_batch=MultiTaskGTBatch(
+        return ModelBatchInputs(
+            multi_task_gt_batch=ModelGTBatch(
                 point_cloud_gt_batch=None,
                 detection3d_gt_batch=self._build_detection3d_gt_batch(),
                 image_gt_batch=image_data,
@@ -467,7 +467,7 @@ class TestBEVFusionDetectionModelLidarOnly(_BEVFusionDetectionModelTestCase):
 
     def test_metrics_decoding_and_eval_require_head_outputs(self) -> None:
         """Test that every consumer of the head outputs rejects outputs without a detection head."""
-        empty_outputs = MultiTaskOutputs(detection3d_head_outputs=None)
+        empty_outputs = ModelOutputs(detection3d_head_outputs=None)
 
         with self.assertRaises(ValueError):
             self.model.compute_metrics(self.batch_inputs, empty_outputs)

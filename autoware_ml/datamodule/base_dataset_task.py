@@ -3,7 +3,7 @@ from pathlib import Path
 
 import polars as pl
 
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 
 
 class BaseDatasetTask(ABC):
@@ -45,7 +45,7 @@ class BaseDatasetTask(ABC):
         """
         raise NotImplementedError("Dataset type must define __str__!")
 
-    def get_data_sample(self, idx: int) -> MultiTaskGTSample:
+    def get_data_sample(self, idx: int) -> ModelGTSample:
         """
         Process the dataset records dataframe for the specific task.
 
@@ -54,7 +54,7 @@ class BaseDatasetTask(ABC):
           idx: Index of the specific record to be processed.
 
         Returns:
-          MultiTaskGTSample: Multi-task data for training/inference with ground truths
+          ModelGTSample: Multi-task data for training/inference with ground truths
             from a sample.
         """
         raise NotImplementedError("Dataset type must define get_data_sample()!")

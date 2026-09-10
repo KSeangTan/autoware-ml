@@ -21,12 +21,10 @@ import unittest
 import torch
 
 from autoware_ml.preprocessing.detection3d.point_pillar_preprocessor import PointPillarPreprocessor
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import (
-    MultiTaskGTBatch,
-    PointCloudGTBatch,
-    Detection3DGTBatch,
-)
-from autoware_ml.dataclasses.multi_task_batch_inputs import MultiTaskBatchInputs
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
+from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
+from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 
 
 class TestPointPillarPreprocessor(unittest.TestCase):
@@ -46,7 +44,7 @@ class TestPointPillarPreprocessor(unittest.TestCase):
 
     def test_builds_padded_pillars(self) -> None:
         """Test that the __call__ builds padded pillars from a batch of point clouds."""
-        multi_task_gt_batch = MultiTaskGTBatch(
+        multi_task_gt_batch = ModelGTBatch(
             point_cloud_gt_batch=PointCloudGTBatch(
                 points=torch.tensor(
                     [
@@ -62,7 +60,7 @@ class TestPointPillarPreprocessor(unittest.TestCase):
             detection3d_gt_batch=None,
             image_gt_batch=None,
         )
-        multi_task_batch_inputs = MultiTaskBatchInputs(
+        multi_task_batch_inputs = ModelBatchInputs(
             multi_task_gt_batch=multi_task_gt_batch, voxels_data=None, image_data=None
         )
 
@@ -76,7 +74,7 @@ class TestPointPillarPreprocessor(unittest.TestCase):
     def test_builds_padded_pillars_z_order_first(self) -> None:
         """Test that the __call__ builds padded pillars from a batch of point clouds with z-order first."""
         self.point_pillar_preprocessor.voxelization_z_order_first = True
-        multi_task_gt_batch = MultiTaskGTBatch(
+        multi_task_gt_batch = ModelGTBatch(
             point_cloud_gt_batch=PointCloudGTBatch(
                 points=torch.tensor(
                     [
@@ -92,7 +90,7 @@ class TestPointPillarPreprocessor(unittest.TestCase):
             detection3d_gt_batch=None,
             image_gt_batch=None,
         )
-        multi_task_batch_inputs = MultiTaskBatchInputs(
+        multi_task_batch_inputs = ModelBatchInputs(
             multi_task_gt_batch=multi_task_gt_batch, voxels_data=None, image_data=None
         )
 
@@ -105,7 +103,7 @@ class TestPointPillarPreprocessor(unittest.TestCase):
 
     def test_per_sample_coords(self) -> None:
         """Test that the voxel coordinates are correctly computed for each sample in the batch."""
-        multi_task_gt_batch = MultiTaskGTBatch(
+        multi_task_gt_batch = ModelGTBatch(
             point_cloud_gt_batch=PointCloudGTBatch(
                 points=torch.tensor(
                     [
@@ -121,7 +119,7 @@ class TestPointPillarPreprocessor(unittest.TestCase):
             detection3d_gt_batch=None,
             image_gt_batch=None,
         )
-        multi_task_batch_inputs = MultiTaskBatchInputs(
+        multi_task_batch_inputs = ModelBatchInputs(
             multi_task_gt_batch=multi_task_gt_batch, voxels_data=None, image_data=None
         )
         outputs = self.point_pillar_preprocessor(multi_task_batch_inputs, is_training=True)
@@ -143,7 +141,7 @@ class TestPointPillarPreprocessor(unittest.TestCase):
 
     def test_per_sample_batch_indices(self) -> None:
         """Test that the batch indices are correctly computed for each sample in the batch."""
-        multi_task_gt_batch = MultiTaskGTBatch(
+        multi_task_gt_batch = ModelGTBatch(
             point_cloud_gt_batch=PointCloudGTBatch(
                 points=torch.tensor(
                     [
@@ -159,7 +157,7 @@ class TestPointPillarPreprocessor(unittest.TestCase):
             detection3d_gt_batch=None,
             image_gt_batch=None,
         )
-        multi_task_batch_inputs = MultiTaskBatchInputs(
+        multi_task_batch_inputs = ModelBatchInputs(
             multi_task_gt_batch=multi_task_gt_batch, voxels_data=None, image_data=None
         )
         outputs = self.point_pillar_preprocessor(multi_task_batch_inputs, is_training=True)
@@ -179,7 +177,7 @@ class TestPointPillarPreprocessor(unittest.TestCase):
         point = torch.tensor([[0.5, 0.5, 0.0, 1.0]], device=self.device, dtype=torch.float32)
         empty = torch.zeros((0, 4), device=self.device, dtype=torch.float32)
         points = torch.cat([point, empty, point], dim=0).to(self.device)
-        multi_task_gt_batch = MultiTaskGTBatch(
+        multi_task_gt_batch = ModelGTBatch(
             point_cloud_gt_batch=PointCloudGTBatch(
                 points=points,
                 batch_indices=torch.tensor([0, 0, 1], device=self.device, dtype=torch.int32),
@@ -187,11 +185,11 @@ class TestPointPillarPreprocessor(unittest.TestCase):
             detection3d_gt_batch=None,
             image_gt_batch=None,
         )
-        multi_task_batch_inputs = MultiTaskBatchInputs(
+        multi_task_batch_inputs = ModelBatchInputs(
             multi_task_gt_batch=multi_task_gt_batch, voxels_data=None, image_data=None
         )
         # Raise a ValueError because the length of points list does not match the length of
-        # batch indices in MultiTaskGTBatch.
+        # batch indices in ModelGTBatch.
         with self.assertRaises(ValueError):
             self.point_pillar_preprocessor(multi_task_batch_inputs, is_training=True)
 
@@ -200,7 +198,7 @@ class TestPointPillarPreprocessor(unittest.TestCase):
         Test that the PointPillarPreprocessor returns empty pillar tensors when given an
         empty batch.
         """
-        multi_task_gt_batch = MultiTaskGTBatch(
+        multi_task_gt_batch = ModelGTBatch(
             point_cloud_gt_batch=PointCloudGTBatch(
                 points=torch.zeros((0, 4), device=self.device, dtype=torch.float32),
                 batch_indices=torch.tensor([], device=self.device, dtype=torch.int32),
@@ -208,7 +206,7 @@ class TestPointPillarPreprocessor(unittest.TestCase):
             detection3d_gt_batch=None,
             image_gt_batch=None,
         )
-        multi_task_batch_inputs = MultiTaskBatchInputs(
+        multi_task_batch_inputs = ModelBatchInputs(
             multi_task_gt_batch=multi_task_gt_batch, voxels_data=None, image_data=None
         )
         outputs = self.point_pillar_preprocessor(multi_task_batch_inputs, is_training=True)
@@ -285,7 +283,7 @@ class TestPointPillarPreprocessor(unittest.TestCase):
         gt_valid_bboxes = torch.tensor([1, 1], device=self.device, dtype=torch.int32)
         gt_bboxes_num_points = torch.tensor([[10], [20]], device=self.device, dtype=torch.int32)
 
-        multi_task_gt_batch = MultiTaskGTBatch(
+        multi_task_gt_batch = ModelGTBatch(
             point_cloud_gt_batch=PointCloudGTBatch(
                 points=torch.tensor(
                     [
@@ -306,7 +304,7 @@ class TestPointPillarPreprocessor(unittest.TestCase):
             ),
             image_gt_batch=None,
         )
-        multi_task_batch_inputs = MultiTaskBatchInputs(
+        multi_task_batch_inputs = ModelBatchInputs(
             multi_task_gt_batch=multi_task_gt_batch, voxels_data=None, image_data=None
         )
         outputs = self.point_pillar_preprocessor(multi_task_batch_inputs, is_training=True)

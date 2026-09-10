@@ -24,7 +24,7 @@ import torch
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.callbacks import Callback
 
-from autoware_ml.dataclasses.multi_task_batch_inputs import MultiTaskBatchInputs
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.types.dataset import SplitType
 
 
@@ -303,7 +303,7 @@ class IterationTimer(Callback):
         self,
         trainer: Trainer,
         pl_module: LightningModule,
-        batch: MultiTaskBatchInputs,
+        batch: ModelBatchInputs,
         batch_idx: int,
     ) -> None:
         """Open the timing window for a training iteration."""
@@ -314,7 +314,7 @@ class IterationTimer(Callback):
         trainer: Trainer,
         pl_module: LightningModule,
         outputs: Any,
-        batch: MultiTaskBatchInputs,
+        batch: ModelBatchInputs,
         batch_idx: int,
     ) -> None:
         """Close the timing window for a training iteration."""
@@ -328,7 +328,7 @@ class IterationTimer(Callback):
         self,
         trainer: Trainer,
         pl_module: LightningModule,
-        batch: MultiTaskBatchInputs,
+        batch: ModelBatchInputs,
         batch_idx: int,
         dataloader_idx: int = 0,
     ) -> None:
@@ -340,7 +340,7 @@ class IterationTimer(Callback):
         trainer: Trainer,
         pl_module: LightningModule,
         outputs: Any,
-        batch: MultiTaskBatchInputs,
+        batch: ModelBatchInputs,
         batch_idx: int,
         dataloader_idx: int = 0,
     ) -> None:
@@ -355,7 +355,7 @@ class IterationTimer(Callback):
         self,
         trainer: Trainer,
         pl_module: LightningModule,
-        batch: MultiTaskBatchInputs,
+        batch: ModelBatchInputs,
         batch_idx: int,
         dataloader_idx: int = 0,
     ) -> None:
@@ -367,7 +367,7 @@ class IterationTimer(Callback):
         trainer: Trainer,
         pl_module: LightningModule,
         outputs: Any,
-        batch: MultiTaskBatchInputs,
+        batch: ModelBatchInputs,
         batch_idx: int,
         dataloader_idx: int = 0,
     ) -> None:

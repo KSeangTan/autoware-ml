@@ -24,7 +24,7 @@ import cv2
 import numpy as np
 import torch
 
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
 
@@ -72,14 +72,14 @@ class PhotometricDistortion(MultiTaskBaseTransform):
         self.saturation = saturation
         self.hue = hue
 
-    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Apply photometric distortion to the RGB channels of every camera image.
 
         Args:
-            multi_task_gt_sample: MultiTaskGTSample instance containing `camera_image_data`.
+            multi_task_gt_sample: ModelGTSample instance containing `camera_image_data`.
 
         Returns:
-            Updated MultiTaskGTSample instance with distorted `camera_image_data`.
+            Updated ModelGTSample instance with distorted `camera_image_data`.
         """
         assert multi_task_gt_sample.camera_image_data is not None
         camera_image_data = multi_task_gt_sample.camera_image_data

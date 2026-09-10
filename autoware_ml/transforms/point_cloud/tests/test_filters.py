@@ -18,7 +18,7 @@ import unittest
 
 import torch
 
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.points.lidar_points import LiDARPoints
 from autoware_ml.transforms.point_cloud.filters import PointsRangeFilter
 from autoware_ml.types.geometry import PointFeatureName
@@ -50,16 +50,16 @@ class TestPointsRangeFilter(unittest.TestCase):
             timestamp=0.0,
         )
 
-    def build_multi_task_gt_sample(self, point_cloud_data: LiDARPoints | None) -> MultiTaskGTSample:
+    def build_multi_task_gt_sample(self, point_cloud_data: LiDARPoints | None) -> ModelGTSample:
         """Build a minimal sample holding only the given point cloud.
 
         Args:
             point_cloud_data: The point cloud to put in the sample, or ``None``.
 
         Returns:
-            MultiTaskGTSample with the point cloud and every other field unset.
+            ModelGTSample with the point cloud and every other field unset.
         """
-        return MultiTaskGTSample(
+        return ModelGTSample(
             lidar_point_cloud_samples=None,
             image_samples=None,
             point_cloud_data=point_cloud_data,

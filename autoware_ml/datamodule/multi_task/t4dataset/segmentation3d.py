@@ -1,7 +1,7 @@
 import polars as pl
 
-from autoware_ml.datamodule.multi_task.base_dataset_task import BaseDatasetTask
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.datamodule.base_dataset_task import BaseDatasetTask
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 
 
 class T4Segmentation3DTask(BaseDatasetTask):
@@ -31,7 +31,7 @@ class T4Segmentation3DTask(BaseDatasetTask):
         """
         return "T4Segmentation3DTask"
 
-    def get_data_sample(self, idx: int) -> MultiTaskGTSample:
+    def get_data_sample(self, idx: int) -> ModelGTSample:
         """
         Process the dataset records dataframe for 3D segmentation in the T4 dataset.
 

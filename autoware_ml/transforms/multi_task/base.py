@@ -23,11 +23,11 @@ from typing import Sequence, Protocol
 
 import numpy as np
 
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 
 
 class MultiTaskBaseTransform(Protocol):
-    """Abstract base class for MultiTaskGTSample data transformations.
+    """Abstract base class for ModelGTSample data transformations.
 
     Class Attributes (override in subclasses):
         p: Probability of applying the transform (0.0=never, 1.0=always).
@@ -52,7 +52,7 @@ class MultiTaskBaseTransform(Protocol):
         """
         self._probability = probability
 
-    def __call__(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def __call__(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Execute transform with probability and key validation.
 
         Order of operations:
@@ -64,7 +64,7 @@ class MultiTaskBaseTransform(Protocol):
             multi_task_gt_sample: Dataclass to hold inputs for each sample.
 
         Returns:
-            Updated MultiTaskGTSample.
+            Updated ModelGTSample.
         """
         # 1. Validate required keys (raises error if any missing)
         self._validate_required_keys(multi_task_gt_sample)
@@ -76,11 +76,11 @@ class MultiTaskBaseTransform(Protocol):
         # 4. Execute the actual transform
         return self.transform(multi_task_gt_sample)
 
-    def _validate_required_keys(self, multi_task_gt_sample: MultiTaskGTSample) -> None:
+    def _validate_required_keys(self, multi_task_gt_sample: ModelGTSample) -> None:
         """Raise ``KeyError`` when any required key is missing.
 
         Args:
-            multi_task_gt_sample: MultiTaskGTSample instance validated before transform execution.
+            multi_task_gt_sample: ModelGTSample instance validated before transform execution.
 
         Raises:
             KeyError: If a required key defined by the transform is absent.
@@ -104,7 +104,7 @@ class MultiTaskBaseTransform(Protocol):
             return True
         return np.random.rand() < self._probability
 
-    def on_skip(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def on_skip(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Called when transform is skipped due to probability.
 
         Override for custom behavior when transform is skipped.
@@ -119,11 +119,11 @@ class MultiTaskBaseTransform(Protocol):
         return multi_task_gt_sample
 
     @abstractmethod
-    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Process input dictionary and return updated mapping.
 
         Args:
-            multi_task_gt_sample: MultiTaskGTSample instance with required keys present, optional keys
+            multi_task_gt_sample: ModelGTSample instance with required keys present, optional keys
                                    populated by apply_defaults() if they were missing.
 
         Returns:
@@ -147,14 +147,14 @@ class MultiTaskTransformsCompose:
         """
         self.pipeline = pipeline
 
-    def __call__(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def __call__(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Apply each transform sequentially, merging updates.
 
         Args:
-            multi_task_gt_sample: MultiTaskGTSample instance passed through the configured transforms.
+            multi_task_gt_sample: ModelGTSample instance passed through the configured transforms.
 
         Returns:
-            Transformed MultiTaskGTSample instance after all pipeline stages have been applied.
+            Transformed ModelGTSample instance after all pipeline stages have been applied.
         """
         for transform in self.pipeline:
             multi_task_gt_sample = transform(multi_task_gt_sample)

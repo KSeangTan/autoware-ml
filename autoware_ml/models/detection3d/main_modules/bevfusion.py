@@ -32,14 +32,14 @@ import torch.nn as nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
-from autoware_ml.dataclasses.detection3d.head_outputs import (
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     Detection3DHeadOutputs,
     TransFusionHeadOutputs,
 )
-from autoware_ml.dataclasses.multi_task_batch_inputs import MultiTaskBatchInputs
-from autoware_ml.dataclasses.multi_task_predictions import MultiTaskPredictions
-from autoware_ml.dataclasses.multi_task_outputs import MultiTaskOutputs
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTBatch
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import multi_task_eval_output
 from autoware_ml.models.detection3d.main_modules.bevfusions.bevfusion_lidar import (
@@ -63,7 +63,7 @@ class _BEVFusionExportWrapperBase(nn.Module):
     """Shared base for BEVFusion main body export wrappers.
 
     Holds the wrapped model and the logic to rebuild a
-    :class:`MultiTaskBatchInputs` from the flat single-sample tensors the
+    :class:`ModelBatchInputs` from the flat single-sample tensors the
     deployment runtime provides. Subclasses only define ``forward`` with the
     tensor signature expected by their export target.
     """
@@ -82,8 +82,8 @@ class _BEVFusionExportWrapperBase(nn.Module):
         voxels: Float32[torch.Tensor, "num_voxels max_num_points num_point_features"],
         coors: Int32[torch.Tensor, "num_voxels 3"],
         num_points_per_voxel: Int32[torch.Tensor, " num_voxels"],
-    ) -> MultiTaskBatchInputs:
-        """Construct a single-sample ``MultiTaskBatchInputs`` from runtime tensors.
+    ) -> ModelBatchInputs:
+        """Construct a single-sample ``ModelBatchInputs`` from runtime tensors.
 
         The result carries no ground truths and no image inputs; image data is
         supplied separately by wrappers that need it.
@@ -102,13 +102,13 @@ class _BEVFusionExportWrapperBase(nn.Module):
             num_points=num_points_per_voxel,
             batch_indices=torch.zeros(coors.shape[0], dtype=torch.int32, device=coors.device),
         )
-        multi_task_gt_batch = MultiTaskGTBatch(
+        multi_task_gt_batch = ModelGTBatch(
             point_cloud_gt_batch=None,
             detection3d_gt_batch=None,
             image_gt_batch=None,
             io_processing_time=0.0,
         )
-        return MultiTaskBatchInputs(
+        return ModelBatchInputs(
             multi_task_gt_batch=multi_task_gt_batch,
             voxels_data=voxels_data,
             image_data=None,
@@ -281,14 +281,14 @@ class BEVFusionDetectionModel(ModuleBaseModel):
 
     # TODO(KokSeang): This signature is temporary different from the base class,
     # and will be refactored to match the base class signature once the detection metric is refactored
-    # to accept MultiTaskPredictions and MultiTaskFeatures directly.
+    # to accept ModelPredictions and MultiTaskFeatures directly.
     def build_eval_output(  # type: ignore[override]
-        self, batch: MultiTaskBatchInputs, outputs: MultiTaskOutputs
+        self, batch: ModelBatchInputs, outputs: ModelOutputs
     ) -> dict[str, Any]:
         """Decode detections and pair them with ground truth for metrics."""
         if outputs.detection3d_head_outputs is None:
             raise ValueError(
-                "MultiTaskOutputs must contain detection3d_head_outputs for CenterPoint build_eval_output pass."
+                "ModelOutputs must contain detection3d_head_outputs for CenterPoint build_eval_output pass."
             )
 
         return multi_task_eval_output(
@@ -298,7 +298,7 @@ class BEVFusionDetectionModel(ModuleBaseModel):
 
     def _forward_export(
         self,
-        multi_task_batch_inputs: MultiTaskBatchInputs,
+        multi_task_batch_inputs: ModelBatchInputs,
         image_features: Float32[torch.Tensor, "num_cameras channels feature_height feature_width"],
         depth_maps: Float32[torch.Tensor, "num_cameras 1 height width"],
         geom_feats: Float32[torch.Tensor, "num_frustum_points 4"],
@@ -309,7 +309,7 @@ class BEVFusionDetectionModel(ModuleBaseModel):
         """Run the export-time main body with runtime-compatible inputs.
 
         Args:
-            multi_task_batch_inputs: MultiTaskBatchInputs containing the voxelized lidar inputs.
+            multi_task_batch_inputs: ModelBatchInputs containing the voxelized lidar inputs.
             image_features: Precomputed image features.
             depth_maps: Precomputed depth maps.
             bev_pool_result: Precomputed BEV-pool metadata for the camera branch.
@@ -339,14 +339,14 @@ class BEVFusionDetectionModel(ModuleBaseModel):
 
     def _forward_with_batch_size(
         self,
-        multi_task_batch_inputs: MultiTaskBatchInputs,
+        multi_task_batch_inputs: ModelBatchInputs,
         batch_size: int | None = None,
         image_bev: Float32[torch.Tensor, "batch_size channels height width"] | None = None,
     ) -> TransFusionHeadOutputs:
         """Run the configured BEV branches and dense head.
 
         Args:
-            multi_task_batch_inputs: MultiTaskBatchInputs containing the voxelized lidar inputs.
+            multi_task_batch_inputs: ModelBatchInputs containing the voxelized lidar inputs.
             batch_size: Optional explicit batch size.
             image_bev: Optional precomputed image BEV tensor.
 
@@ -363,14 +363,14 @@ class BEVFusionDetectionModel(ModuleBaseModel):
             image_data = multi_task_batch_inputs.image_data
             if image_data is None:
                 raise ValueError(
-                    "MultiTaskBatchInputs must contain image_data for BEVFusion camera forward pass."
+                    "ModelBatchInputs must contain image_data for BEVFusion camera forward pass."
                 )
 
             # For now, depth_maps must be provided for the camera branch to run. In the future, we
             # can add a flag to disable the depth guidance.
             if image_data.depth_maps is None:
                 raise ValueError(
-                    "MultiTaskBatchInputs must contain depth_maps for BEVFusion camera forward pass."
+                    "ModelBatchInputs must contain depth_maps for BEVFusion camera forward pass."
                 )
 
             image_bev = self.camera_network.forward(
@@ -388,7 +388,7 @@ class BEVFusionDetectionModel(ModuleBaseModel):
             voxels_data = multi_task_batch_inputs.voxels_data
             if voxels_data is None:
                 raise ValueError(
-                    "MultiTaskBatchInputs must contain voxels_data for CenterPoint forward pass."
+                    "ModelBatchInputs must contain voxels_data for CenterPoint forward pass."
                 )
 
             assert batch_size is not None, "Batch size must be provided for lidar forward pass."
@@ -412,34 +412,34 @@ class BEVFusionDetectionModel(ModuleBaseModel):
 
         return bbox_head_outputs
 
-    def forward(self, multi_task_batch_inputs: MultiTaskBatchInputs) -> MultiTaskOutputs:
+    def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
         """Run the detector on voxelized lidar inputs.
 
         Args:
-            multi_task_batch_inputs: MultiTaskBatchInputs containing the voxelized lidar inputs.
+            multi_task_batch_inputs: ModelBatchInputs containing the voxelized lidar inputs.
 
         Returns:
             Detection head outputs.
         """
         detection_head_outputs = self._forward_with_batch_size(multi_task_batch_inputs)
-        return MultiTaskOutputs(
+        return ModelOutputs(
             detection3d_head_outputs=Detection3DHeadOutputs(
                 center_head_outputs=None, transfusion_head_outputs=detection_head_outputs
             )
         )
 
     def compute_metrics(
-        self, multi_task_batch_inputs: MultiTaskBatchInputs, multi_task_outputs: MultiTaskOutputs
+        self, multi_task_batch_inputs: ModelBatchInputs, multi_task_outputs: ModelOutputs
     ) -> MappingProxyType[str, Float32[torch.Tensor, " num_losses"]]:
         """Compute TransfusionHead training losses."""
         if multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch is None:
             raise ValueError(
-                "MultiTaskBatchInputs must contain detection3d_gt_batch for CenterPoint compute_metrics pass."
+                "ModelBatchInputs must contain detection3d_gt_batch for CenterPoint compute_metrics pass."
             )
 
         if multi_task_outputs.detection3d_head_outputs is None:
             raise ValueError(
-                "MultiTaskOutputs must contain detection3d_head_outputs for CenterPoint compute_metrics pass."
+                "ModelOutputs must contain detection3d_head_outputs for CenterPoint compute_metrics pass."
             )
 
         gt_bboxes_3d = multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch.gt_bboxes_3d
@@ -454,11 +454,11 @@ class BEVFusionDetectionModel(ModuleBaseModel):
             gt_valid_bboxes=gt_valid_bboxes,
         )  # type: ignore[return-value]
 
-    def decode_outputs(self, outputs: MultiTaskOutputs) -> MultiTaskPredictions:
+    def decode_outputs(self, outputs: ModelOutputs) -> ModelPredictions:
         """Decode predictions for inference."""
         if outputs.detection3d_head_outputs is None:
             raise ValueError(
-                "MultiTaskOutputs must contain detection3d_head_outputs for CenterPoint decode_outputs pass."
+                "ModelOutputs must contain detection3d_head_outputs for CenterPoint decode_outputs pass."
             )
 
         multi_task_predictions = self.bbox_head.decode_outputs(
@@ -481,7 +481,7 @@ class BEVFusionDetectionModel(ModuleBaseModel):
         return model
 
     def build_export_specs(
-        self, multi_task_batch_inputs: MultiTaskBatchInputs
+        self, multi_task_batch_inputs: ModelBatchInputs
     ) -> dict[str, ExportSpec]:
         """Build the ONNX export specifications for the runtime-compatible ABI.
 
@@ -519,12 +519,12 @@ class BEVFusionDetectionModel(ModuleBaseModel):
         image_data = multi_task_batch_inputs.image_data
         if image_data is None:
             raise ValueError(
-                "MultiTaskBatchInputs must contain image_data to build BEVFusion camera-lidar "
+                "ModelBatchInputs must contain image_data to build BEVFusion camera-lidar "
                 "export specs."
             )
         if image_data.depth_maps is None:
             raise ValueError(
-                "MultiTaskBatchInputs must contain depth_maps to build BEVFusion camera-lidar "
+                "ModelBatchInputs must contain depth_maps to build BEVFusion camera-lidar "
                 "export specs."
             )
 
@@ -578,7 +578,7 @@ class BEVFusionDetectionModel(ModuleBaseModel):
 
     @staticmethod
     def _first_sample_voxel_inputs(
-        multi_task_batch_inputs: MultiTaskBatchInputs,
+        multi_task_batch_inputs: ModelBatchInputs,
     ) -> tuple[
         Float32[torch.Tensor, "num_voxels max_num_points num_point_features"],
         Int32[torch.Tensor, "num_voxels 3"],
@@ -603,7 +603,7 @@ class BEVFusionDetectionModel(ModuleBaseModel):
         voxels_data = multi_task_batch_inputs.voxels_data
         if voxels_data is None:
             raise ValueError(
-                "MultiTaskBatchInputs must contain voxels_data to build BEVFusion export specs."
+                "ModelBatchInputs must contain voxels_data to build BEVFusion export specs."
             )
         first_sample = voxels_data.batch_indices == 0
         voxels = voxels_data.voxels[first_sample].float()

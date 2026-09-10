@@ -20,7 +20,7 @@ inputs, the shared quantities come out identical across namespaces, and that
 each variant fails loudly (no silent fallback) when its required keys are
 missing.
 
-The camera-only variants moved to the ``MultiTaskGTSample`` interface and are
+The camera-only variants moved to the ``ModelGTSample`` interface and are
 covered by ``test_camera.py`` instead.
 """
 

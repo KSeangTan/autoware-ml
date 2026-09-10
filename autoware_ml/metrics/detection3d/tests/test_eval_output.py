@@ -18,13 +18,13 @@ import unittest
 
 import torch
 
-from autoware_ml.dataclasses.multi_task_batch_inputs import MultiTaskBatchInputs
-from autoware_ml.dataclasses.detection3d.predictions import Detection3DSamplePredictions
-from autoware_ml.dataclasses.multi_task_predictions import MultiTaskPredictions
-from autoware_ml.datamodule.multi_task.dataclasses.detection3d import (
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
+from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
+from autoware_ml.dataclasses.batch.detection3d import (
     Detection3DGTBatch,
 )
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTBatch
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.metrics.detection3d.eval_output import multi_task_eval_output
 
 
@@ -33,9 +33,9 @@ class TestMultiTaskEvalOutput(unittest.TestCase):
 
     def setUp(self) -> None:
         """Set up the common inputs for the tests."""
-        # Create dummy MultiTaskPredictions
+        # Create dummy ModelPredictions
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.multi_task_predictions = MultiTaskPredictions(
+        self.multi_task_predictions = ModelPredictions(
             detection3d_predictions=[
                 Detection3DSamplePredictions(
                     bboxes_3d=torch.tensor(
@@ -86,8 +86,8 @@ class TestMultiTaskEvalOutput(unittest.TestCase):
             gt_valid_bboxes=gt_valid_bboxes,
             gt_bboxes_num_points=gt_bboxes_num_points,
         )
-        self.multi_task_batch_inputs = MultiTaskBatchInputs(
-            multi_task_gt_batch=MultiTaskGTBatch(
+        self.multi_task_batch_inputs = ModelBatchInputs(
+            multi_task_gt_batch=ModelGTBatch(
                 point_cloud_gt_batch=None,
                 detection3d_gt_batch=detection3d_gt_batch,
                 image_gt_batch=None,
@@ -99,8 +99,8 @@ class TestMultiTaskEvalOutput(unittest.TestCase):
     def test_detection3d_gt_batch_assertion(self):
         """Test that multi_task_eval_output raises ValueError when detection3d_gt_batch is None."""
 
-        multi_task_batch_inputs = MultiTaskBatchInputs(
-            multi_task_gt_batch=MultiTaskGTBatch(
+        multi_task_batch_inputs = ModelBatchInputs(
+            multi_task_gt_batch=ModelGTBatch(
                 point_cloud_gt_batch=None,
                 detection3d_gt_batch=None,
                 image_gt_batch=None,
@@ -117,7 +117,7 @@ class TestMultiTaskEvalOutput(unittest.TestCase):
     def test_detection3d_predictions_assertion(self):
         """Test that multi_task_eval_output raises ValueError when detection3d_predictions is None."""
 
-        multi_task_predictions = MultiTaskPredictions(detection3d_predictions=None)
+        multi_task_predictions = ModelPredictions(detection3d_predictions=None)
         with self.assertRaises(ValueError):
             multi_task_eval_output(
                 multi_task_batch_inputs=self.multi_task_batch_inputs,

@@ -21,11 +21,11 @@ from jaxtyping import Float32
 import torch
 
 from autoware_ml.models.detection3d.heads.centerhead import CenterHead
-from autoware_ml.dataclasses.detection3d.head_outputs import (
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     CenterHeadOutputs,
     Detection3DHeadOutputs,
 )
-from autoware_ml.datamodule.multi_task.dataclasses.detection3d import (
+from autoware_ml.dataclasses.batch.detection3d import (
     Detection3DGTBatch,
 )
 

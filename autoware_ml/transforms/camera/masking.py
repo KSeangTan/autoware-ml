@@ -10,7 +10,7 @@ from torchvision.transforms import v2
 
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 
 
 class GridMask(MultiTaskBaseTransform):
@@ -40,14 +40,14 @@ class GridMask(MultiTaskBaseTransform):
         self.ratio = ratio
         self.rotate = rotate
 
-    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Mask every camera image with a regular grid pattern.
 
         Args:
-            multi_task_gt_sample: MultiTaskGTSample instance containing `camera_image_data`.
+            multi_task_gt_sample: ModelGTSample instance containing `camera_image_data`.
 
         Returns:
-            Updated MultiTaskGTSample instance with a masked `camera_image_data`.
+            Updated ModelGTSample instance with a masked `camera_image_data`.
         """
         assert multi_task_gt_sample.camera_image_data is not None
         camera_image_data = multi_task_gt_sample.camera_image_data

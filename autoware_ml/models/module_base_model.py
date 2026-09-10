@@ -30,10 +30,10 @@ import torch
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
-from autoware_ml.dataclasses.multi_task_batch_inputs import MultiTaskBatchInputs
-from autoware_ml.dataclasses.multi_task_predictions import MultiTaskPredictions
-from autoware_ml.dataclasses.multi_task_outputs import MultiTaskOutputs
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTBatch
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.eval_mixin import MetricEvalMixin
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
@@ -109,21 +109,19 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
         self.scheduler_config = dict(scheduler_config) if scheduler_config else {}
         self.log_dict_configs = log_dict_configs
 
-    def on_after_batch_transfer(
-        self, batch: MultiTaskGTBatch, dataloader_idx: int
-    ) -> MultiTaskBatchInputs:
+    def on_after_batch_transfer(self, batch: ModelGTBatch, dataloader_idx: int) -> ModelBatchInputs:
         """Apply runtime preprocessing after Lightning moves a batch to device.
 
         Args:
-            batch: Collated batch of type :class:`MultiTaskGTBatch` on the target device.
+            batch: Collated batch of type :class:`ModelGTBatch` on the target device.
             dataloader_idx: Lightning dataloader index.
 
         Returns:
-            Batch of type :class:`MultiTaskBatchInputs` after runtime preprocessing.
+            Batch of type :class:`ModelBatchInputs` after runtime preprocessing.
         """
         return self._data_preprocessor(batch, is_training=self.training)
 
-    def decode_outputs(self, outputs: MultiTaskOutputs) -> MultiTaskPredictions:
+    def decode_outputs(self, outputs: ModelOutputs) -> ModelPredictions:
         """Convert raw model outputs into task-level predictions.
 
         Task wrappers must override this when prediction-time outputs differ from
@@ -151,16 +149,16 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
             "default": [parameter for parameter in self.parameters() if parameter.requires_grad]
         }
 
-    def forward(self, multi_task_batch_inputs: MultiTaskBatchInputs) -> MultiTaskOutputs:
+    def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
         """Forward pass of the model.
 
         Subclasses must follow the signature of this method and return a dataclass containing
-        all model outputs. Users must add new implementations to MultiTaskBatchInputs and MultiTaskOutputs
+        all model outputs. Users must add new implementations to ModelBatchInputs and ModelOutputs
         when supporting new types of tasks to the multi-task model.
         The default implementation raises a NotImplementedError.
 
         Args:
-            multi_task_batch_inputs: Batch of type :class:`MultiTaskBatchInputs` containing
+            multi_task_batch_inputs: Batch of type :class:`ModelBatchInputs` containing
                 multi-task inputs.
 
         Returns:
@@ -169,7 +167,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
         raise NotImplementedError("Model must implement forward()")
 
     def compute_metrics(
-        self, multi_task_batch_inputs: MultiTaskBatchInputs, multi_task_outputs: MultiTaskOutputs
+        self, multi_task_batch_inputs: ModelBatchInputs, multi_task_outputs: ModelOutputs
     ) -> MappingProxyType[str, Float32[torch.Tensor, " num_losses"]]:
         """Compute metrics.
 
@@ -184,7 +182,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
         """
         raise NotImplementedError("Model must implement compute_metrics()")
 
-    def get_log_batch_size(self, multi_task_batch_inputs: MultiTaskBatchInputs) -> int | None:
+    def get_log_batch_size(self, multi_task_batch_inputs: ModelBatchInputs) -> int | None:
         """Infer the effective sample batch size for logging.
 
         It searches for all available inputs in ``MultiTaskFeatures`` to infer the sample count.
@@ -201,9 +199,9 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
 
     def _core_step(
         self,
-        multi_task_batch_inputs: MultiTaskBatchInputs,
+        multi_task_batch_inputs: ModelBatchInputs,
         step_prefix: str,
-    ) -> tuple[MappingProxyType[str, Float32[torch.Tensor, " 1"]], MultiTaskOutputs]:
+    ) -> tuple[MappingProxyType[str, Float32[torch.Tensor, " 1"]], ModelOutputs]:
         """
         Core step shared by training, validation, and test. It runs one forward pass,
         computes metrics, and logs them.
@@ -241,7 +239,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
 
     @final
     def training_step(
-        self, multi_task_batch_inputs: MultiTaskBatchInputs, batch_idx: int
+        self, multi_task_batch_inputs: ModelBatchInputs, batch_idx: int
     ) -> Float32[torch.Tensor, " 1"]:
         """
         Training step.
@@ -262,7 +260,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
 
     @final
     def validation_step(
-        self, multi_task_batch_inputs: MultiTaskBatchInputs, batch_idx: int
+        self, multi_task_batch_inputs: ModelBatchInputs, batch_idx: int
     ) -> dict[str, Any]:
         """
         Validation step.
@@ -286,7 +284,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
 
     @final
     def test_step(
-        self, multi_task_batch_inputs: MultiTaskBatchInputs, batch_idx: int
+        self, multi_task_batch_inputs: ModelBatchInputs, batch_idx: int
     ) -> dict[str, Any]:
         """Test step.
 
@@ -308,8 +306,8 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
 
     @final
     def predict_step(
-        self, multi_task_batch_inputs: MultiTaskBatchInputs, batch_idx: int
-    ) -> MultiTaskPredictions:
+        self, multi_task_batch_inputs: ModelBatchInputs, batch_idx: int
+    ) -> ModelPredictions:
         """Prediction step.
 
         Args:
@@ -347,11 +345,11 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
             else None,
         )
 
-    def build_export_spec(self, multi_task_batch_inputs: MultiTaskBatchInputs) -> ExportSpec:
+    def build_export_spec(self, multi_task_batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Build the single-module deployment export specification.
 
-        :meth:`forward` consumes a :class:`MultiTaskBatchInputs` and returns a
-        :class:`MultiTaskOutputs`, neither of which the ONNX exporter can trace, so
+        :meth:`forward` consumes a :class:`ModelBatchInputs` and returns a
+        :class:`ModelOutputs`, neither of which the ONNX exporter can trace, so
         there is no generic signature-based default. Models that support deployment
         must override this hook and flatten the batch into the tensor arguments of
         the exported graph.
@@ -365,7 +363,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
         raise NotImplementedError("Model must implement build_export_spec()")
 
     def build_export_specs(
-        self, multi_task_batch_inputs: MultiTaskBatchInputs
+        self, multi_task_batch_inputs: ModelBatchInputs
     ) -> dict[str, ExportSpec]:
         """Build per-module deployment export specifications.
 

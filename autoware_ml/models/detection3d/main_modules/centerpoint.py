@@ -31,10 +31,10 @@ from torch import nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
-from autoware_ml.dataclasses.multi_task_batch_inputs import MultiTaskBatchInputs
-from autoware_ml.dataclasses.multi_task_predictions import MultiTaskPredictions
-from autoware_ml.dataclasses.multi_task_outputs import MultiTaskOutputs
-from autoware_ml.dataclasses.detection3d.head_outputs import Detection3DHeadOutputs
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import multi_task_eval_output
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
@@ -167,14 +167,14 @@ class CenterPointDetectionModel(ModuleBaseModel):
 
     # TODO(KokSeang): This signature is temporary different from the base class,
     # and will be refactored to match the base class signature once the detection metric is refactored
-    # to accept MultiTaskPredictions and MultiTaskFeatures directly.
+    # to accept ModelPredictions and MultiTaskFeatures directly.
     def build_eval_output(  # type: ignore[override]
-        self, batch: MultiTaskBatchInputs, outputs: MultiTaskOutputs
+        self, batch: ModelBatchInputs, outputs: ModelOutputs
     ) -> dict[str, Any]:
         """Decode detections and pair them with ground truth for metrics."""
         if outputs.detection3d_head_outputs is None:
             raise ValueError(
-                "MultiTaskOutputs must contain detection3d_head_outputs for CenterPoint build_eval_output pass."
+                "ModelOutputs must contain detection3d_head_outputs for CenterPoint build_eval_output pass."
             )
 
         return multi_task_eval_output(
@@ -182,18 +182,18 @@ class CenterPointDetectionModel(ModuleBaseModel):
             multi_task_batch_inputs=batch,
         )
 
-    def forward(self, multi_task_batch_inputs: MultiTaskBatchInputs) -> MultiTaskOutputs:
+    def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
         """Run the detector on voxelized lidar inputs.
 
         Args:
-            multi_task_batch_inputs: MultiTaskBatchInputs containing the voxelized lidar inputs.
+            multi_task_batch_inputs: ModelBatchInputs containing the voxelized lidar inputs.
 
         Returns:
             Detection head outputs.
         """
         if multi_task_batch_inputs.voxels_data is None:
             raise ValueError(
-                "MultiTaskBatchInputs must contain voxels_data for CenterPoint forward pass."
+                "ModelBatchInputs must contain voxels_data for CenterPoint forward pass."
             )
 
         batch_size = multi_task_batch_inputs.multi_task_gt_batch.infer_batch_size()
@@ -207,24 +207,24 @@ class CenterPointDetectionModel(ModuleBaseModel):
         bev_features = self.pts_backbone(bev_features)
         bev_features = self.pts_neck(bev_features)
         head_outputs = self.bbox_head(bev_features)
-        return MultiTaskOutputs(
+        return ModelOutputs(
             detection3d_head_outputs=Detection3DHeadOutputs(
                 center_head_outputs=head_outputs, transfusion_head_outputs=None
             )
         )
 
     def compute_metrics(
-        self, multi_task_batch_inputs: MultiTaskBatchInputs, multi_task_outputs: MultiTaskOutputs
+        self, multi_task_batch_inputs: ModelBatchInputs, multi_task_outputs: ModelOutputs
     ) -> MappingProxyType[str, Float32[torch.Tensor, " 1"]]:
         """Compute CenterPoint training losses."""
         if multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch is None:
             raise ValueError(
-                "MultiTaskBatchInputs must contain detection3d_gt_batch for CenterPoint compute_metrics pass."
+                "ModelBatchInputs must contain detection3d_gt_batch for CenterPoint compute_metrics pass."
             )
 
         if multi_task_outputs.detection3d_head_outputs is None:
             raise ValueError(
-                "MultiTaskOutputs must contain detection3d_head_outputs for CenterPoint compute_metrics pass."
+                "ModelOutputs must contain detection3d_head_outputs for CenterPoint compute_metrics pass."
             )
 
         gt_bboxes_3d = multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch.gt_bboxes_3d
@@ -240,11 +240,11 @@ class CenterPointDetectionModel(ModuleBaseModel):
             gt_valid_bboxes=gt_valid_bboxes,
         )
 
-    def decode_outputs(self, outputs: MultiTaskOutputs) -> MultiTaskPredictions:
+    def decode_outputs(self, outputs: ModelOutputs) -> ModelPredictions:
         """Decode predictions for inference."""
         if outputs.detection3d_head_outputs is None:
             raise ValueError(
-                "MultiTaskOutputs must contain detection3d_head_outputs for CenterPoint decode_outputs pass."
+                "ModelOutputs must contain detection3d_head_outputs for CenterPoint decode_outputs pass."
             )
 
         multi_task_predictions = self.bbox_head.decode_outputs(
@@ -252,13 +252,13 @@ class CenterPointDetectionModel(ModuleBaseModel):
         )
         return multi_task_predictions
 
-    def build_export_spec(self, multi_task_batch_inputs: MultiTaskBatchInputs) -> ExportSpec:
+    def build_export_spec(self, multi_task_batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Reject single-module CenterPoint deployment export."""
         del multi_task_batch_inputs
         raise RuntimeError("CenterPoint deployment uses split modules; call build_export_specs().")
 
     def build_export_specs(
-        self, multi_task_batch_inputs: MultiTaskBatchInputs
+        self, multi_task_batch_inputs: ModelBatchInputs
     ) -> dict[str, ExportSpec]:
         """Build split CenterPoint deployment export specifications.
 
@@ -276,7 +276,7 @@ class CenterPointDetectionModel(ModuleBaseModel):
         voxels_data = multi_task_batch_inputs.voxels_data
         if voxels_data is None:
             raise ValueError(
-                "MultiTaskBatchInputs must contain voxels_data to build CenterPoint export specs."
+                "ModelBatchInputs must contain voxels_data to build CenterPoint export specs."
             )
 
         # The scatter canvas is indexed with the pillar batch indices, so the batch size

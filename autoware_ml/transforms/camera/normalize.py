@@ -9,7 +9,7 @@ from torchvision.transforms import v2
 
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 
 
 class NormalizeMultiviewImage(MultiTaskBaseTransform):
@@ -34,14 +34,14 @@ class NormalizeMultiviewImage(MultiTaskBaseTransform):
         self.std = std
         self._normalize = v2.Normalize(mean=list(mean), std=list(std))
 
-    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Normalize every camera image channel-wise.
 
         Args:
-            multi_task_gt_sample: MultiTaskGTSample instance containing `camera_image_data`.
+            multi_task_gt_sample: ModelGTSample instance containing `camera_image_data`.
 
         Returns:
-            Updated MultiTaskGTSample instance with updated `camera_image_data`.
+            Updated ModelGTSample instance with updated `camera_image_data`.
         """
         assert multi_task_gt_sample.camera_image_data is not None
         camera_image_data = multi_task_gt_sample.camera_image_data

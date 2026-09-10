@@ -18,11 +18,11 @@ import unittest
 
 import torch
 
-from autoware_ml.dataclasses.multi_task_batch_inputs import MultiTaskBatchInputs
-from autoware_ml.datamodule.multi_task.dataclasses.detection3d import (
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.batch.detection3d import (
     Detection3DGTBatch,
 )
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTBatch
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.models.detection3d.main_modules.centerpoint import CenterPointDetectionModel
 from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
 from autoware_ml.models.detection3d.encoders.pillars.pillar_feature_net import PillarFeatureNet
@@ -134,9 +134,9 @@ class TestCenterPointDetectionModel(unittest.TestCase):
         self.assertAlmostEqual(bias_mean, expected_bias_mean, places=2)
         self.assertAlmostEqual(bias_std, expected_bias_std, places=2)
 
-    def _build_multi_task_batch_inputs(self) -> MultiTaskBatchInputs:
+    def _build_multi_task_batch_inputs(self) -> ModelBatchInputs:
         """
-        Build a MultiTaskBatchInputs batch with voxelized lidar inputs and detection ground truth
+        Build a ModelBatchInputs batch with voxelized lidar inputs and detection ground truth
         that the CenterPointDetectionModel can be run end to end on.
         """
         num_pillars = 12
@@ -168,8 +168,8 @@ class TestCenterPointDetectionModel(unittest.TestCase):
                 [[100], [200]], dtype=torch.int32, device=self.device
             ),
         )
-        return MultiTaskBatchInputs(
-            multi_task_gt_batch=MultiTaskGTBatch(
+        return ModelBatchInputs(
+            multi_task_gt_batch=ModelGTBatch(
                 point_cloud_gt_batch=None,
                 detection3d_gt_batch=detection3d_gt_batch,
                 image_gt_batch=None,

@@ -21,7 +21,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.geometry.cameras.base_images import BaseImages
@@ -106,7 +106,7 @@ class BaseCameraLidarGeometryTestCase(unittest.TestCase):
         with_point_cloud_data: bool = True,
         with_camera_image_data: bool = True,
         with_bboxes_3d: bool = True,
-    ) -> MultiTaskGTSample:
+    ) -> ModelGTSample:
         """Build a minimal sample holding the requested modalities and optional bboxes.
 
         Args:
@@ -115,9 +115,9 @@ class BaseCameraLidarGeometryTestCase(unittest.TestCase):
             with_bboxes_3d: Whether the sample holds 3D bounding boxes.
 
         Returns:
-            MultiTaskGTSample with the requested modalities.
+            ModelGTSample with the requested modalities.
         """
-        return MultiTaskGTSample(
+        return ModelGTSample(
             lidar_point_cloud_samples=None,
             image_samples=None,
             point_cloud_data=self.build_point_cloud_data() if with_point_cloud_data else None,

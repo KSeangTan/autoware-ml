@@ -38,7 +38,7 @@ def _trainer(sanity_checking: bool = False) -> MagicMock:
 
 
 def _batch(io_processing_time: float) -> MagicMock:
-    """Build a stand-in for MultiTaskBatchInputs carrying an IO timing."""
+    """Build a stand-in for ModelBatchInputs carrying an IO timing."""
     batch = MagicMock(spec=["multi_task_gt_batch"])
     batch.multi_task_gt_batch.io_processing_time = io_processing_time
     return batch

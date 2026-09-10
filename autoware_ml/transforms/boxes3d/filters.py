@@ -21,9 +21,7 @@ from typing import Mapping, Sequence, Tuple
 
 import torch
 
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import (
-    MultiTaskGTSample,
-)
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.geometry.points.base_points import BasePoints
 from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
@@ -39,7 +37,7 @@ class BBoxesLabelNameFilter(MultiTaskBaseTransform):
         super().__init__(probability=None)
         self.label_names_to_keep = label_names_to_keep
 
-    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Filter 3D bounding boxes by label names."""
         # This is checked in the _validate_required_keys()
         detection3d_gt_bboxes_3d: BaseBBoxes3D = multi_task_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
@@ -94,7 +92,7 @@ class BBoxesAttributeFilter(MultiTaskBaseTransform):
             label_name: set(attributes) for label_name, attributes in attributes_to_filter.items()
         }
 
-    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Filter out 3D bounding boxes carrying the configured attributes."""
         # This is checked in the _validate_required_keys()
         detection3d_gt_bboxes_3d: BaseBBoxes3D = multi_task_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
@@ -146,7 +144,7 @@ class BBoxesMinPointsFilter(MultiTaskBaseTransform):
         self.min_points = min_points
         self.bev_range = torch.tensor(bev_range, dtype=torch.float32)
 
-    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Filter 3D bounding boxes by label names."""
         # This is checked in the _validate_required_keys()
         detection3d_gt_bboxes_3d: BaseBBoxes3D = multi_task_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
@@ -190,7 +188,7 @@ class BBoxesBEVDistanceFilter(MultiTaskBaseTransform):
         super().__init__(probability=None)
         self.bev_range = torch.tensor(bev_range, dtype=torch.float32)
 
-    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Filter 3D bounding boxes by BEV distance."""
         # This is checked in the _validate_required_keys()
         detection3d_gt_bboxes_3d: BaseBBoxes3D = multi_task_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
@@ -232,7 +230,7 @@ class BBoxesPhysicalFilter(MultiTaskBaseTransform):
         super().__init__(probability=None)
         self.max_absolute_speed = max_absolute_speed
 
-    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Remove non-physical 3D bounding boxes."""
         # This is checked in the _validate_required_keys()
         detection3d_gt_bboxes_3d: BaseBBoxes3D = multi_task_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]

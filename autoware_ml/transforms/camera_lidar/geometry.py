@@ -47,10 +47,8 @@ from pydantic import BaseModel, ConfigDict
 import torch
 from torch import Tensor
 
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import (
-    MultiTaskGTSample,
-)
-from autoware_ml.datamodule.multi_task.dataclasses.transformation import LiDARTransformationSample
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+from autoware_ml.dataclasses.geometry.transformation import LiDARTransformationSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
 from autoware_ml.transforms.geometry3d import rotation_matrix
@@ -82,7 +80,7 @@ class RotationScaleTranslationData(BaseModel):
 
 
 def _validate_at_least_one_modality(
-    transform_name: str, multi_task_gt_sample: MultiTaskGTSample
+    transform_name: str, multi_task_gt_sample: ModelGTSample
 ) -> None:
     """Raise ``KeyError`` when the sample carries neither a point cloud nor camera data.
 
@@ -141,7 +139,7 @@ class GlobalRotScaleTrans(MultiTaskBaseTransform):
             else None
         )
 
-    def _validate_required_keys(self, multi_task_gt_sample: MultiTaskGTSample) -> None:
+    def _validate_required_keys(self, multi_task_gt_sample: ModelGTSample) -> None:
         """Raise ``KeyError`` when the sample carries neither a point cloud nor camera data."""
         super()._validate_required_keys(multi_task_gt_sample)
         _validate_at_least_one_modality(self.__class__.__name__, multi_task_gt_sample)
@@ -186,7 +184,7 @@ class GlobalRotScaleTrans(MultiTaskBaseTransform):
         )
         return lidar_transformation_sample, rotation_scale_translation_data
 
-    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Rotate, scale, and translate the available modalities and the bboxes."""
         # Sample rotation, scale, and translation parameters
         lidar_transformation_sample, rotation_scale_translation_data = self.sample_rot_scale_trans()
@@ -218,7 +216,7 @@ class GlobalRotScaleTrans(MultiTaskBaseTransform):
                 torch.linalg.inv(lidar_transformation_sample.transformation_matrix)
             )
 
-        # Create the composed transformation matrix in the MultiTaskGTSample if it exists
+        # Create the composed transformation matrix in the ModelGTSample if it exists
         if multi_task_gt_sample.lidar_transformation_sample is not None:
             lidar_transformation_sample = lidar_transformation_sample.create_composed_lidar_transformation_sample(
                 previous_lidar_transformation_sample=multi_task_gt_sample.lidar_transformation_sample
@@ -262,7 +260,7 @@ class GlobalBEVRandomFlip(MultiTaskBaseTransform):
         self.horizontal_flip_ratio = horizontal_flip_ratio
         self.vertical_flip_ratio = vertical_flip_ratio
 
-    def _validate_required_keys(self, multi_task_gt_sample: MultiTaskGTSample) -> None:
+    def _validate_required_keys(self, multi_task_gt_sample: ModelGTSample) -> None:
         """Raise ``KeyError`` when the sample carries neither a point cloud nor camera data."""
         super()._validate_required_keys(multi_task_gt_sample)
         _validate_at_least_one_modality(self.__class__.__name__, multi_task_gt_sample)
@@ -277,7 +275,7 @@ class GlobalBEVRandomFlip(MultiTaskBaseTransform):
 
     def apply_flip(
         self,
-        multi_task_gt_sample: MultiTaskGTSample,
+        multi_task_gt_sample: ModelGTSample,
         rotation_matrix: Float32[Tensor, "3 3"],
         bev_flip_direction: BEVDirection,
     ) -> Float32[Tensor, "3 3"]:
@@ -285,7 +283,7 @@ class GlobalBEVRandomFlip(MultiTaskBaseTransform):
         Apply the specified flip to the point cloud and bboxes, whichever are available.
 
         Args:
-            multi_task_gt_sample: The MultiTaskGTSample to apply the flip to.
+            multi_task_gt_sample: The ModelGTSample to apply the flip to.
             rotation_matrix: The rotation matrix accumulated by the previous flips.
             bev_flip_direction: The direction of the flip (horizontal (lateral) or vertical (longitudinal)).
 
@@ -317,7 +315,7 @@ class GlobalBEVRandomFlip(MultiTaskBaseTransform):
 
         return rotation_matrix
 
-    def transform(self, multi_task_gt_sample: MultiTaskGTSample) -> MultiTaskGTSample:
+    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Flip the available modalities and the bboxes along the sampled axes."""
         rotation_matrix = torch.eye(3, dtype=torch.float32)
         horizontal_flip, vertical_flip = self.sample_flip()
@@ -354,7 +352,7 @@ class GlobalBEVRandomFlip(MultiTaskBaseTransform):
                 torch.linalg.inv(lidar_transformation_sample.transformation_matrix)
             )
 
-        # Update the lidar transformation sample in the MultiTaskGTSample if it exists
+        # Update the lidar transformation sample in the ModelGTSample if it exists
         if multi_task_gt_sample.lidar_transformation_sample is not None:
             lidar_transformation_sample = lidar_transformation_sample.create_composed_lidar_transformation_sample(
                 previous_lidar_transformation_sample=multi_task_gt_sample.lidar_transformation_sample

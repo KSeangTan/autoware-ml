@@ -21,7 +21,7 @@ import unittest
 import numpy as np
 import torch
 
-from autoware_ml.datamodule.multi_task.dataclasses.multi_task_samples import MultiTaskGTSample
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.geometry.points.base_points import BasePoints
@@ -106,7 +106,7 @@ class BaseBBoxesFilterTestCase(unittest.TestCase):
         self,
         detection3d_gt_bboxes_3d: LidarBBoxes3D | None = None,
         point_cloud_data: LiDARPoints | None = None,
-    ) -> MultiTaskGTSample:
+    ) -> ModelGTSample:
         """Build a minimal sample holding only what the box filters read.
 
         Args:
@@ -114,9 +114,9 @@ class BaseBBoxesFilterTestCase(unittest.TestCase):
             point_cloud_data: The point cloud the point-count filter reads.
 
         Returns:
-            MultiTaskGTSample carrying the given bounding boxes and points.
+            ModelGTSample carrying the given bounding boxes and points.
         """
-        return MultiTaskGTSample(
+        return ModelGTSample(
             lidar_point_cloud_samples=None,
             image_samples=None,
             point_cloud_data=point_cloud_data,
@@ -125,11 +125,11 @@ class BaseBBoxesFilterTestCase(unittest.TestCase):
             segmentation3d_gt_sample=None,
         )
 
-    def build_two_bboxes_sample(self) -> MultiTaskGTSample:
+    def build_two_bboxes_sample(self) -> ModelGTSample:
         """Build the sample shared by the label name and BEV distance filter tests.
 
         Returns:
-            MultiTaskGTSample holding a car at the origin and a pedestrian ten metres ahead,
+            ModelGTSample holding a car at the origin and a pedestrian ten metres ahead,
             with seven and three annotated points respectively.
         """
         detection3d_gt_bboxes_3d = self.build_bboxes_3d(
@@ -153,7 +153,7 @@ class BaseBBoxesFilterTestCase(unittest.TestCase):
             point_cloud_data=point_cloud_data,
         )
 
-    def assert_bboxes_3d(self, multi_task_gt_sample: MultiTaskGTSample) -> BaseBBoxes3D:
+    def assert_bboxes_3d(self, multi_task_gt_sample: ModelGTSample) -> BaseBBoxes3D:
         """Assert the sample still carries bounding boxes, and return them.
 
         ``detection3d_gt_bboxes_3d`` is optional on the sample, so every dereference below
@@ -176,7 +176,7 @@ class BaseBBoxesFilterTestCase(unittest.TestCase):
         assert detection3d_gt_bboxes_3d is not None
         return detection3d_gt_bboxes_3d
 
-    def assert_point_cloud_data(self, multi_task_gt_sample: MultiTaskGTSample) -> BasePoints:
+    def assert_point_cloud_data(self, multi_task_gt_sample: ModelGTSample) -> BasePoints:
         """Assert the sample still carries its point cloud, and return it.
 
         The box filters only ever read the points, so a filter that leaves ``point_cloud_data``
@@ -264,11 +264,11 @@ class BBoxesLabelNameFilterTest(BaseBBoxesFilterTestCase):
 class BBoxesAttributeFilterTest(BaseBBoxesFilterTestCase):
     """Tests for BBoxesAttributeFilter."""
 
-    def build_attributed_sample(self) -> MultiTaskGTSample:
+    def build_attributed_sample(self) -> ModelGTSample:
         """Build a sample holding one parked, one moving, and one sitting bounding box.
 
         Returns:
-            MultiTaskGTSample whose bounding boxes each carry a single attribute.
+            ModelGTSample whose bounding boxes each carry a single attribute.
         """
         detection3d_gt_bboxes_3d = self.build_bboxes_3d(
             bbox_params=[
