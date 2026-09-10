@@ -50,12 +50,14 @@ class T4Detection3DTask(BaseDatasetTask):
             return None
 
         # Filter the dataset records dataframe to only include columns related to 3D bounding boxes
-        filtered_dataset_records_dataframe = dataset_records_dataframe.select(
-            [
-                DatasetTableSchema.BOXES_3D.name,
-                # Add other necessary columns for 3D detection as needed
-            ]
-        )
+        columns = [DatasetTableSchema.BOXES_3D.name]
+        # Older database caches predate the cone/barrier flag, so only keep it when present.
+        if (
+            DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name
+            in dataset_records_dataframe.columns
+        ):
+            columns.append(DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name)
+        filtered_dataset_records_dataframe = dataset_records_dataframe.select(columns)
         return filtered_dataset_records_dataframe
 
     def __str__(self) -> str:
@@ -143,7 +145,27 @@ class T4Detection3DTask(BaseDatasetTask):
             segmentation3d_gt_sample=None,
             image_samples=None,
             camera_image_data=None,
+            detection3d_traffic_cone_barrier_bbox_status=self._get_traffic_cone_barrier_bbox_status(
+                idx
+            ),
         )
+
+    def _get_traffic_cone_barrier_bbox_status(self, idx: int) -> bool | None:
+        """
+        Read whether traffic cones and barriers are annotated in the given record.
+
+        Args:
+          idx: Index of the specific record to be processed.
+
+        Returns:
+          bool | None: The flag, or None when the database does not carry it for this record.
+        """
+        assert self.dataset_records_dataframe is not None
+        column_name = DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name
+        if column_name not in self.dataset_records_dataframe.columns:
+            return None
+        status = self.dataset_records_dataframe.item(idx, column_name)
+        return None if status is None else bool(status)
 
     def log_dataset_info(self) -> None:
         """

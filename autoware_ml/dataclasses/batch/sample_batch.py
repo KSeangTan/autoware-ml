@@ -41,6 +41,11 @@ class ModelGTSample(NamedTuple):
     # Information about lidar transformation
     lidar_transformation_sample: LiDARTransformationSample | None = None
 
+    # Temporary per-sample flag telling whether traffic cones and barriers are annotated in the
+    # frame, so 3D detection can treat missing cone/barrier boxes as unlabeled rather than
+    # negatives. None when the dataset does not carry the flag.
+    detection3d_traffic_cone_barrier_bbox_status: bool | None = None
+
     # Seconds spent loading this sample and running it through the transform pipeline.
     # Assigned by the dataset once the pipeline has finished.
     io_processing_time: float = 0.0
@@ -156,15 +161,20 @@ class ModelGTBatch(NamedTuple):
             return None
 
         detection3d_gt_bboxes_3d = []
+        detection3d_traffic_cone_barrier_bbox_status = []
         for sample in gt_samples:
             if sample.detection3d_gt_bboxes_3d is None:
                 raise ValueError("All samples must have detection3d_gt_bboxes_3d for collating.")
 
             detection3d_gt_bboxes_3d.append(sample.detection3d_gt_bboxes_3d)
+            detection3d_traffic_cone_barrier_bbox_status.append(
+                sample.detection3d_traffic_cone_barrier_bbox_status
+            )
 
         detection3d_gt_batch = Detection3DGTBatch.collate_gt_samples(
             detection3d_gt_bboxes_3d=detection3d_gt_bboxes_3d,
             max_num_3d_gt_bboxes=max_num_3d_gt_bboxes,
+            detection3d_traffic_cone_barrier_bbox_status=detection3d_traffic_cone_barrier_bbox_status,
         )
         return detection3d_gt_batch
 

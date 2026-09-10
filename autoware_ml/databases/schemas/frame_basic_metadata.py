@@ -27,7 +27,7 @@ class FrameBasicMetadata(BaseModel):
       scenario_name: Scenario name.
       location: Location.
       vehicle_type: Vehicle type.
-      traffic_cone_barrier_status: Temporary boolean to indicate if traffic_cones/barriers are
+      traffic_cone_barrier_bbox_status: Temporary boolean to indicate if traffic_cones/barriers are
           annotated in a frame.
     """
 
@@ -40,4 +40,4 @@ class FrameBasicMetadata(BaseModel):
     scenario_name: str
     location: str | None
     vehicle_type: str | None
-    traffic_cone_barrier_status: bool | None
+    traffic_cone_barrier_bbox_status: bool | None

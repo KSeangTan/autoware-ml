@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import NamedTuple, Sequence
 
-from jaxtyping import Float32, Int32
+from jaxtyping import Bool, Float32, Int32
 from torch import Tensor
 import torch
 
@@ -31,6 +31,8 @@ class Detection3DGTBatch(NamedTuple):
         gt_bboxes_num_points: Number of points in each gt bbox, shape (B, M), where B is the
           batch size and M is the theoretically maximum number of bounding boxes.
           0 for invalid bboxes.
+        gt_traffic_cone_barrier_bbox_status: Whether traffic cones and barriers are annotated in each
+          sample, shape (B, ). None when the dataset does not carry the flag.
     """
 
     # (batch_size, maximum number of bboxes, num_Box3DFieldIndex)
@@ -44,10 +46,45 @@ class Detection3DGTBatch(NamedTuple):
     gt_bboxes_num_points: Int32[
         Tensor, "batch_size max_num_3d_gt_bboxes"
     ]  # (B, M), number of points in each gt bbox
+    # (batch_size, ), whether traffic cones/barriers are annotated in each sample
+    gt_traffic_cone_barrier_bbox_status: Bool[Tensor, " batch_size"] | None = None
+
+    @staticmethod
+    def collate_traffic_cone_barrier_bbox_status(
+        detection3d_traffic_cone_barrier_bbox_status: Sequence[bool | None],
+        device: torch.device,
+    ) -> Bool[Tensor, " batch_size"] | None:
+        """
+        Collate per-sample traffic cone/barrier annotation flags into one boolean tensor.
+
+        Args:
+          detection3d_traffic_cone_barrier_bbox_status: Flag of every sample in the batch. Either all
+            samples carry the flag or none of them does.
+          device: Device of the returned tensor.
+
+        Returns:
+          Bool[Tensor, " batch_size"] | None: One flag per sample, or None when no sample carries
+            the flag.
+
+        Raises:
+          ValueError: If only some samples carry the flag.
+        """
+        if all(status is None for status in detection3d_traffic_cone_barrier_bbox_status):
+            return None
+        if any(status is None for status in detection3d_traffic_cone_barrier_bbox_status):
+            raise ValueError(
+                "All samples must have detection3d_traffic_cone_barrier_bbox_status for collating, "
+                f"got {detection3d_traffic_cone_barrier_bbox_status}."
+            )
+        return torch.tensor(
+            detection3d_traffic_cone_barrier_bbox_status, dtype=torch.bool, device=device
+        )
 
     @staticmethod
     def collate_gt_samples(
-        detection3d_gt_bboxes_3d: Sequence[BaseBBoxes3D], max_num_3d_gt_bboxes: int
+        detection3d_gt_bboxes_3d: Sequence[BaseBBoxes3D],
+        max_num_3d_gt_bboxes: int,
+        detection3d_traffic_cone_barrier_bbox_status: Sequence[bool | None] | None = None,
     ) -> Detection3DGTBatch | None:
         """
         Collate a sequence of BaseBBoxes3D into a Detection3DGTBatch.
@@ -58,13 +95,28 @@ class Detection3DGTBatch(NamedTuple):
             for each sample in the batch. If a sample has more than this number of bounding boxes,
             only the first `max_num_3d_gt_bboxes` gt bboxes will be included in the batch,
             and the rest will be ignored.
+          detection3d_traffic_cone_barrier_bbox_status: Optional per-sample flag telling whether
+            traffic cones and barriers are annotated, aligned with ``detection3d_gt_bboxes_3d``.
 
         Returns:
           Detection3DGTBatch | None: Collated 3D detection GT batch or None if the input
             sequence is empty.
+
+        Raises:
+          ValueError: If the flags are given for only some of the samples, or their count does
+            not match the number of samples.
         """
         if len(detection3d_gt_bboxes_3d) == 0:
             return None
+
+        if detection3d_traffic_cone_barrier_bbox_status is not None and len(
+            detection3d_traffic_cone_barrier_bbox_status
+        ) != len(detection3d_gt_bboxes_3d):
+            raise ValueError(
+                "detection3d_traffic_cone_barrier_bbox_status must have one entry per sample, got "
+                f"{len(detection3d_traffic_cone_barrier_bbox_status)} entries for "
+                f"{len(detection3d_gt_bboxes_3d)} samples."
+            )
 
         num_bbox_params = len(Box3DFieldIndex)
 
@@ -112,11 +164,20 @@ class Detection3DGTBatch(NamedTuple):
             gt_labels_3d[i, num_bboxes:] = -1  # Assuming -1 is used to indicate invalid labels
             gt_valid_bboxes[i] = num_bboxes
 
+        gt_traffic_cone_barrier_bbox_status = (
+            Detection3DGTBatch.collate_traffic_cone_barrier_bbox_status(
+                detection3d_traffic_cone_barrier_bbox_status, device=torch_device
+            )
+            if detection3d_traffic_cone_barrier_bbox_status is not None
+            else None
+        )
+
         return Detection3DGTBatch(
             gt_bboxes_3d=gt_bboxes_3d,
             gt_labels_3d=gt_labels_3d,
             gt_valid_bboxes=gt_valid_bboxes,
             gt_bboxes_num_points=gt_bboxes_num_points,
+            gt_traffic_cone_barrier_bbox_status=gt_traffic_cone_barrier_bbox_status,
         )
 
     def to_device(self, device: torch.device) -> Detection3DGTBatch:
@@ -134,4 +195,7 @@ class Detection3DGTBatch(NamedTuple):
             gt_labels_3d=self.gt_labels_3d.to(device),
             gt_valid_bboxes=self.gt_valid_bboxes.to(device),
             gt_bboxes_num_points=self.gt_bboxes_num_points.to(device),
+            gt_traffic_cone_barrier_bbox_status=self.gt_traffic_cone_barrier_bbox_status.to(device)
+            if self.gt_traffic_cone_barrier_bbox_status is not None
+            else None,
         )

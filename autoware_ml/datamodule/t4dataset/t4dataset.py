@@ -97,8 +97,12 @@ class T4Dataset(BaseDataset):
         detection3d_gt_sample: ModelGTSample | None = data_samples.get(TaskType.DETECTION3D, None)
         if detection3d_gt_sample is not None:
             detection3d_gt_bboxes_3d = detection3d_gt_sample.detection3d_gt_bboxes_3d
+            detection3d_traffic_cone_barrier_bbox_status = (
+                detection3d_gt_sample.detection3d_traffic_cone_barrier_bbox_status
+            )
         else:
             detection3d_gt_bboxes_3d = None
+            detection3d_traffic_cone_barrier_bbox_status = None
 
         segmentation3d_multi_task_gt_sample: ModelGTSample | None = data_samples.get(
             TaskType.SEGMENTATION3D, None
@@ -116,6 +120,7 @@ class T4Dataset(BaseDataset):
             segmentation3d_gt_sample=segmentation3d_gt_sample,
             image_samples=None,
             camera_image_data=None,
+            detection3d_traffic_cone_barrier_bbox_status=detection3d_traffic_cone_barrier_bbox_status,
         )
 
     def _update_lidar_pointcloud_path(self, lidar_pointcloud_path: str) -> str:
