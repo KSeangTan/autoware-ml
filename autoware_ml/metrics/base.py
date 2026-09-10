@@ -184,11 +184,17 @@ class Metric(ABC, Generic[StateT]):
     whole-scene) by which the suite groups components and prefixes their keys.
     ``needs_ttc`` declares that the metric reads the per-box collision TTC, so
     a suite only runs its collision provider at stages where such a metric is
-    active (TTC is expensive and test-only in practice).
+    active (TTC is expensive and test-only in practice). ``ttc_score_floor`` is
+    the lowest prediction score whose TTC the metric ever reads: propagating a
+    detection head's low-score tail costs more than everything else in the suite
+    together, and a metric that only counts confident predictions does not need
+    it. The default reads every prediction, so a metric that does not think
+    about the floor stays correct.
     """
 
     required_eval_keys: tuple[str, ...] = ()
     needs_ttc: bool = False
+    ttc_score_floor: float = 0.0
 
     def __init__(
         self,
@@ -446,6 +452,38 @@ class MetricSuite(torchmetrics.Metric, ABC, Generic[StateT]):
         self.region_frames_seen[index] += 1
         if available:
             self.region_frames_covered[index] += 1
+
+    def _frame_filter_context(
+        self, index: int, metric_filter: MetricFilter, frame: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """The filter's context read out of one ``seg_frames`` entry.
+
+        A filter's per-frame keys (ego pose, scene token) live inside the frame
+        entry rather than at the eval-output top level, so they are checked here,
+        per frame. Coverage is tallied for the filter at ``index`` either way, so
+        a slice reported over fewer scenes is never silent.
+
+        Args:
+            index: Position of the filter in the registered component filters.
+            metric_filter: The filter asking for its context.
+            frame: One ``seg_frames`` entry.
+
+        Returns:
+            The context, or ``None`` for a scene the filter cannot cover.
+
+        Raises:
+            ValueError: If the frame lacks a key the filter declared.
+        """
+        missing = [key for key in metric_filter.required_eval_keys if key not in frame]
+        if missing:
+            raise ValueError(
+                f"Filter {metric_filter.name!r} needs {missing} inside each seg_frames "
+                "entry, the model's build_eval_output must add them."
+            )
+        context = {key: frame[key] for key in metric_filter.required_eval_keys}
+        available = metric_filter.available(context)
+        self._note_frame_coverage(index, available)
+        return context if available else None
 
     def _log_coverage(self) -> None:
         """Log per-filter frame coverage once per epoch.
