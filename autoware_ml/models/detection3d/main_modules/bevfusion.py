@@ -91,6 +91,7 @@ class _BEVFusionExportWrapperBase(nn.Module):
         Args:
             voxels: Voxel features.
             coors: Voxel coordinates in ``(z, y, x)`` order without batch column.
+                Must be in this order to align with autoware.
             num_points_per_voxel: Number of points in each voxel.
 
         Returns:
@@ -138,6 +139,7 @@ class _BEVFusionLidarExportWrapper(_BEVFusionExportWrapperBase):
         Args:
             voxels: Voxel features.
             coors: Voxel coordinates in ``(z, y, x)`` order without batch column.
+                Must be in this order to align with autoware.
             num_points_per_voxel: Number of points in each voxel.
 
         Returns:
