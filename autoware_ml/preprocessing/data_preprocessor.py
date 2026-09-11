@@ -29,7 +29,7 @@ class DataPreprocessor:
         Returns:
             ModelBatchInputs: The batch of data after running the list of preprocessor_modules.
         """
-        # Build a MultiTaskFeatures instance from the input batch
+        # Build a ModelBatchInputs instance from the input batch
         multi_task_batch_inputs = ModelBatchInputs(
             multi_task_gt_batch=multi_task_gt_batch,
             voxels_data=None,  # Placeholder for voxelization
