@@ -517,9 +517,11 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
 
         if self.training:
             resize = float(np.random.uniform(*resize_range))
-            bottom_crop_ratio = float(np.random.uniform(*self.bottom_crop_ratio_range))
+            bottom_crop_ratio = float(
+                np.random.uniform(self.bottom_crop_ratio_range[0], self.bottom_crop_ratio_range[1])
+            )
             horizontal_flip = self.random_horizontal_flip and bool(np.random.randint(2))
-            rotation = float(np.random.uniform(*self.rotation_range))
+            rotation = float(np.random.uniform(self.rotation_range[0], self.rotation_range[1]))
         else:
             resize = float(np.mean(resize_range))
             bottom_crop_ratio = float(np.mean(self.bottom_crop_ratio_range))
