@@ -115,13 +115,13 @@ model:
       out_channels: [128, 256]
       layer_nums: [5, 5]
       layer_strides: [1, 2]
-      activation_checkpointing: true
+      activation_checkpointing: false
     pts_neck:
       _target_: autoware_ml.models.detection3d.necks.second_fpn.SECONDFPN
       in_channels: [128, 256]
       out_channels: [256, 256]
       upsample_strides: [1, 2]
-      activation_checkpointing: true
+      activation_checkpointing: false
     fuser: null
 
   # Camera branch is disabled by default; camera-lidar experiments configure it together with a
