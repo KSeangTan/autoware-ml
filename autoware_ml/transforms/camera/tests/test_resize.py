@@ -14,6 +14,7 @@
 
 """Unit tests for the camera image resize, crop, and padding transforms."""
 
+from typing import Tuple
 import unittest
 
 from jaxtyping import Float32
@@ -348,10 +349,10 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
         self.assert_augmentation_matrices_match_intrinsics(camera_image_data)
         self.assert_projection_is_consistent(camera_image_data)
 
-    def test_scalar_resize_range_fits_the_target_size(self) -> None:
-        """Test that a scalar resize range is read as a tolerance around a fitting resize."""
+    def test_scalar_resize_range_covers_the_target_size(self) -> None:
+        """Test that a scalar resize range is read as a tolerance around a covering resize."""
         transform = ResizeCropFlipRotImage(
-            target_size=[self.image_height // 2, self.image_width // 2],
+            target_size=[self.image_height // 2, self.image_width // 4],
             resize_range=0.0,
             bottom_crop_ratio_range=[0.0, 0.0],
             training=True,
@@ -359,21 +360,72 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
 
         parameters = transform.sample_augmentation(self.image_height, self.image_width)
 
-        self.assertAlmostEqual(parameters.resize, 0.5)
+        # The target is narrower than the source: the resize covers the target height and
+        # the excess width is cropped away instead of being zero-filled.
+        self.assertEqual(parameters.resized_height, self.image_height // 2)
+        self.assertEqual(parameters.resized_width, self.image_width // 2)
+        self.assertEqual(parameters.crop_top, 0)
+        self.assertGreaterEqual(parameters.crop_left, 0)
+        self.assertLessEqual(parameters.crop_left, self.image_width // 2 - self.image_width // 4)
 
-    def test_bottom_crop_keeps_the_bottom_of_the_image(self) -> None:
-        """Test that the crop box is taken from the bottom of the resized image."""
+    def test_crop_is_placed_at_random_along_the_width_in_training(self) -> None:
+        """Test that the crop box slides along the width in training and is centered otherwise."""
+        np.random.seed(0)
+        target_width = self.image_width // 2
+        training_transform = ResizeCropFlipRotImage(
+            target_size=[self.image_height, target_width],
+            resize_range=[1.0, 1.0],
+            bottom_crop_ratio_range=[0.0, 0.0],
+            training=True,
+        )
+        validation_transform = ResizeCropFlipRotImage(
+            target_size=[self.image_height, target_width],
+            resize_range=[1.0, 1.0],
+            bottom_crop_ratio_range=[0.0, 0.0],
+            training=False,
+        )
+
+        crop_lefts = {
+            training_transform.sample_augmentation(self.image_height, self.image_width).crop_left
+            for _ in range(20)
+        }
+        validation_parameters = validation_transform.sample_augmentation(
+            self.image_height, self.image_width
+        )
+
+        self.assertGreater(len(crop_lefts), 1)
+        self.assertTrue(
+            all(0 <= crop_left <= self.image_width - target_width for crop_left in crop_lefts)
+        )
+        self.assertEqual(validation_parameters.crop_left, (self.image_width - target_width) // 2)
+
+    def test_bottom_crop_ratio_drops_the_bottom_of_the_image(self) -> None:
+        """Test that the bottom crop ratio lifts the crop box and zero-fills above the image."""
+        sample = self.build_multi_task_gt_sample()
+        assert sample.camera_image_data is not None
+        image = sample.camera_image_data.images[0]
+        half_height = self.image_height // 2
+
         transform = ResizeCropFlipRotImage(
             target_size=[self.image_height, self.image_width],
             resize_range=[1.0, 1.0],
             bottom_crop_ratio_range=[0.5, 0.5],
             training=False,
         )
-
         parameters = transform.sample_augmentation(self.image_height, self.image_width)
+        augmented_image, image_transform = transform.apply_augmentation(image, parameters)
 
-        self.assertEqual(parameters.crop_height, self.image_height // 2)
-        self.assertEqual(parameters.crop_top, self.image_height - self.image_height // 2)
+        # The bottom half of the image is dropped, the top half lands at the bottom of the
+        # crop box and the rows above the image are zero-filled.
+        self.assertEqual(parameters.crop_top, -half_height)
+        self.assertEqual(parameters.crop_left, 0)
+        self.assertTrue(
+            torch.equal(augmented_image[:, :half_height], torch.zeros_like(image[:, :half_height]))
+        )
+        self.assertTrue(torch.allclose(augmented_image[:, half_height:], image[:, :half_height]))
+        shifted_pixel = image_transform @ torch.tensor([12.0, 8.0, 1.0])
+        self.assertAlmostEqual(float(shifted_pixel[0]), 12.0)
+        self.assertAlmostEqual(float(shifted_pixel[1]), 8.0 + half_height)
 
     def test_horizontal_flip_matches_the_intrinsics(self) -> None:
         """Test that a flipped image is described by the flipped augmented intrinsics."""
@@ -439,6 +491,89 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
         intrinsics = output.camera_image_data.augmented_camera_intrinsics
         self.assertFalse(torch.allclose(intrinsics[0], intrinsics[1]))
         self.assert_projection_is_consistent(output.camera_image_data)
+
+    @staticmethod
+    def intensity_centroid(
+        image: Float32[Tensor, "num_channels height width"],
+    ) -> Tuple[float, float]:
+        """Locate the intensity-weighted centroid of an image in continuous pixel coordinates.
+
+        Pixel ``(column, row)`` covers ``[column, column + 1) x [row, row + 1)``, the
+        convention the resize follows, so its center sits at ``(column + 0.5, row + 0.5)``.
+
+        Args:
+            image: Image whose first channel holds the intensities.
+
+        Returns:
+            The centroid as ``(x, y)``.
+        """
+        weights = image[0]
+        rows = torch.arange(weights.shape[0], dtype=torch.float32) + 0.5
+        columns = torch.arange(weights.shape[1], dtype=torch.float32) + 0.5
+        total = float(weights.sum())
+        return (
+            float((weights.sum(dim=0) * columns).sum() / total),
+            float((weights.sum(dim=1) * rows).sum() / total),
+        )
+
+    def test_image_transform_matches_pixels_for_a_mismatched_aspect_ratio(self) -> None:
+        """Test that the image transform describes the pixel mapping across aspect ratios.
+
+        Regression test: with a source aspect ratio different from the target one, a hidden
+        second resize used to stretch the pixels without entering the transform,
+        desynchronizing the augmented intrinsics from the image.
+        """
+        source_height, source_width = 930, 1440
+        image = torch.zeros((3, source_height, source_width), dtype=torch.float32)
+        # A block whose center sits at (720, 465) in continuous pixel coordinates.
+        image[:, 450:480, 705:735] = 1.0
+        transform = ResizeCropFlipRotImage(
+            target_size=[240, 320],
+            resize_range=0.02,
+            bottom_crop_ratio_range=[0.0, 0.0],
+            training=False,
+        )
+
+        parameters = transform.sample_augmentation(source_height, source_width)
+        augmented_image, image_transform = transform.apply_augmentation(image, parameters)
+
+        self.assertEqual(augmented_image.shape, (3, 240, 320))
+        # The resize covers the target height, the excess width is cropped symmetrically.
+        self.assertEqual((parameters.resized_height, parameters.resized_width), (240, 372))
+        self.assertEqual((parameters.crop_top, parameters.crop_left), (0, 26))
+        predicted = image_transform @ torch.tensor([720.0, 465.0, 1.0])
+        centroid_x, centroid_y = self.intensity_centroid(augmented_image)
+        self.assertAlmostEqual(centroid_x, float(predicted[0]), delta=0.05)
+        self.assertAlmostEqual(centroid_y, float(predicted[1]), delta=0.05)
+
+    def test_image_transform_holds_the_scale_of_the_whole_pixel_resize(self) -> None:
+        """Test that the transform scale is the one of the rounded resized size.
+
+        Regression test: ``source * resize`` is rounded to whole pixels before resizing, so
+        the effective scale along each axis is ``resized / source`` rather than ``resize``.
+        """
+        source_height, source_width = 930, 1440
+        image = torch.zeros((3, source_height, source_width), dtype=torch.float32)
+        # A block whose center sits at (1300, 465), near the edge of the crop box.
+        image[:, 450:480, 1285:1315] = 1.0
+        transform = ResizeCropFlipRotImage(
+            target_size=[240, 320],
+            # 1440 * 0.2583 = 371.95, rounded to 372 whole pixels.
+            resize_range=[0.2583, 0.2583],
+            bottom_crop_ratio_range=[0.0, 0.0],
+            training=False,
+        )
+
+        parameters = transform.sample_augmentation(source_height, source_width)
+        augmented_image, image_transform = transform.apply_augmentation(image, parameters)
+
+        self.assertEqual(parameters.resized_width, 372)
+        self.assertAlmostEqual(float(image_transform[0, 0]) * source_width, 372.0, places=3)
+        self.assertAlmostEqual(float(image_transform[1, 1]) * source_height, 240.0, places=3)
+        predicted = image_transform @ torch.tensor([1300.0, 465.0, 1.0])
+        centroid_x, centroid_y = self.intensity_centroid(augmented_image)
+        self.assertAlmostEqual(centroid_x, float(predicted[0]), delta=0.05)
+        self.assertAlmostEqual(centroid_y, float(predicted[1]), delta=0.05)
 
 
 class TestImageAugmentationMatrices(CameraImageDataTestCase):

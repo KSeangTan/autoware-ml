@@ -14,6 +14,7 @@ import torch
 from scipy.optimize import linear_sum_assignment
 
 from autoware_ml.models.detection3d.task_modules.match_costs import (
+    BBox3DL1Cost,
     BBoxBEVL1Cost,
     ClassificationCost,
     IoU3DCost,
@@ -107,7 +108,7 @@ class HungarianAssigner3D:
     """
 
     cls_cost: ClassificationCost
-    reg_cost: BBoxBEVL1Cost
+    reg_cost: BBoxBEVL1Cost | BBox3DL1Cost
     iou_cost: IoU3DCost
     point_cloud_range: Sequence[float]
 

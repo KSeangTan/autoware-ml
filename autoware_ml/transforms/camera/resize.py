@@ -166,13 +166,13 @@ class ImageSpaceTransform(MultiTaskBaseTransform):
 class ImageAugmentationParameters(NamedTuple):
     """Resize, crop, flip, and rotation parameters sampled for a single camera image."""
 
-    # Factor the source image is resized by before it is cropped.
-    resize: float
-    # Crop box in the resized image, in pixels.
+    # Size in whole pixels the source image is resized to before it is cropped.
+    resized_height: int
+    resized_width: int
+    # Top-left corner, in pixels of the resized image, of the crop box sized as the target.
+    # The box may extend past the resized image, the pixels falling outside are zero-filled.
     crop_top: int
     crop_left: int
-    crop_height: int
-    crop_width: int
     # Whether the crop is flipped along the image width.
     horizontal_flip: bool
     # Counter-clockwise rotation angle in degrees applied about the image center.
@@ -396,7 +396,7 @@ class PadMultiViewImage(ImageSpaceTransform):
         )
         return multi_task_gt_sample._replace(camera_image_data=padded_camera_image_data)
 
-    def resolve_padded_size(self, height: int, width: int) -> Tuple[int, int]:
+    def resolve_padded_size(self, height: int, width: int) -> Tuple[int, ...]:
         """Resolve the size the images are padded to.
 
         Args:
@@ -418,9 +418,12 @@ class PadMultiViewImage(ImageSpaceTransform):
 class ResizeCropFlipRotImage(ImageSpaceTransform):
     """Resize, crop, flip, and rotate every camera image to the target size.
 
-    The augmentation is sampled independently per camera. During validation the sampling
-    is replaced by the mean of every configured range and neither flip nor rotation is
-    applied, so the transform is deterministic.
+    The source image is resized once, then a crop box sized as the target is cut out of it,
+    so the pixels are never stretched a second time and the image transform describes the
+    remapping exactly. The augmentation is sampled independently per camera. During
+    validation the sampling is replaced by the mean of every configured range, the crop is
+    centered along the width, and neither flip nor rotation is applied, so the transform is
+    deterministic.
     """
 
     _required_keys = ["camera_image_data"]
@@ -439,9 +442,10 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
         Args:
             target_size: Output image size ``[height, width]``.
             resize_range: Minimum and maximum resize factors. A single number is read as a
-                tolerance around the factor fitting the source image into `target_size`.
-            bottom_crop_ratio_range: Minimum and maximum fraction of `target_size` cropped
-                away from the top of the image, keeping the bottom of the field of view.
+                tolerance around the factor covering `target_size` with the source image.
+            bottom_crop_ratio_range: Minimum and maximum fraction of the resized image
+                height dropped at its bottom, where the ego vehicle appears. The crop box is
+                lifted by that amount and zero-filled above the top of the resized image.
             training: Whether to sample stochastic augmentation parameters.
             random_horizontal_flip: Whether the images can be flipped along their width.
             rotation_range: Minimum and maximum in-plane rotation in degrees, None to
@@ -495,15 +499,19 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
             source_width: Width of the image before the augmentation.
 
         Returns:
-            Resize factor, crop box, flip, and rotation applied to the image.
+            Resized size, crop box, flip, and rotation applied to the image.
         """
         target_height, target_width = self.target_size
 
         if isinstance(self.resize_range, (int, float)):
-            # A single number is a tolerance around the factor fitting the source image
-            # into the target size.
-            fitting_resize = min(target_height / source_height, target_width / source_width)
-            resize_range = (fitting_resize - self.resize_range, fitting_resize + self.resize_range)
+            # A single number is a tolerance around the factor covering the target size.
+            # The covering factor (max, not min) is used so the resized image spans the
+            # crop box: a smaller factor would leave zero-filled bands in the crop.
+            covering_resize = max(target_height / source_height, target_width / source_width)
+            resize_range = (
+                covering_resize - self.resize_range,
+                covering_resize + self.resize_range,
+            )
         else:
             resize_range = (self.resize_range[0], self.resize_range[1])
 
@@ -518,18 +526,23 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
             horizontal_flip = False
             rotation = 0.0
 
-        resized_height = int(source_height * resize)
-        resized_width = int(source_width * resize)
-        # The crop keeps the bottom of the resized image, where the road is, and is
-        # centered along the image width.
-        crop_height = int((1.0 - bottom_crop_ratio) * target_height)
-        crop_width = target_width
+        # The resized size is rounded to whole pixels, the image transform is then derived
+        # from it rather than from `resize` so it holds the scale actually applied.
+        resized_height = int(round(source_height * resize))
+        resized_width = int(round(source_width * resize))
+        # The bottom edge of the crop box sits `bottom_crop_ratio` of the resized height
+        # above the bottom of the resized image, dropping the ego vehicle and keeping the
+        # road. Along the width the box is placed at random in training, centered otherwise.
+        crop_top = int((1.0 - bottom_crop_ratio) * resized_height) - target_height
+        max_crop_left = max(0, resized_width - target_width)
+        crop_left = (
+            int(np.random.uniform(0, max_crop_left)) if self.training else max_crop_left // 2
+        )
         return ImageAugmentationParameters(
-            resize=resize,
-            crop_top=max(0, resized_height - crop_height),
-            crop_left=max(0, (resized_width - crop_width) // 2),
-            crop_height=crop_height,
-            crop_width=crop_width,
+            resized_height=resized_height,
+            resized_width=resized_width,
+            crop_top=crop_top,
+            crop_left=crop_left,
             horizontal_flip=horizontal_flip,
             rotation=rotation,
         )
@@ -553,30 +566,21 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
         target_height, target_width = self.target_size
 
         resized = v2.functional.resize(
-            image,
-            [int(source_height * parameters.resize), int(source_width * parameters.resize)],
-            antialias=True,
+            image, [parameters.resized_height, parameters.resized_width], antialias=True
         )
         # Pixels of the crop box falling outside of the resized image are filled with zeros,
-        # so the crop always holds the number of pixels the image transform accounts for.
-        cropped = v2.functional.crop(
-            resized,
-            parameters.crop_top,
-            parameters.crop_left,
-            parameters.crop_height,
-            parameters.crop_width,
+        # so the crop always has the target size without a second resize.
+        augmented = v2.functional.crop(
+            resized, parameters.crop_top, parameters.crop_left, target_height, target_width
         )
-        augmented = v2.functional.resize(cropped, [target_height, target_width], antialias=True)
 
-        # Resize the source image, shift the crop box onto the image origin, then resize
-        # the crop to the target size.
-        scale_x = parameters.resize * target_width / parameters.crop_width
-        scale_y = parameters.resize * target_height / parameters.crop_height
+        # Scale the source image onto the resized one, then shift the crop box onto the
+        # image origin. The scale is the one of the whole-pixel resized size.
         image_transform = self.image_scale_and_translation_matrix(
-            scale_x=scale_x,
-            scale_y=scale_y,
-            translation_x=-parameters.crop_left * target_width / parameters.crop_width,
-            translation_y=-parameters.crop_top * target_height / parameters.crop_height,
+            scale_x=parameters.resized_width / source_width,
+            scale_y=parameters.resized_height / source_height,
+            translation_x=-parameters.crop_left,
+            translation_y=-parameters.crop_top,
         )
 
         if parameters.horizontal_flip:
