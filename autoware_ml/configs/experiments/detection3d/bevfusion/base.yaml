@@ -29,7 +29,9 @@ data_preprocessor:
       max_num_points: ${max_num_points}
       max_voxels: ${max_voxels}
       eval_max_voxels: ${eval_max_voxels}
-      voxelization_z_order_first: false
+      # For bevfusion, it must be [z, y, x] instead of [x, y, z] to align with the settings in
+      # autoware
+      voxelization_z_order_first: true
 
 trainer:
   max_epochs: ???

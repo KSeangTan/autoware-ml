@@ -90,7 +90,7 @@ class _BEVFusionExportWrapperBase(nn.Module):
 
         Args:
             voxels: Voxel features.
-            coors: Voxel coordinates in ``(x, y, z)`` order without batch column.
+            coors: Voxel coordinates in ``(z, y, x)`` order without batch column.
             num_points_per_voxel: Number of points in each voxel.
 
         Returns:
@@ -137,7 +137,7 @@ class _BEVFusionLidarExportWrapper(_BEVFusionExportWrapperBase):
 
         Args:
             voxels: Voxel features.
-            coors: Voxel coordinates in ``(x, y, z)`` order without batch column.
+            coors: Voxel coordinates in ``(z, y, x)`` order without batch column.
             num_points_per_voxel: Number of points in each voxel.
 
         Returns:
@@ -587,8 +587,8 @@ class BEVFusionDetectionModel(ModuleBaseModel):
         """Extract single-sample voxel export inputs in the runtime layout.
 
         The exported main body is a single-sample graph, so only voxels of the
-        first batch sample are kept. ``VoxelsData`` already stores coordinates
-        in the runtime ``(x, y, z)`` layout without a batch column.
+        first batch sample are kept. Make sure ``VoxelsData`` already stores coordinates
+        in the runtime ``(z, y, x)`` layout without a batch column.
 
         Args:
             multi_task_batch_inputs: Batched model inputs used to derive export tensors.
