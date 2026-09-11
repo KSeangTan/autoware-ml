@@ -309,6 +309,9 @@ class TransFusionDetectionModel(ModuleBaseModel):
             gt_bboxes_3d=detection3d_gt_batch.gt_bboxes_3d,
             gt_labels_3d=detection3d_gt_batch.gt_labels_3d,
             gt_valid_bboxes=detection3d_gt_batch.gt_valid_bboxes,
+            gt_traffic_cone_barrier_bbox_status=(
+                detection3d_gt_batch.gt_traffic_cone_barrier_bbox_status
+            ),
         )  # type: ignore[return-value]
 
     def decode_outputs(self, outputs: ModelOutputs) -> ModelPredictions:

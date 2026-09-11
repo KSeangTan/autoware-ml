@@ -445,16 +445,15 @@ class BEVFusionDetectionModel(ModuleBaseModel):
                 "ModelOutputs must contain detection3d_head_outputs for CenterPoint compute_metrics pass."
             )
 
-        gt_bboxes_3d = multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch.gt_bboxes_3d
-        gt_labels_3d = multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch.gt_labels_3d
-        gt_valid_bboxes = (
-            multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch.gt_valid_bboxes
-        )
+        detection3d_gt_batch = multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch
         return self.bbox_head.loss(
             outputs=multi_task_outputs.detection3d_head_outputs,
-            gt_bboxes_3d=gt_bboxes_3d,
-            gt_labels_3d=gt_labels_3d,
-            gt_valid_bboxes=gt_valid_bboxes,
+            gt_bboxes_3d=detection3d_gt_batch.gt_bboxes_3d,
+            gt_labels_3d=detection3d_gt_batch.gt_labels_3d,
+            gt_valid_bboxes=detection3d_gt_batch.gt_valid_bboxes,
+            gt_traffic_cone_barrier_bbox_status=(
+                detection3d_gt_batch.gt_traffic_cone_barrier_bbox_status
+            ),
         )  # type: ignore[return-value]
 
     def decode_outputs(self, outputs: ModelOutputs) -> ModelPredictions:

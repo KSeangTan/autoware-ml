@@ -98,7 +98,8 @@ class LayerTargets(NamedTuple):
 
     Args:
         labels: Target class labels, where num_classes marks a negative (unmatched) proposal.
-        label_weights: Per-proposal classification weights.
+        label_weights: Per-proposal, per-class classification weights. Negatives carry their
+            sample's class weights, positives a weight of one for every class.
         bbox_targets: Encoded box regression targets, zero for negatives.
         bbox_weights: Per-proposal box regression weights, one for positives and zero elsewhere.
         num_pos: Number of proposals this layer matched to a real gt box.
@@ -107,7 +108,7 @@ class LayerTargets(NamedTuple):
     """
 
     labels: Int64[torch.Tensor, "batch_size num_proposals"]
-    label_weights: Float32[torch.Tensor, "batch_size num_proposals"]
+    label_weights: Float32[torch.Tensor, "batch_size num_proposals num_classes"]
     bbox_targets: Float32[torch.Tensor, "batch_size num_proposals code_size"]
     bbox_weights: Float32[torch.Tensor, "batch_size num_proposals code_size"]
     num_pos: int
@@ -228,6 +229,7 @@ class TransFusionHead(nn.Module):
         norm_eps: float = 1e-3,
         norm_momentum: float = 0.01,
         use_bf16_cross_attention: bool = False,
+        partial_ignore_labels: Sequence[str] | None = None,
     ) -> None:
         """Initialize the TransFusion detection head.
 
@@ -285,6 +287,11 @@ class TransFusionHead(nn.Module):
                 (shared block, dense heatmap head, prediction branches).
             use_bf16_cross_attention: Whether export emits fusion-ready attention and uses bf16 for
                 the long cross-attention core. Requires ``deploy.onnx.precision=fp16``.
+            partial_ignore_labels: Class names whose annotations are missing from some frames,
+                currently the traffic cones and barriers flagged by
+                ``gt_traffic_cone_barrier_bbox_status``. In a frame flagged as not annotated
+                for them, their dense heatmap loss is skipped and the negative queries are not
+                pushed away from them, so the head is not taught that they are absent.
         """
         super().__init__()
         self.num_proposals = num_proposals
@@ -322,6 +329,11 @@ class TransFusionHead(nn.Module):
         self.nms_type = nms_type
         self.dense_heatmap_pooling_class_ids = self._resolve_class_ids(
             dense_heatmap_pooling_class_names
+        )
+        self.partial_ignore_class_ids = (
+            self._resolve_class_ids(partial_ignore_labels)
+            if partial_ignore_labels is not None
+            else None
         )
         self.nms_groups = self._resolve_nms_groups(nms_group_configs)
         # Assign score_threshold_groups
@@ -1028,13 +1040,19 @@ class TransFusionHead(nn.Module):
         gt_labels_3d: Float32[torch.Tensor, "batch_size max_num_gt_bboxes"],
         gt_valid_bboxes: Int32[torch.Tensor, " batch_size"],
         feature_map_size: tuple[int, int],
+        gt_traffic_cone_barrier_bbox_status: Bool[torch.Tensor, " batch_size"] | None = None,
     ) -> TransFusionHeadTargets:
         """Build TransFusion training targets.
 
         Args:
-            gt_boxes: Ground-truth boxes for each batch element.
-            gt_labels: Ground-truth labels for each batch element.
             outputs: Raw prediction tensors produced by the head.
+            gt_bboxes_3d: Ground-truth boxes for each batch element.
+            gt_labels_3d: Ground-truth labels for each batch element.
+            gt_valid_bboxes: Number of real boxes in each batch element.
+            feature_map_size: Dense heatmap height and width.
+            gt_traffic_cone_barrier_bbox_status: Per-sample flag telling whether traffic cones
+                and barriers are annotated, None when the dataset does not carry it. See
+                `_build_class_weights`.
 
         Returns:
             Structured training targets for classification, boxes, and heatmaps.
@@ -1043,6 +1061,11 @@ class TransFusionHead(nn.Module):
         device = outputs.dense_heatmaps.device
         gt_labels_3d = gt_labels_3d.to(device=device, dtype=torch.long)
         gt_valid_bboxes = gt_valid_bboxes.to(device=device)
+        class_weights = self._build_class_weights(
+            batch_size=batch_size,
+            gt_traffic_cone_barrier_bbox_status=gt_traffic_cone_barrier_bbox_status,
+            device=device,
+        )
         dense_heatmap_targets = self._build_dense_heatmap_targets(
             gt_bboxes_3d=gt_bboxes_3d,
             gt_labels_3d=gt_labels_3d,
@@ -1099,6 +1122,7 @@ class TransFusionHead(nn.Module):
                     gt_labels_3d=gt_labels_3d,
                     encoded_gt_bboxes=encoded_gt_bboxes,
                     valid_masks=valid_masks,
+                    class_weights=class_weights,
                 )
             )
 
@@ -1113,7 +1137,47 @@ class TransFusionHead(nn.Module):
             bbox_weights=torch.cat([layer.bbox_weights for layer in layer_targets], dim=1),
             num_pos=num_pos,
             matched_iou=matched_iou_sum / max(num_pos, 1),
+            class_weights=class_weights,
         )
+
+    def _build_class_weights(
+        self,
+        batch_size: int,
+        gt_traffic_cone_barrier_bbox_status: Bool[torch.Tensor, " batch_size"] | None,
+        device: torch.device,
+    ) -> Float32[torch.Tensor, "batch_size num_classes"]:
+        """
+        Build the per-sample class weights dropping the classes a sample is not annotated for.
+
+        A frame flagged without traffic cone and barrier annotations may still contain them, so
+        the head must not learn that they are absent: the partially ignored classes get a zero
+        weight in that sample, which silences their dense heatmap loss and stops the negative
+        queries from being pushed away from them.
+
+        Args:
+            batch_size: Number of samples in the batch.
+            gt_traffic_cone_barrier_bbox_status: Per-sample flag telling whether traffic cones and
+                barriers are annotated, None when the dataset does not carry it.
+            device: Device of the weights.
+
+        Returns:
+            Weights of one, except zero for the partially ignored classes of the samples flagged
+            as not annotated for them.
+        """
+        class_weights = torch.ones(
+            (batch_size, self.num_classes), dtype=torch.float32, device=device
+        )
+        if self.partial_ignore_class_ids is None or gt_traffic_cone_barrier_bbox_status is None:
+            return class_weights
+
+        # (batch_size,) samples missing the annotations.
+        unannotated_masks = ~gt_traffic_cone_barrier_bbox_status.to(device=device, dtype=torch.bool)
+        # (num_classes,) classes those annotations cover.
+        ignored_class_masks = torch.zeros(self.num_classes, dtype=torch.bool, device=device)
+        ignored_class_masks[list(self.partial_ignore_class_ids)] = True
+        # (batch_size, 1) & (1, num_classes) -> (batch_size, num_classes)
+        class_weights[unannotated_masks.unsqueeze(1) & ignored_class_masks.unsqueeze(0)] = 0.0
+        return class_weights
 
     def _build_layer_targets(
         self,
@@ -1123,6 +1187,7 @@ class TransFusionHead(nn.Module):
         gt_labels_3d: Int64[torch.Tensor, "batch_size max_num_gt_bboxes"],
         encoded_gt_bboxes: Float32[torch.Tensor, "batch_size max_num_gt_bboxes code_size"],
         valid_masks: Bool[torch.Tensor, "batch_size max_num_gt_bboxes"],
+        class_weights: Float32[torch.Tensor, "batch_size num_classes"],
     ) -> LayerTargets:
         """
         Assign one decoder layer's proposals to ground truth and encode that layer's targets.
@@ -1140,6 +1205,8 @@ class TransFusionHead(nn.Module):
             encoded_gt_bboxes: Ground-truth boxes already encoded into regression targets. Passed
                 in rather than encoded here because it does not vary across decoder layers.
             valid_masks: Mask indicating which padded gt entries are real boxes.
+            class_weights: Per-sample class weights, zero for the classes a sample is not
+                annotated for. They become the classification weights of the negatives.
 
         Returns:
             This layer's classification and regression targets, plus its positive count and
@@ -1156,7 +1223,10 @@ class TransFusionHead(nn.Module):
         labels = pred_bboxes.new_full(
             (batch_size, self.num_proposals), self.num_classes, dtype=torch.long
         )
-        label_weights = pred_bboxes.new_ones((batch_size, self.num_proposals))
+        # A negative query carries its sample's class weights, so it is not pushed away from a
+        # class the sample is not annotated for. Positives are overwritten with ones below.
+        # (batch_size, num_classes) -> (batch_size, num_proposals, num_classes)
+        label_weights = class_weights.unsqueeze(1).expand(-1, self.num_proposals, -1).clone()
         bbox_targets = pred_bboxes.new_zeros(
             (batch_size, self.num_proposals, self.bbox_coder.code_size)
         )
@@ -1183,6 +1253,8 @@ class TransFusionHead(nn.Module):
             pos_batch_indices, pos_gt_indices
         ]
         bbox_weights[pos_batch_indices, pos_proposal_indices] = 1.0
+        # A positive is vouched for by its matched gt box, so every class of its row is supervised.
+        label_weights[pos_batch_indices, pos_proposal_indices] = 1.0
 
         matched_iou_sum = 0.0
         if assign_results.max_overlaps is not None:
@@ -1202,6 +1274,7 @@ class TransFusionHead(nn.Module):
         gt_bboxes_3d: Float32[torch.Tensor, "batch_size max_num_3d_gt_bboxes num_Box3DFieldIndex"],
         gt_labels_3d: Float32[torch.Tensor, "batch_size max_num_3d_gt_bboxes"],
         gt_valid_bboxes: Int32[torch.Tensor, " batch_size"],
+        gt_traffic_cone_barrier_bbox_status: Bool[torch.Tensor, " batch_size"] | None = None,
     ) -> MappingProxyType[str, Float32[torch.Tensor, " num_losses"] | float]:
         """
         Compute TransFusionHead losses. It will decode raw outputs and assign predictions to
@@ -1212,6 +1285,17 @@ class TransFusionHead(nn.Module):
           2) cls_loss: SigmoidFocalLoss between the predicted class logits and the target labels
           from queries. For negative queries, the target label is set to the background class.
           3) bbox_loss: L1Loss between the predicted box parameters and the target box parameters.
+
+        Args:
+          outputs: Forward outputs.
+          gt_bboxes_3d: Ground truth 3D bboxes.
+          gt_labels_3d: Ground truth 3D bboxes label.
+          gt_valid_bboxes: Number of valid ground truth 3D bboxes in each sample.
+          gt_traffic_cone_barrier_bbox_status: Per-sample flag telling whether traffic cones and
+              barriers are annotated. In a sample flagged False, the classes listed in
+              ``partial_ignore_labels`` contribute neither to the dense heatmap loss nor to the
+              classification loss of the negative queries. None when the dataset does not carry
+              the flag, in which case every class is supervised.
         """
         loss_dict: dict[str, torch.Tensor | float] = {}
         transfusion_head_outputs = outputs.transfusion_head_outputs
@@ -1226,10 +1310,14 @@ class TransFusionHead(nn.Module):
             gt_valid_bboxes=gt_valid_bboxes,
             feature_map_size=(feature_map_size[0], feature_map_size[1]),
             outputs=transfusion_head_outputs,
+            gt_traffic_cone_barrier_bbox_status=gt_traffic_cone_barrier_bbox_status,
         )
 
         loss_heatmap = self.loss_heatmap(
-            transfusion_head_outputs.dense_heatmaps, targets.dense_heatmaps
+            transfusion_head_outputs.dense_heatmaps,
+            targets.dense_heatmaps,
+            # (batch_size, num_classes) -> (batch_size, num_classes, 1, 1), broadcast over the grid.
+            weights=targets.class_weights[:, :, None, None],
         )
         loss_dict["loss_heatmap"] = self.loss_heatmap_weight * loss_heatmap
         separate_head_outputs = transfusion_head_outputs.separate_head_outputs
@@ -1292,7 +1380,8 @@ class TransFusionHead(nn.Module):
         cls_targets = layer_logits.new_zeros((layer_labels.shape[0], self.num_classes))
         pos_masks = layer_labels < self.num_classes
         cls_targets[pos_masks, layer_labels[pos_masks]] = 1.0
-        layer_label_weights = targets.label_weights[:, start:end].reshape(-1)
+        # (batch_size, num_proposals, num_classes) -> (batch_size * num_proposals, num_classes)
+        layer_label_weights = targets.label_weights[:, start:end].reshape(-1, self.num_classes)
         loss_cls = self.loss_cls(
             layer_logits, cls_targets, layer_label_weights, avg_factor=max(targets.num_pos, 1)
         )

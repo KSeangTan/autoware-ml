@@ -40,3 +40,35 @@ def test_gaussian_focal_loss_handles_zero_positive_heatmap() -> None:
 
     assert torch.isfinite(loss)
     assert loss > 0
+
+
+def test_sigmoid_focal_loss_applies_per_class_weights() -> None:
+    """A zero per-class weight drops that class of the query, matching a loss without the column."""
+    logits = torch.tensor([[2.0, -1.0], [0.5, 0.5], [-3.0, 1.5]])
+    targets = torch.tensor([[1.0, 0.0], [0.0, 0.0], [0.0, 1.0]])
+    weights = torch.tensor([[1.0, 0.0], [1.0, 0.0], [1.0, 0.0]])
+    loss_fn = SigmoidFocalLoss()
+
+    weighted = loss_fn(logits, targets, weights)
+    first_class_only = loss_fn(logits[:, :1], targets[:, :1])
+
+    assert torch.isclose(weighted, first_class_only)
+
+
+def test_gaussian_focal_loss_weights_drop_cells_and_their_positives() -> None:
+    """A zero class weight removes the class from the loss and from the normalizing peak count."""
+    torch.manual_seed(0)
+    prediction = torch.randn(2, 2, 4, 4)
+    target = torch.zeros(2, 2, 4, 4)
+    target[0, 0, 1, 1] = 1.0
+    target[1, 1, 2, 2] = 1.0
+    target[1, 1, 2, 3] = 0.5
+    # (batch_size, num_classes, 1, 1) weights dropping the second class everywhere.
+    weights = torch.tensor([[1.0, 0.0], [1.0, 0.0]])[:, :, None, None]
+    loss_fn = GaussianFocalLoss()
+
+    weighted = loss_fn(prediction, target, weights)
+    first_class_only = loss_fn(prediction[:, :1], target[:, :1])
+
+    assert torch.isclose(weighted, first_class_only)
+    assert not torch.isclose(weighted, loss_fn(prediction, target))
