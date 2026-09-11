@@ -185,7 +185,8 @@ class _BEVFusionExportWrapper(_BEVFusionExportWrapperBase):
 
         Args:
             voxels: Lidar voxel tensor.
-            coors: Voxel coordinates in ``(x, y, z)`` order without batch column.
+            coors: Voxel coordinates in ``(z, y, x)`` order without batch column. Must be in this
+                order to align with autoware.
             num_points_per_voxel: Number of points per voxel.
             image_features: Precomputed image features.
             depth_maps: Precomputed depth maps.
