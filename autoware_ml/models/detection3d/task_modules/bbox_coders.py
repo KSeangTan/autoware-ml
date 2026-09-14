@@ -133,7 +133,8 @@ class TransFusionBBoxCoder:
         targets[:, :, 3] = log_dims[:, :, 0]
         targets[:, :, 4] = log_dims[:, :, 1]
         targets[:, :, 5] = log_dims[:, :, 2]
-        targets[:, :, 2] = gt_boxes[:, :, 2] + gt_boxes[:, :, 5] * 0.5
+        # gt_bbox is always in gravity center, so it doesn't need to shift
+        targets[:, :, 2] = gt_boxes[:, :, 2]
         targets[:, :, 6] = torch.sin(gt_boxes[:, :, 6])
         targets[:, :, 7] = torch.cos(gt_boxes[:, :, 6])
         if self.code_size == 10:
