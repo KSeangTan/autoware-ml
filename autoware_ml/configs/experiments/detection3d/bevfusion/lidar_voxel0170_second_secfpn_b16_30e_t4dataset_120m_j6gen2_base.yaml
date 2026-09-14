@@ -41,6 +41,7 @@ model:
   bbox_head:
     num_proposals: 500
     dense_heatmap_pooling_class_names: [car, truck, bus]
+    partial_ignore_labels: [traffic_cone, barrier]
     nms_type: circle
     nms_min_radius: 0.25
     nms_group_configs:
