@@ -492,6 +492,7 @@ class GetIndicePairsImplicitGemm(Function):
         # lands in freed memory, aborting the process with glibc heap corruption.
         # Deterministically reproduced (and fixed by this flag) during BEVFusion
         # ONNX export; the thrust path synchronizes correctly.
+        # It's only used in Pytorch tracing, and do not affect the plugin.
         direct_table: bool = False
         do_sort = SPCONV_DO_SORT
 
