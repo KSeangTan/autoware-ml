@@ -133,7 +133,7 @@ class TransFusionBBoxCoder:
         targets[:, :, 3] = log_dims[:, :, 0]
         targets[:, :, 4] = log_dims[:, :, 1]
         targets[:, :, 5] = log_dims[:, :, 2]
-        # gt_bbox is always in gravity center, so it doesn't need to shift
+        # NOTE: gt_bbox is always in gravity center, so it doesn't need to shift
         targets[:, :, 2] = gt_boxes[:, :, 2]
         targets[:, :, 6] = torch.sin(gt_boxes[:, :, 6])
         targets[:, :, 7] = torch.cos(gt_boxes[:, :, 6])
@@ -273,6 +273,7 @@ class TransFusionBBoxCoder:
             centers[:, 1, :] * self.out_size_factor * self.voxel_size[1] + self.pc_range[1]
         )
         dims = dims.exp()
+        # NOTE: gt_bbox is always in gravity_center, so it doesn't need to shift
         # heights = heights - dims[:, 2:3, :] * 0.5
         yaw = torch.atan2(rots[:, 0:1, :], rots[:, 1:2, :])
         if vels is None:
