@@ -122,10 +122,13 @@ class LayerLosses(NamedTuple):
     Args:
         loss_cls: Weighted classification loss over this layer's proposals.
         loss_bbox: Weighted box regression loss over this layer's positive proposals.
+        loss_iou: Weighted rotated BEV IoU loss over this layer's positive proposals, None when
+            the head was built without an IoU loss.
     """
 
     loss_cls: torch.Tensor
     loss_bbox: torch.Tensor
+    loss_iou: torch.Tensor | None
 
 
 class SeparateHead1D(nn.Module):
@@ -216,6 +219,7 @@ class TransFusionHead(nn.Module):
         post_max_size: int,
         nms_min_radius: float,
         dense_heatmap_pooling_class_names: Sequence[str],
+        iou_loss: nn.Module | None = None,
         heatmap_target: str = "round",
         nms_type: str | None = None,
         nms_group_configs: Sequence[NMSGroupConfig] | None = None,
@@ -259,6 +263,12 @@ class TransFusionHead(nn.Module):
             nms_min_radius: Minimum center distance used by circle NMS.
             dense_heatmap_pooling_class_names: Optional class names that should use local max
                 pooling before proposal selection.
+            iou_loss: Optional rotated BEV IoU loss applied to every matched (prediction, gt)
+                pair of every decoder layer, on top of the L1 box loss. The module receives the
+                encoded predictions and targets together with the matched labels and decodes
+                them itself, so it must be built with the same grid geometry as ``bbox_coder``;
+                see :class:`~autoware_ml.losses.detection3d.rotated_iou_loss.Rotated2DIouLoss`.
+                None disables the term and skips its computation entirely.
             class_names: Optional ordered class names used to resolve config-friendly
                 class lists.
             heatmap_target: Shape of the dense heatmap supervision. ``"round"``
@@ -361,6 +371,7 @@ class TransFusionHead(nn.Module):
         self.loss_heatmap = GaussianFocalLoss()
         self.loss_cls = SigmoidFocalLoss()
         self.loss_bbox = nn.L1Loss(reduction="none")
+        self.iou_loss = iou_loss
 
     def _build_prediction_heads(
         self,
@@ -1334,6 +1345,8 @@ class TransFusionHead(nn.Module):
             )
             loss_dict[f"{prefix}_loss_cls"] = layer_losses.loss_cls
             loss_dict[f"{prefix}_loss_bbox"] = layer_losses.loss_bbox
+            if layer_losses.loss_iou is not None:
+                loss_dict[f"{prefix}_loss_iou"] = layer_losses.loss_iou
 
         loss_dict["matched_ious"] = transfusion_head_outputs.dense_heatmaps.new_tensor(
             targets.matched_iou
@@ -1414,10 +1427,67 @@ class TransFusionHead(nn.Module):
         loss_bbox = self.loss_bbox(preds, layer_bbox_targets)
         loss_bbox = (loss_bbox * layer_bbox_weights).sum() / max(targets.num_pos, 1)
 
+        loss_iou = None
+        if self.iou_loss is not None:
+            loss_iou = self._build_layer_iou_loss(
+                preds=preds,
+                bbox_targets=layer_bbox_targets,
+                labels=targets.labels[:, start:end],
+                pos_masks=targets.bbox_weights[:, start:end, 0] > 0,
+                num_pos=targets.num_pos,
+            )
+
         return LayerLosses(
             loss_cls=self.loss_cls_weight * loss_cls,
             loss_bbox=self.loss_bbox_weight * loss_bbox,
+            loss_iou=loss_iou,
         )
+
+    def _build_layer_iou_loss(
+        self,
+        preds: Float32[torch.Tensor, "batch_size num_proposals code_size"],
+        bbox_targets: Float32[torch.Tensor, "batch_size num_proposals code_size"],
+        labels: Int64[torch.Tensor, "batch_size num_proposals"],
+        pos_masks: Bool[torch.Tensor, "batch_size num_proposals"],
+        num_pos: int,
+    ) -> torch.Tensor:
+        """
+        Compute one decoder layer's rotated BEV IoU loss over its matched proposals.
+
+        Only the positives are decoded into corners: negatives carry arbitrary regression
+        outputs whose exponentiated sizes could overflow, and a zero weight would not stop a NaN
+        from poisoning the sum. The matched pairs of the whole batch are gathered into one
+        ``(1, num_positives)`` pseudo-batch, which is all the corner intersection needs. Like the
+        L1 box loss, the sum is normalized by the positive count over all layers.
+
+        Args:
+            preds: Raw regression outputs in the encoded box layout.
+            bbox_targets: Encoded regression targets, zero for negatives.
+            labels: Assigned class label per proposal, ``num_classes`` for negatives.
+            pos_masks: True where the proposal was matched to a real gt box.
+            num_pos: Total number of positives across all decoder layers.
+
+        Returns:
+            Scalar IoU loss for this layer. Zero, but still attached to the graph, when the
+            batch has no positives.
+        """
+        assert self.iou_loss is not None
+        if not bool(pos_masks.any()):
+            return preds.sum() * 0.0
+
+        # (num_positives, code_size) -> (1, num_positives, code_size)
+        pos_preds = preds[pos_masks].unsqueeze(0)
+        pos_targets = bbox_targets[pos_masks].unsqueeze(0)
+        pos_labels = labels[pos_masks].unsqueeze(0)
+        # The loss decodes the encoded boxes into BEV corners itself, with its own grid geometry
+        # and its own list of classes compared axis-aligned.
+        pair_losses = self.iou_loss(
+            prediction_bboxes=pos_preds,
+            target_bboxes=pos_targets,
+            labels=pos_labels,
+            bbox_weights=torch.ones(pos_labels.shape, device=preds.device, dtype=preds.dtype),
+        )
+        return pair_losses.sum() / max(num_pos, 1)
 
     def prepare_for_export(self) -> TransFusionHead:
         """Return an export-ready copy with attention replaced by exportable equivalents.

@@ -330,6 +330,41 @@ def build_vertices(
     return vertices, mask
 
 
+def drop_duplicate_vertices(vertices: Tensor, mask: Tensor) -> Tensor:
+    """Invalidate candidate vertices that coincide with an earlier valid candidate.
+
+    Two boxes that share a corner, or that are (nearly) identical, produce the same point
+    several times: once per box corner and once more per edge pair meeting there. Exactly equal
+    duplicates are handled by the sorting kernel, but points a few float ulps apart are not, and
+    they break its angular ordering. Keeping only the first occurrence removes both kinds. The
+    candidate order is (corners of box1, corners of box2, intersections), so box1's corners are
+    always the ones kept and gradients keep flowing to them.
+
+    Args:
+        vertices: ``(B, N, 24, 2)`` Candidate vertices.
+        mask: ``(B, N, 24)`` Validity mask of the candidates.
+
+    Returns:
+        ``(B, N, 24)`` Mask with later duplicates of a valid candidate set to False.
+    """
+    # The tolerance scales with the boxes: the largest distance between any two candidate
+    # corners of the pair, i.e. roughly the enclosing diagonal. (B, N, 1, 1)
+    corners = vertices[:, :, :8, :]
+    extent = torch.cdist(corners, corners).amax(dim=(-2, -1)).clamp(min=EPSILON)[..., None, None]
+    # (B, N, 24, 24) pairwise distances, close[..., j, i] compares candidate j with candidate i
+    distances = torch.cdist(vertices, vertices)
+    close = distances <= GEOMETRY_TOLERANCE * extent
+    # Only an earlier *valid* candidate i < j can shadow candidate j. Invalid slots hold zeros,
+    # so without the validity check on i they would swallow a real vertex at the origin.
+    num_candidates = vertices.shape[2]
+    earlier = torch.tril(
+        torch.ones(num_candidates, num_candidates, dtype=torch.bool, device=vertices.device),
+        diagonal=-1,
+    )
+    shadowed = (close & earlier & mask.unsqueeze(-2)).any(dim=-1)
+    return mask & ~shadowed
+
+
 def sort_indices(vertices: Tensor, mask: Tensor) -> Tensor:
     """Sort indices.
 
@@ -393,6 +428,7 @@ def oriented_box_intersection_2d(corners1: Tensor, corners2: Tensor) -> tuple[Te
     intersections, valid_mask = box_intersection(corners1, corners2)
     c12, c21 = box_in_box(corners1, corners2)
     vertices, mask = build_vertices(corners1, corners2, c12, c21, intersections, valid_mask)
+    mask = drop_duplicate_vertices(vertices, mask)
     sorted_indices = sort_indices(vertices, mask)
     return calculate_area(sorted_indices, vertices)
 

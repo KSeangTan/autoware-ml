@@ -147,6 +147,31 @@ class TestDiffIoURotated(unittest.TestCase):
         expected = torch.tensor([[1.0, 1.0 / 3.0, 1.0 / 7.0, 0.5, 0.0]], device=self.device)
         torch.testing.assert_close(ious, expected, rtol=0.0, atol=1e-4)
 
+    def test_nearly_identical_boxes_have_unit_iou(self) -> None:
+        """Boxes a few float ulps apart behave like identical boxes instead of losing vertices.
+
+        Corners that coincide up to float noise used to reach the sorting kernel as distinct
+        candidates and broke its ordering. The axis-aligned square and the two rotated
+        rectangles below cover the cases where that produced half the intersection area.
+        """
+        boxes1 = torch.tensor(
+            [
+                [
+                    [8.0, 8.0, 2.0, 2.0, 0.0],
+                    [2.0, 2.0, 4.0, 1.6, 0.25],
+                    [12.0, 4.0, 3.0, 1.8, 1.0],
+                ]
+            ],
+            device=self.device,
+        )
+        boxes2 = boxes1.clone()
+        boxes2[..., :2] += 1e-6
+        boxes2[..., 4] += 1e-6
+
+        ious = diff_iou_rotated_2d(boxes1, boxes2)
+
+        torch.testing.assert_close(ious, torch.ones_like(ious), rtol=0.0, atol=1e-4)
+
     def test_intersection_area_of_axis_aligned_overlap(self) -> None:
         """Two unit squares offset by half a unit on each axis overlap in a quarter square."""
         corners1 = box2corners(torch.tensor([[[0.0, 0.0, 1.0, 1.0, 0.0]]], device=self.device))

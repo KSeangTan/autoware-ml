@@ -36,6 +36,7 @@ from autoware_ml.dataclasses.models.detection3d.head_outputs import (
 from autoware_ml.models.detection3d.heads.transfusions.exportable_multi_head_attention import (
     ExportableMultiheadAttention,
 )
+from autoware_ml.losses.detection3d.rotated_iou_loss import Rotated2DIouLoss
 from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import (
     NMSGroupConfig,
     ScoreThresholdConfig,
@@ -135,6 +136,7 @@ class TestTransFusionHead(unittest.TestCase):
         post_center_range: Sequence[float] | None = None,
         use_bf16_cross_attention: bool = False,
         partial_ignore_labels: Sequence[str] | None = None,
+        iou_loss: torch.nn.Module | None = None,
     ) -> TransFusionHead:
         """
         Build a TransFusionHead from the setUp parameters.
@@ -193,6 +195,7 @@ class TestTransFusionHead(unittest.TestCase):
             use_velocity=use_velocity,
             use_bf16_cross_attention=use_bf16_cross_attention,
             partial_ignore_labels=partial_ignore_labels,
+            iou_loss=iou_loss,
         ).to(self.device)
 
     def _export_attention(
@@ -757,6 +760,137 @@ class TestTransFusionHead(unittest.TestCase):
         loss_heatmap = losses["loss_heatmap"]
         assert isinstance(loss_heatmap, torch.Tensor)
         self.assertAlmostEqual(float(loss_heatmap.detach()), float(expected.detach()), places=5)
+
+    def test_loss_without_iou_loss_reports_no_iou_term(self) -> None:
+        """Test that a head built without an IoU loss skips the term entirely."""
+        losses = self._compute_losses()
+
+        self.assertIsNone(self.transfusion_head.iou_loss)
+        self.assertFalse([key for key in losses if key.endswith("_loss_iou")])
+
+    def _build_iou_loss(
+        self,
+        labels_to_ignore_rotation: Sequence[str] | None = None,
+        loss_weight: float = 1.0,
+    ) -> Rotated2DIouLoss:
+        """Build a rotated IoU loss on the fixture's grid geometry."""
+        return Rotated2DIouLoss(
+            class_names=self.class_names,
+            point_cloud_range=self.point_cloud_range,
+            voxel_size=self.voxel_size,
+            out_size_factor=self.out_size_factor,
+            labels_to_ignore_rotation=labels_to_ignore_rotation,
+            loss_weight=loss_weight,
+        )
+
+    def _encoded_gt_boxes(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Encode the setUp gt boxes of the first sample, returning (encoded, labels)."""
+        encoded = self.transfusion_head.bbox_coder.encode(self.gt_bboxes_3d[:1])
+        labels = self.gt_labels_3d[:1].long()
+        return encoded, labels
+
+    def test_layer_iou_loss_without_positives_is_zero_but_attached(self) -> None:
+        """Test that a layer with no matched proposals contributes a zero that keeps the graph."""
+        head = self._build_transfusion_head(iou_loss=self._build_iou_loss())
+        preds = torch.randn(
+            self.batch_size,
+            self.num_proposals,
+            self.code_size,
+            device=self.device,
+            requires_grad=True,
+        )
+        pos_masks = torch.zeros(
+            self.batch_size, self.num_proposals, dtype=torch.bool, device=self.device
+        )
+
+        loss_iou = head._build_layer_iou_loss(
+            preds=preds,
+            bbox_targets=torch.zeros_like(preds),
+            labels=torch.full(pos_masks.shape, self.num_classes, device=self.device),
+            pos_masks=pos_masks,
+            num_pos=0,
+        )
+
+        self.assertEqual(float(loss_iou), 0.0)
+        self.assertTrue(loss_iou.requires_grad)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "the rotated IoU op requires CUDA")
+    def test_layer_iou_loss_is_zero_for_perfect_predictions(self) -> None:
+        """Test that predicting the encoded target exactly gives an IoU of one and no loss."""
+        head = self._build_transfusion_head(iou_loss=self._build_iou_loss())
+        encoded, labels = self._encoded_gt_boxes()
+        pos_masks = torch.ones(encoded.shape[:2], dtype=torch.bool, device=self.device)
+
+        loss_iou = head._build_layer_iou_loss(
+            preds=encoded.clone(),
+            bbox_targets=encoded,
+            labels=labels,
+            pos_masks=pos_masks,
+            num_pos=int(pos_masks.sum()),
+        )
+
+        self.assertAlmostEqual(float(loss_iou), 0.0, places=4)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "the rotated IoU op requires CUDA")
+    def test_layer_iou_loss_grows_as_the_prediction_drifts_from_the_target(self) -> None:
+        """Test that shifting the predicted center away from the gt raises the IoU loss."""
+        head = self._build_transfusion_head(iou_loss=self._build_iou_loss())
+        encoded, labels = self._encoded_gt_boxes()
+        pos_masks = torch.ones(encoded.shape[:2], dtype=torch.bool, device=self.device)
+        num_pos = int(pos_masks.sum())
+
+        losses = []
+        for shift_cells in (0.0, 0.5, 1.0):
+            preds = encoded.clone()
+            preds[..., 0] += shift_cells
+            losses.append(
+                float(
+                    head._build_layer_iou_loss(
+                        preds=preds,
+                        bbox_targets=encoded,
+                        labels=labels,
+                        pos_masks=pos_masks,
+                        num_pos=num_pos,
+                    )
+                )
+            )
+
+        self.assertLess(losses[0], losses[1])
+        self.assertLess(losses[1], losses[2])
+
+    @unittest.skipUnless(torch.cuda.is_available(), "the rotated IoU op requires CUDA")
+    def test_loss_with_iou_loss_reports_a_finite_iou_term_per_layer(self) -> None:
+        """Test that an IoU loss adds one finite, weighted term per decoder layer to the total."""
+        head = self._build_transfusion_head(iou_loss=self._build_iou_loss(loss_weight=2.0))
+
+        losses = self._compute_losses(transfusion_head=head)
+
+        for prefix in ("layer_0", "layer_-1"):
+            self.assertIn(f"{prefix}_loss_iou", losses)
+            term = torch.as_tensor(losses[f"{prefix}_loss_iou"])
+            self.assertTrue(torch.isfinite(term).all())
+            self.assertGreaterEqual(float(term), 0.0)
+        component_total = sum(
+            float(torch.as_tensor(value).detach())
+            for key, value in losses.items()
+            if "loss" in key and key != "loss"
+        )
+        self.assertAlmostEqual(float(torch.as_tensor(losses["loss"])), component_total, places=4)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "the rotated IoU op requires CUDA")
+    def test_loss_with_iou_loss_backward_reaches_the_predictions(self) -> None:
+        """Test that the IoU term is differentiable back to the head parameters."""
+        head = self._build_transfusion_head(iou_loss=self._build_iou_loss())
+        losses = self._compute_losses(transfusion_head=head)
+        iou_total = sum(value for key, value in losses.items() if key.endswith("_loss_iou"))
+        assert isinstance(iou_total, torch.Tensor)
+
+        iou_total.backward()
+
+        gradients = [p.grad for p in head.parameters() if p.grad is not None]
+        self.assertTrue(gradients)
+        for gradient in gradients:
+            self.assertTrue(torch.isfinite(gradient).all())
 
     def test_loss_requires_transfusion_head_outputs(self) -> None:
         """Test that loss rejects outputs that carry no TransFusion branch."""
