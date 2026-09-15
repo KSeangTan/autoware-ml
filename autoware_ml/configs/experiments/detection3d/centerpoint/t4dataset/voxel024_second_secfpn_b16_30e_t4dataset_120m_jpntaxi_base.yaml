@@ -1,20 +1,20 @@
 # @package _global_
 defaults:
-  - base_lidar_voxel0170_120m
+  - base_voxel024_120m
   - /database@database: t4dataset/t4dataset_j6gen2_base
   - _self_
 
 batch_size: 16
 num_workers: 16
-experiment_group_name: bevfusion/${database.version}/j6gen2_base
-experiment_name: lidar_voxel0170_second_secfpn_b16_50e_t4dataset_120m
+experiment_group_name: centerpoint/${database.version}/j6gen2_base
+experiment_name: voxel024_second_secfpn_b16_30e_t4dataset_120m
 
 trainer:
-  max_epochs: 50
+  max_epochs: 30
 
 # Include weights for pre-training
 weights: ???
 
 # Load a lower learning rate when it loads from a pre-training weight
 optimizer:
-  lr: 1.0e-4
+  lr: 5.0e-5

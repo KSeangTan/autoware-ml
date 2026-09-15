@@ -13,6 +13,9 @@ max_num_points: 32
 max_voxels: 96000
 eval_max_voxels: 96000
 
+optimizer:
+  lr: 1.0e-4
+
 data_preprocessor:
   preprocessor_modules:
     - _target_: autoware_ml.preprocessing.detection3d.point_pillar_preprocessor.PointPillarPreprocessor
@@ -25,7 +28,7 @@ data_preprocessor:
 
 trainer:
   max_epochs: ???
-  check_val_every_n_epoch: ???
+  check_val_every_n_epoch: 5
   gradient_clip_val: 5.0
   gradient_clip_algorithm: norm
 

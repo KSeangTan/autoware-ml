@@ -1,19 +1,12 @@
 # @package _global_
 defaults:
-  - base
-  - /database@database: t4dataset/t4dataset_j6gen2_base
+  - ../base
+  # Loaded before _self_ so the dataloader and transform overrides below win over the defaults.
   - /datamodule@datamodule: t4dataset/default_detection3d_datamodule
   - /metrics/t4dataset@metric_ranges: default_detection3d_120m_metric_ranges
   - _self_
 
-batch_size: 16
-num_workers: 16
-max_num_3d_gt_bboxes: 500
-
-experiment_group_name: centerpoint/${database.version}/j6gen2_base
-experiment_name: voxel024_second_secfpn_b16_30e_t4dataset_120m
 point_cloud_range: [-122.4, -122.4, -3.0, 122.4, 122.4, 5.0]
-voxel_size: [0.24, 0.24, 8.0]
 
 eval_class_range:
   car: 121.0
@@ -24,17 +17,10 @@ eval_class_range:
   traffic_cone: 121.0
   barrier: 121.0
 
-trainer:
-  max_epochs: 30
-  check_val_every_n_epoch: 5
+max_num_3d_gt_bboxes: 500
 
 model:
-  pts_middle_encoder:
-    output_shape: [1020, 1020]
-  pts_backbone:
-    layer_strides: [1, 2, 2]
   bbox_head:
-    out_size_factor: 2
     nms_min_radius: 1.0
   scheduler:
     max_lr_factor: 10.0
@@ -49,8 +35,6 @@ datamodule:
 
   # Overwrite transforms
   train_dataset:
-    max_num_3d_gt_bboxes: ${max_num_3d_gt_bboxes}
-
     transforms:
       _target_: autoware_ml.transforms.multi_task.base.MultiTaskTransformsCompose
       _convert_: all
@@ -143,12 +127,3 @@ datamodule:
               - vehicle_state.parked
               - cycle_state.without_rider
               - motorcycle_state.without_rider
-
-  test_dataset:
-    max_num_3d_gt_bboxes: ${max_num_3d_gt_bboxes}
-
-  validation_dataset:
-    max_num_3d_gt_bboxes: ${max_num_3d_gt_bboxes}
-
-  predict_dataset:
-    max_num_3d_gt_bboxes: ${max_num_3d_gt_bboxes}

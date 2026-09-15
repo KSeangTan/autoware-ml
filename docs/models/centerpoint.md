@@ -19,16 +19,16 @@ CenterPoint is a LiDAR-based 3D object detection model integrated under the `det
 
 ## Available Configurations
 
-| Config Name                                                            | Dataset   | Purpose                                                  |
-| ---------------------------------------------------------------------- | --------- | -------------------------------------------------------- |
-| `detection3d/centerpoint/voxel020_second_secfpn_51m_nuscenes`          | NuScenes  | Standard NuScenes 51 m configuration                     |
-| `detection3d/centerpoint/voxel024_second_secfpn_120m_t4dataset_j6gen2` | T4Dataset | 120 m T4Dataset configuration (aligned with TransFusion) |
+| Config Name                                                                                   | Dataset   | Purpose                                                  |
+| --------------------------------------------------------------------------------------------- | --------- | -------------------------------------------------------- |
+| `detection3d/centerpoint/voxel020_second_secfpn_51m_nuscenes`                                 | NuScenes  | Standard NuScenes 51 m configuration                     |
+| `detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base` | T4Dataset | 120 m T4Dataset configuration (aligned with TransFusion) |
 
 ## Training
 
 ```bash
 autoware-ml train --config-name detection3d/centerpoint/voxel020_second_secfpn_51m_nuscenes
-autoware-ml train --config-name detection3d/centerpoint/voxel024_second_secfpn_120m_t4dataset_j6gen2
+autoware-ml train --config-name detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base
 ```
 
 For a pipeline validation run:
@@ -51,25 +51,25 @@ autoware-ml test \
 
 ```bash
 autoware-ml deploy \
-    --config-name detection3d/centerpoint/voxel024_second_secfpn_120m_t4dataset_j6gen2 \
-    --weights mlruns/detection3d/centerpoint/voxel024_second_secfpn_120m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base \
+    --weights mlruns/detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 The export produces the two ONNX modules consumed by `autoware_universe/perception/autoware_lidar_centerpoint`: `pts_voxel_encoder_centerpoint.onnx` encodes decorated pillar features into per-pillar descriptors, and `pts_backbone_neck_head_centerpoint.onnx` predicts the raw dense detection heads (`heatmap`, `reg`, `height`, `dim`, `rot`, `vel`) from the scattered BEV canvas. Voxelization, pillar decoration, BEV scatter, and box decoding all run in the runtime node.
 
 ## Implementation
 
-| Path                                                    | Description                |
-| ------------------------------------------------------- | -------------------------- |
-| `autoware_ml/models/detection3d/centerpoint.py`         | CenterPoint model wrapper  |
-| `autoware_ml/models/detection3d/encoders/pillar.py`     | Pillar encoder and scatter |
-| `autoware_ml/models/detection3d/backbones/second.py`    | SECOND backbone            |
-| `autoware_ml/models/detection3d/necks/second_fpn.py`    | SECONDFPN neck             |
-| `autoware_ml/models/detection3d/heads/centerpoint.py`   | CenterPoint detection head |
-| `autoware_ml/preprocessing/detection3d/point_pillar.py` | Pillar preprocessing       |
-| `autoware_ml/datamodule/nuscenes/detection3d.py`        | NuScenes datamodule        |
-| `autoware_ml/datamodule/t4dataset/detection3d.py`       | T4Dataset datamodule       |
-| `autoware_ml/configs/tasks/detection3d/centerpoint/`    | Task configurations        |
+| Path                                                       | Description                |
+| ---------------------------------------------------------- | -------------------------- |
+| `autoware_ml/models/detection3d/centerpoint.py`            | CenterPoint model wrapper  |
+| `autoware_ml/models/detection3d/encoders/pillar.py`        | Pillar encoder and scatter |
+| `autoware_ml/models/detection3d/backbones/second.py`       | SECOND backbone            |
+| `autoware_ml/models/detection3d/necks/second_fpn.py`       | SECONDFPN neck             |
+| `autoware_ml/models/detection3d/heads/centerpoint.py`      | CenterPoint detection head |
+| `autoware_ml/preprocessing/detection3d/point_pillar.py`    | Pillar preprocessing       |
+| `autoware_ml/datamodule/nuscenes/detection3d.py`           | NuScenes datamodule        |
+| `autoware_ml/datamodule/t4dataset/detection3d.py`          | T4Dataset datamodule       |
+| `autoware_ml/configs/experiments/detection3d/centerpoint/` | Experiment configurations  |
 
 ## Acknowledgment
 

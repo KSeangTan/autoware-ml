@@ -44,7 +44,7 @@ from autoware_ml.utils.cli.helpers import (
 from autoware_ml.utils.session import SessionCommandError
 
 SAMPLE_CONFIG_NAME = (
-    "detection3d/centerpoint/voxel024_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base"
+    "detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base"
 )
 SAMPLE_CONFIG_PATH = f"experiments/{SAMPLE_CONFIG_NAME}"
 SAMPLE_SESSION_NAME = "centerpoint-train"
@@ -96,7 +96,7 @@ class TestResolveConfigReference:
 
     def test_resolve_packaged_yaml_path(self) -> None:
         config_path, config_name, hydra_overrides = resolve_config_reference(
-            "autoware_ml/configs/experiments/detection3d/centerpoint/"
+            "autoware_ml/configs/experiments/detection3d/centerpoint/t4dataset/"
             "voxel024_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base.yaml",
             "experiments",
         )
@@ -135,16 +135,18 @@ class TestCompleteConfigValue:
     """Tests for config completion helpers."""
 
     def test_complete_bundled_configs(self, tmp_path: Path, monkeypatch) -> None:
-        config_root = tmp_path / "experiments" / "detection3d" / "centerpoint"
+        config_root = tmp_path / "experiments" / "detection3d" / "centerpoint" / "t4dataset"
         config_root.mkdir(parents=True)
         (config_root / "base.yaml").write_text("", encoding="utf-8")
         (config_root / f"{Path(SAMPLE_CONFIG_NAME).name}.yaml").write_text("", encoding="utf-8")
         monkeypatch.setattr(helpers, "CONFIGS_ROOT", tmp_path)
 
-        completions = complete_config_value("detection3d/centerpoint/voxel024", "experiments")
+        completions = complete_config_value(
+            "detection3d/centerpoint/t4dataset/voxel024", "experiments"
+        )
 
         assert completions == [SAMPLE_CONFIG_NAME]
-        assert "detection3d/centerpoint/base" not in completions
+        assert "detection3d/centerpoint/t4dataset/base" not in completions
 
     def test_complete_filesystem_yaml_paths(self, tmp_path: Path, monkeypatch) -> None:
         config_dir = tmp_path / "configs"
@@ -843,7 +845,7 @@ class TestSessionCompletion:
     def test_suggests_config_names_after_flag(self) -> None:
         suggestions = complete_session_command_value(
             ["train", "--config-name"],
-            "detection3d/centerpoint/voxel024",
+            "detection3d/centerpoint/t4dataset/voxel024",
         )
         assert SAMPLE_CONFIG_NAME in suggestions
 

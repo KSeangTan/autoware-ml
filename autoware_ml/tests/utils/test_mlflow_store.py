@@ -27,10 +27,10 @@ from autoware_ml.utils.mlflow_store import (
 )
 
 SAMPLE_CONFIG_NAME = (
-    "detection3d/centerpoint/voxel024_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base"
+    "detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base"
 )
 SAMPLE_EXPERIMENT_NAME = (
-    "detection3d_centerpoint_voxel024_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base"
+    "detection3d_centerpoint_t4dataset_voxel024_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base"
 )
 
 
