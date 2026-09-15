@@ -15,15 +15,24 @@
 """Base classes and composition utilities for data transforms.
 
 This module defines the core transform protocol used across Autoware-ML data
-pipelines and provides sequential composition helpers.
+pipelines and provides sequential composition helpers. It also defines the
+:class:`PipelineContext` handed to every transform call, which lets context-aware
+transforms such as sample-mixing augmentations request secondary samples from the
+dataset without smuggling dataset references through the sample itself.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Sequence
+from dataclasses import dataclass, field
+import logging
+from typing import Protocol, Sequence
 
 import numpy as np
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+
+logger = logging.getLogger(__name__)
 
 
 class BaseTransform(ABC):
@@ -52,7 +61,11 @@ class BaseTransform(ABC):
         """
         self._probability = probability
 
-    def __call__(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
+    def __call__(
+        self,
+        multi_task_gt_sample: ModelGTSample,
+        context: PipelineContext | None = None,
+    ) -> ModelGTSample:
         """Execute transform with probability and key validation.
 
         Order of operations:
@@ -62,10 +75,13 @@ class BaseTransform(ABC):
 
         Args:
             multi_task_gt_sample: Dataclass to hold inputs for each sample.
+            context: Pipeline context of the current sample. Plain transforms ignore it;
+                :class:`ContextAwareTransform` subclasses receive it in ``transform``.
 
         Returns:
             Updated ModelGTSample.
         """
+        del context
         # 1. Validate required keys (raises error if any missing)
         self._validate_required_keys(multi_task_gt_sample)
 
@@ -147,17 +163,22 @@ class TransformsCompose:
         """
         self.pipeline = pipeline
 
-    def __call__(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
+    def __call__(
+        self,
+        multi_task_gt_sample: ModelGTSample,
+        context: PipelineContext | None = None,
+    ) -> ModelGTSample:
         """Apply each transform sequentially, merging updates.
 
         Args:
             multi_task_gt_sample: ModelGTSample instance passed through the configured transforms.
+            context: Pipeline context of the current sample, forwarded to every transform.
 
         Returns:
             Transformed ModelGTSample instance after all pipeline stages have been applied.
         """
         for transform in self.pipeline:
-            multi_task_gt_sample = transform(multi_task_gt_sample)
+            multi_task_gt_sample = transform(multi_task_gt_sample, context=context)
 
         return multi_task_gt_sample
 
@@ -175,3 +196,176 @@ class TransformsCompose:
             format_string.append(f"  ({i}): {transform}")
         format_string.append(")")
         return "\n".join(format_string)
+
+
+class SampleSource(Protocol):
+    """Dataset surface a :class:`PipelineContext` needs to draw secondary samples."""
+
+    def __len__(self) -> int: ...
+
+    def get_data_sample(self, index: int) -> ModelGTSample: ...
+
+    def apply_transforms(
+        self,
+        multi_task_gt_sample: ModelGTSample,
+        transforms: TransformsCompose | None,
+        context: PipelineContext,
+    ) -> ModelGTSample: ...
+
+
+def _seeded_rng() -> np.random.Generator:
+    """Derive a generator from the globally seeded NumPy state.
+
+    ``seed_everything(workers=True)`` seeds the global NumPy RNG per dataloader worker, so
+    deriving from it keeps secondary-sample draws reproducible.
+
+    Returns:
+        Generator seeded from the global NumPy RNG.
+    """
+    return np.random.default_rng(np.random.randint(2**32))
+
+
+@dataclass
+class PipelineContext:
+    """Per-sample context handed to every transform call.
+
+    The context carries the state that belongs to one ``__getitem__`` call rather than to
+    the dataset or the sample: the index being produced and a random generator. It exposes a
+    narrow dataset surface so context-aware transforms can draw and materialize secondary
+    samples without holding the dataset themselves.
+    """
+
+    dataset: SampleSource
+    index: int
+    rng: np.random.Generator = field(default_factory=_seeded_rng)
+
+    def get_data_sample(self, index: int) -> ModelGTSample:
+        """Load the raw sample for the requested dataset index.
+
+        Args:
+            index: Dataset index.
+
+        Returns:
+            Raw ModelGTSample before any transform.
+        """
+        return self.dataset.get_data_sample(index)
+
+    def sample_secondary(
+        self,
+        pre_transform: TransformsCompose | None = None,
+    ) -> ModelGTSample:
+        """Draw a secondary sample and optionally materialize it with ``pre_transform``.
+
+        The secondary index is always different from the current one when the dataset has
+        more than one sample. The pre-transform runs with its own context bound to the
+        secondary index, sharing this context's random generator.
+
+        Args:
+            pre_transform: Pipeline applied to the secondary sample, typically the loading
+                and geometric-augmentation head of the main pipeline. ``None`` returns the
+                raw sample.
+
+        Returns:
+            Secondary ModelGTSample, transformed by ``pre_transform`` when given.
+        """
+        dataset_length = len(self.dataset)
+        if dataset_length <= 1:
+            logger.warning(
+                "Dataset contains only one sample; reusing the current sample as the secondary "
+                "sample."
+            )
+            secondary_index = self.index
+        else:
+            # Draw from the remaining indices and skip past the current one.
+            secondary_index = int(self.rng.integers(0, dataset_length - 1))
+            if secondary_index >= self.index:
+                secondary_index += 1
+
+        sample = self.get_data_sample(secondary_index)
+        if pre_transform is None:
+            return sample
+
+        secondary_context = PipelineContext(
+            dataset=self.dataset, index=secondary_index, rng=self.rng
+        )
+        return self.dataset.apply_transforms(sample, pre_transform, secondary_context)
+
+
+class ContextAwareTransform(BaseTransform):
+    """Base class for transforms that need the pipeline context.
+
+    Sample-mixing augmentations subclass this to draw secondary samples. The context is
+    passed explicitly to ``transform`` instead of being stored on the instance, so a shared
+    transform never carries state from a previous sample.
+    """
+
+    def __init__(
+        self,
+        probability: float | None = None,
+        pre_transform: TransformsCompose | None = None,
+    ) -> None:
+        """Initialize the transform.
+
+        Args:
+            probability: Probability of applying the transform, ``None`` to always run.
+            pre_transform: Pipeline used to materialize secondary samples drawn through
+                :meth:`sample_secondary`. It should mirror the loading and augmentation
+                stages of the main pipeline that precede this transform.
+        """
+        super().__init__(probability=probability)
+        self.pre_transform = pre_transform
+
+    def __call__(
+        self,
+        multi_task_gt_sample: ModelGTSample,
+        context: PipelineContext | None = None,
+    ) -> ModelGTSample:
+        """Execute the transform, requiring a pipeline context.
+
+        Args:
+            multi_task_gt_sample: Dataclass to hold inputs for each sample.
+            context: Pipeline context of the current sample.
+
+        Returns:
+            Updated ModelGTSample.
+
+        Raises:
+            RuntimeError: If no context is provided.
+        """
+        if context is None:
+            raise RuntimeError(
+                f"{self.__class__.__name__} requires a PipelineContext; run it through a dataset "
+                "pipeline or pass context= explicitly."
+            )
+        self._validate_required_keys(multi_task_gt_sample)
+        if not self._should_apply():
+            return self.on_skip(multi_task_gt_sample)
+        return self.transform(multi_task_gt_sample, context)
+
+    def sample_secondary(self, context: PipelineContext) -> ModelGTSample:
+        """Draw a secondary sample materialized with this transform's ``pre_transform``.
+
+        Args:
+            context: Pipeline context of the current sample.
+
+        Returns:
+            Secondary ModelGTSample ready to be mixed with the current one.
+        """
+        return context.sample_secondary(pre_transform=self.pre_transform)
+
+    @abstractmethod
+    def transform(  # type: ignore[override]
+        self,
+        multi_task_gt_sample: ModelGTSample,
+        context: PipelineContext,
+    ) -> ModelGTSample:
+        """Process the sample with access to the pipeline context.
+
+        Args:
+            multi_task_gt_sample: ModelGTSample instance with required keys present.
+            context: Pipeline context of the current sample.
+
+        Returns:
+            Updated ModelGTSample.
+        """
+        raise NotImplementedError

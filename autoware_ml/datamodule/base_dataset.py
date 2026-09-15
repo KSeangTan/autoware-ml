@@ -8,7 +8,7 @@ import polars as pl
 from torch.utils.data import Dataset
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample, ModelGTBatch
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.base import PipelineContext, TransformsCompose
 from autoware_ml.types.dataset import SplitType
 
 
@@ -64,7 +64,10 @@ class BaseDataset(Dataset):
         """
         start_time = time.perf_counter()
         multi_task_gt_sample = self.get_data_sample(index)
-        transformed_gt_sample = self.apply_transforms(multi_task_gt_sample)
+        context = PipelineContext(dataset=self, index=index)
+        transformed_gt_sample = self.apply_transforms(
+            multi_task_gt_sample, self.transforms, context
+        )
         return transformed_gt_sample._replace(io_processing_time=time.perf_counter() - start_time)
 
     def assign_dataset_records(self, dataset_records_dataframe: pl.DataFrame) -> None:
@@ -90,18 +93,25 @@ class BaseDataset(Dataset):
     def apply_transforms(
         self,
         multi_task_gt_sample: ModelGTSample,
+        transforms: TransformsCompose | None,
+        context: PipelineContext,
     ) -> ModelGTSample:
-        """Apply a specific transform pipeline to a metadata sample.
+        """Apply a specific transform pipeline to a sample.
+
+        Also used by :meth:`PipelineContext.sample_secondary` to run a ``pre_transform``
+        on a secondary sample with its own context.
 
         Args:
             multi_task_gt_sample: ModelGTSample instance.
+            transforms: Transform pipeline applied to the sample, ``None`` to return it as is.
+            context: Pipeline context associated with the sample.
 
         Returns:
             Transformed ModelGTSample instance.
         """
-        if self.transforms is None:
+        if transforms is None:
             return multi_task_gt_sample
-        return self.transforms(multi_task_gt_sample)
+        return transforms(multi_task_gt_sample, context=context)
 
     def collate_fn(self, batch: Sequence[ModelGTSample]) -> ModelGTBatch:
         """
