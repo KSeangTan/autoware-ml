@@ -97,7 +97,7 @@ def build_model(
     return model
 
 
-def build_weight_checkpoint_paths(cfg: DictConfig) -> tuple[Sequence[str | Path], Path]:
+def build_weight_checkpoint_paths(cfg: DictConfig) -> tuple[Sequence[Path], Path]:
     """
     Build a list of weight checkpoint paths from the Hydra configuration.
 

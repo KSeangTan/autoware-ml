@@ -20,7 +20,9 @@ integration, and trainer execution for evaluating trained checkpoints.
 
 import logging
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Sequence
+
 
 import hydra
 from hydra.core.hydra_config import HydraConfig
@@ -117,10 +119,12 @@ def main(cfg: DictConfig):
         experiment_uid=cfg.experiment_uid,
         logger_enabled=logger_enabled,
         parent_run_id=parent_run_id,
-        extra_tags={
-            "checkpoint_path": str(checkpoint_path),
-            "source_run_id": parent_run_id or "",
-        },
+        extra_tags=MappingProxyType(
+            {
+                "checkpoint_path": str(checkpoint_path),
+                "source_run_id": parent_run_id or "",
+            }
+        ),
     )
 
     configure_torch_runtime()
@@ -133,10 +137,12 @@ def main(cfg: DictConfig):
         stage="test",
         config_name=config_name,
         logger_enabled=logger_enabled,
-        extra_metadata={
-            "source_run_id": parent_run_id,
-            "checkpoint_path": str(checkpoint_path),
-        },
+        extra_metadata=MappingProxyType(
+            {
+                "source_run_id": parent_run_id,
+                "checkpoint_path": str(checkpoint_path),
+            }
+        ),
     )
 
     # Build datamodule

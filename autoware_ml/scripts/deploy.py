@@ -19,6 +19,7 @@ integration, and model deployment execution.
 """
 
 import logging
+from types import MappingProxyType
 
 import hydra
 from hydra.core.hydra_config import HydraConfig
@@ -145,12 +146,14 @@ def main(cfg: DictConfig):
         experiment_uid=cfg.experiment_uid,
         logger_enabled=logger_enabled,
         parent_run_id=parent_run_id,
-        extra_tags={
-            "checkpoint_path": str(checkpoint_path),
-            "source_run_id": parent_run_id or "",
-            "source_checkpoint_count": str(len(source_checkpoints)),
-            "source_run_ids": ",".join(source_run_ids),
-        },
+        extra_tags=MappingProxyType(
+            {
+                "checkpoint_path": str(checkpoint_path),
+                "source_run_id": parent_run_id or "",
+                "source_checkpoint_count": str(len(source_checkpoints)),
+                "source_run_ids": ",".join(source_run_ids),
+            }
+        ),
     )
 
     if run_context is not None:
@@ -207,11 +210,13 @@ def main(cfg: DictConfig):
             stage="deploy",
             config_name=config_name,
             logger_enabled=logger_enabled,
-            extra_metadata={
-                "source_run_id": parent_run_id,
-                "checkpoint_path": str(checkpoint_path),
-                "source_checkpoints": source_checkpoints,
-            },
+            extra_metadata=MappingProxyType(
+                {
+                    "source_run_id": parent_run_id,
+                    "checkpoint_path": str(checkpoint_path),
+                    "source_checkpoints": source_checkpoints,
+                }
+            ),
         )
         log_hyperparameters(cfg, trainer_logger)
 
