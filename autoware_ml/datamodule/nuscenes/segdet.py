@@ -37,7 +37,7 @@ from autoware_ml.datamodule.t4dataset.detection3d import (
     coerce_frame_sampling,
     compute_frame_sampling_weights,
 )
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.legacy_base import TransformsCompose
 
 
 def _resolve_path(base: str, path: str) -> str:

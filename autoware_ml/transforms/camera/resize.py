@@ -38,10 +38,10 @@ from torchvision.transforms import v2
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
-from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
+from autoware_ml.transforms.base import BaseTransform
 
 
-class ImageSpaceTransform(MultiTaskBaseTransform):
+class ImageSpaceTransform(BaseTransform):
     """Base class of the transforms that only remap the pixels of the camera images.
 
     It holds the image-space affine builders and the composition of an image-space

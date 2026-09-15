@@ -8,7 +8,7 @@ import polars as pl
 from torch.utils.data import Dataset
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample, ModelGTBatch
-from autoware_ml.transforms.multi_task.base import MultiTaskTransformsCompose
+from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.types.dataset import SplitType
 
 
@@ -21,7 +21,7 @@ class BaseDataset(Dataset):
         max_num_3d_gt_bboxes: int,
         split_type: SplitType,
         dataset_records_dataframe: pl.DataFrame | None,
-        transforms: MultiTaskTransformsCompose | None,
+        transforms: TransformsCompose | None,
     ) -> None:
         """
         Initialize the multi-task dataset interface.

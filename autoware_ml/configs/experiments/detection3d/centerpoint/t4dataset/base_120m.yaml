@@ -36,7 +36,7 @@ datamodule:
   # Overwrite transforms
   train_dataset:
     transforms:
-      _target_: autoware_ml.transforms.multi_task.base.MultiTaskTransformsCompose
+      _target_: autoware_ml.transforms.base.TransformsCompose
       _convert_: all
 
       pipeline:

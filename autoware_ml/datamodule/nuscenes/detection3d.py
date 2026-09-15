@@ -32,7 +32,7 @@ from autoware_ml.datamodule.common.detection3d import (
 )
 from autoware_ml.datamodule.common.serialization import SerializedSampleList
 from autoware_ml.datamodule.nuscenes.common import resolve_lidar_path
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.legacy_base import TransformsCompose
 
 
 class NuscenesDetection3DDataset(Dataset):

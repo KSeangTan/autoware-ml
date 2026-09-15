@@ -41,7 +41,7 @@ datamodule:
   val_ann_file: ${datamodule.data_root}/info/segdet3d/t4dataset_j6gen2_segdet3d_infos_val.pkl
   test_ann_file: ${datamodule.data_root}/info/segdet3d/t4dataset_j6gen2_segdet3d_infos_test.pkl
   train_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
+    _target_: autoware_ml.transforms.legacy_base.TransformsCompose
     pipeline:
       - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
         merge_objects: ${dataset.detection3d.merge_objects}
@@ -104,7 +104,7 @@ datamodule:
         keys: [coord, strength]
         output_key: feat
   val_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
+    _target_: autoware_ml.transforms.legacy_base.TransformsCompose
     pipeline:
       - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
         merge_objects: ${dataset.detection3d.merge_objects}
@@ -147,7 +147,7 @@ datamodule:
         output_key: feat
   test_transforms: ${datamodule.val_transforms}
   predict_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
+    _target_: autoware_ml.transforms.legacy_base.TransformsCompose
     pipeline:
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
         sweeps_num: 1

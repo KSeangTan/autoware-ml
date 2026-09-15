@@ -21,13 +21,13 @@ from typing import Any
 
 import numpy as np
 
-from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.legacy_base import BaseTransform as LegacyBaseTransform
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.points.base_points import BasePoints
-from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
+from autoware_ml.transforms.base import BaseTransform
 
 
-class RandomJitter(BaseTransform):
+class RandomJitter(LegacyBaseTransform):
     """Perturb point coordinates with clipped Gaussian noise."""
 
     _required_keys = ["coord"]
@@ -62,7 +62,7 @@ class RandomJitter(BaseTransform):
         return input_dict
 
 
-class RandomStrengthJitter(BaseTransform):
+class RandomStrengthJitter(LegacyBaseTransform):
     """Perturb the normalized intensity with a random gamma, scale, and shift.
 
     Applies ``clip(strength ** gamma * scale + shift, 0, 1)`` with parameters
@@ -114,7 +114,7 @@ class RandomStrengthJitter(BaseTransform):
         return input_dict
 
 
-class RandomShift(BaseTransform):
+class RandomShift(LegacyBaseTransform):
     """Translate point coordinates by a sampled per-axis offset."""
 
     _required_keys = ["coord"]
@@ -143,7 +143,7 @@ class RandomShift(BaseTransform):
         return input_dict
 
 
-class PointsRandomShuffle(MultiTaskBaseTransform):
+class PointsRandomShuffle(BaseTransform):
     """Randomly shuffle points in the point cloud."""
 
     _required_keys = ["point_cloud_data"]

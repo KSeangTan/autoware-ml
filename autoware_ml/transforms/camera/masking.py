@@ -9,11 +9,11 @@ from torch import Tensor
 from torchvision.transforms import v2
 
 from autoware_ml.geometry.cameras.base_images import BaseImages
-from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
+from autoware_ml.transforms.base import BaseTransform
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 
 
-class GridMask(MultiTaskBaseTransform):
+class GridMask(BaseTransform):
     """Apply grid masking augmentation to every camera image of a sample.
 
     A random grid of stripes is zeroed out independently for each camera, so the

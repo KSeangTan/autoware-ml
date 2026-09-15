@@ -15,7 +15,7 @@ from autoware_ml.datamodule.base_dataset import (
     BaseDataset,
 )
 from autoware_ml.datamodule.base_dataset_task import BaseDatasetTask
-from autoware_ml.transforms.multi_task.base import MultiTaskTransformsCompose
+from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.types.tasks import TaskType
 from autoware_ml.types.dataset import SplitType
 
@@ -36,7 +36,7 @@ class T4Dataset(BaseDataset):
         max_num_3d_gt_bboxes: int,
         split_type: SplitType,
         dataset_records_dataframe: pl.DataFrame | None,
-        transforms: MultiTaskTransformsCompose | None,
+        transforms: TransformsCompose | None,
         dataset_tasks: MappingProxyType[TaskType | str, BaseDatasetTask],
     ) -> None:
         """

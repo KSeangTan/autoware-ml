@@ -11,10 +11,10 @@ import torch
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.points.base_points import BasePoints
-from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
+from autoware_ml.transforms.base import BaseTransform
 
 
-class PointsRangeFilter(MultiTaskBaseTransform):
+class PointsRangeFilter(BaseTransform):
     """Filter points based on their range."""
 
     _required_keys = ["point_cloud_data"]

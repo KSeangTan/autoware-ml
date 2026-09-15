@@ -8,13 +8,13 @@ import torch
 from torchvision.io import decode_image
 
 from autoware_ml.geometry.cameras.base_images import BaseImages
-from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
+from autoware_ml.transforms.base import BaseTransform
 from autoware_ml.dataclasses.geometry.images import ImageSample
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.types.geometry import ImageChannel
 
 
-class LoadImageFromFile(MultiTaskBaseTransform):
+class LoadImageFromFile(BaseTransform):
     """Load one RGB image from a metadata path."""
 
     _required_keys = ["image_samples"]
@@ -79,7 +79,7 @@ class LoadImageFromFile(MultiTaskBaseTransform):
         return multi_task_gt_sample._replace(camera_image_data=camera_image_data)
 
 
-class LoadMultiViewImagesFromFiles(MultiTaskBaseTransform):
+class LoadMultiViewImagesFromFiles(BaseTransform):
     """Load synchronized multiview images and camera matrices."""
 
     _required_keys = ["image_samples"]

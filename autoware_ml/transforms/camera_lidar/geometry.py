@@ -50,7 +50,7 @@ from torch import Tensor
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.dataclasses.geometry.transformation import LiDARTransformationSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
-from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
+from autoware_ml.transforms.base import BaseTransform
 from autoware_ml.transforms.geometry3d import rotation_matrix
 from autoware_ml.types.spatial import RotationAxis, BEVDirection
 from autoware_ml.types.geometry import TransformationName
@@ -98,7 +98,7 @@ def _validate_at_least_one_modality(
         )
 
 
-class GlobalRotScaleTrans(MultiTaskBaseTransform):
+class GlobalRotScaleTrans(BaseTransform):
     """Apply global rotation, scaling, and optional translation to points, bboxes and cameras.
 
     Required keys:
@@ -228,7 +228,7 @@ class GlobalRotScaleTrans(MultiTaskBaseTransform):
         )
 
 
-class GlobalBEVRandomFlip(MultiTaskBaseTransform):
+class GlobalBEVRandomFlip(BaseTransform):
     """Globally and randomly flip points, bboxes and cameras along the BEV axes.
 
     Required keys:

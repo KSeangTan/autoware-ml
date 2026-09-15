@@ -18,7 +18,7 @@ from typing import Any
 
 import numpy as np
 
-from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.legacy_base import BaseTransform
 
 
 class PreparePointCloudInput(BaseTransform):

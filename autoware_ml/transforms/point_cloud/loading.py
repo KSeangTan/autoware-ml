@@ -27,13 +27,13 @@ import torch
 
 from autoware_ml.geometry.points.base_points import BasePoints
 from autoware_ml.geometry.points.lidar_points import LiDARPoints
-from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
+from autoware_ml.transforms.base import BaseTransform
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.dataclasses.geometry.point_clouds import LiDARPointCloudSample
 from autoware_ml.types.geometry import PointFeatureName, PointFieldIndex
 
 
-class LoadPointsFromFile(MultiTaskBaseTransform):
+class LoadPointsFromFile(BaseTransform):
     """Load point clouds from a lidar file path stored in sample metadata."""
 
     _required_keys = ["lidar_point_cloud_samples"]

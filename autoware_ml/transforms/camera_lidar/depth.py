@@ -26,10 +26,10 @@ from torch import Tensor
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
-from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
+from autoware_ml.transforms.base import BaseTransform
 
 
-class LiDARDepthSparseTransform(MultiTaskBaseTransform):
+class LiDARDepthSparseTransform(BaseTransform):
     """Project the lidar points onto every camera into sparse depth maps.
 
     The depth maps are stored in ``camera_image_data.depth_images`` with the resolution of the

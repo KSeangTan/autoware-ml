@@ -7,11 +7,11 @@ import numpy as np
 import torch
 
 from autoware_ml.geometry.cameras.base_images import BaseImages
-from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
+from autoware_ml.transforms.base import BaseTransform
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 
 
-class UndistortImage(MultiTaskBaseTransform):
+class UndistortImage(BaseTransform):
     """Undistort every camera image using its distortion coefficients.
 
     The distortion coefficients are expressed in the frame of the raw image, so this

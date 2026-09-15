@@ -26,10 +26,10 @@ import torch
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
-from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
+from autoware_ml.transforms.base import BaseTransform
 
 
-class PhotometricDistortion(MultiTaskBaseTransform):
+class PhotometricDistortion(BaseTransform):
     """Apply random brightness, contrast, saturation, and hue to RGB channels.
 
     Operates on the camera images (num_cameras, 3, H, W). Assumes float32 [0, 255] input in

@@ -27,7 +27,7 @@ from typing import Any
 from autoware_ml.datamodule.base import DataModule, Dataset
 from autoware_ml.datamodule.common.serialization import SerializedSampleList
 from autoware_ml.datamodule.nuscenes.common import resolve_lidar_path
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.legacy_base import TransformsCompose
 
 
 def _resolve_path(base: str, path: str) -> str:

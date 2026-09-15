@@ -44,7 +44,7 @@ from autoware_ml.utils.cli.helpers import (
 from autoware_ml.utils.session import SessionCommandError
 
 SAMPLE_CONFIG_NAME = (
-    "detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base"
+    "detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base"
 )
 SAMPLE_CONFIG_PATH = f"experiments/{SAMPLE_CONFIG_NAME}"
 SAMPLE_SESSION_NAME = "centerpoint-train"
@@ -97,7 +97,7 @@ class TestResolveConfigReference:
     def test_resolve_packaged_yaml_path(self) -> None:
         config_path, config_name, hydra_overrides = resolve_config_reference(
             "autoware_ml/configs/experiments/detection3d/centerpoint/t4dataset/"
-            "voxel024_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base.yaml",
+            "voxel024_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base.yaml",
             "experiments",
         )
 

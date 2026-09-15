@@ -8,11 +8,11 @@ import torch
 from torchvision.transforms import v2
 
 from autoware_ml.geometry.cameras.base_images import BaseImages
-from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
+from autoware_ml.transforms.base import BaseTransform
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 
 
-class NormalizeMultiviewImage(MultiTaskBaseTransform):
+class NormalizeMultiviewImage(BaseTransform):
     """Normalize multiview images channel-wise."""
 
     _required_keys = ["camera_image_data"]

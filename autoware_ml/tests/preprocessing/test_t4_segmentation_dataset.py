@@ -19,7 +19,7 @@ import pickle
 import numpy as np
 
 from autoware_ml.datamodule.t4dataset.segmentation3d import T4Segmentation3DDataset
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.legacy_base import TransformsCompose
 from autoware_ml.transforms.point_cloud.loading import LoadPointsFromFile
 from autoware_ml.transforms.segmentation3d.loading import LoadSegAnnotations3D
 

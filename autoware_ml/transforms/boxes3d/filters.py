@@ -24,10 +24,10 @@ import torch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.geometry.points.base_points import BasePoints
-from autoware_ml.transforms.multi_task.base import MultiTaskBaseTransform
+from autoware_ml.transforms.base import BaseTransform
 
 
-class BBoxesLabelNameFilter(MultiTaskBaseTransform):
+class BBoxesLabelNameFilter(BaseTransform):
     """Filter 3D bounding boxes by label names."""
 
     _required_keys = ["detection3d_gt_bboxes_3d"]
@@ -58,7 +58,7 @@ class BBoxesLabelNameFilter(MultiTaskBaseTransform):
         return multi_task_gt_sample
 
 
-class BBoxesAttributeFilter(MultiTaskBaseTransform):
+class BBoxesAttributeFilter(BaseTransform):
     """Filter out 3D bounding boxes by their attributes, on a per label name basis.
 
     For example, the following configuration removes every parked or stopped vehicle, and every
@@ -122,7 +122,7 @@ class BBoxesAttributeFilter(MultiTaskBaseTransform):
         return multi_task_gt_sample
 
 
-class BBoxesMinPointsFilter(MultiTaskBaseTransform):
+class BBoxesMinPointsFilter(BaseTransform):
     """Filter 3D bounding boxes by minimum number of points and distance of bboxes."""
 
     _required_keys = ["detection3d_gt_bboxes_3d", "point_cloud_data"]
@@ -169,7 +169,7 @@ class BBoxesMinPointsFilter(MultiTaskBaseTransform):
         return multi_task_gt_sample
 
 
-class BBoxesBEVDistanceFilter(MultiTaskBaseTransform):
+class BBoxesBEVDistanceFilter(BaseTransform):
     """Filter 3D bounding boxes by their bev distance."""
 
     _required_keys = ["detection3d_gt_bboxes_3d"]
@@ -201,7 +201,7 @@ class BBoxesBEVDistanceFilter(MultiTaskBaseTransform):
         return multi_task_gt_sample
 
 
-class BBoxesPhysicalFilter(MultiTaskBaseTransform):
+class BBoxesPhysicalFilter(BaseTransform):
     """Remove 3D bounding boxes that cannot become a valid training target.
 
     A physically invalid box is not a geometry outlier, it is pipeline garbage that would
