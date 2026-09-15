@@ -141,9 +141,6 @@ class BaseBBoxes3D(ABC):
                 f"bounding box, but got {len(self.bbox_attributes)}"
             )
 
-        if not (self.dims > 0).all():
-            raise ValueError("All bounding boxes must have positive dimensions.")
-
     @property
     def bbox_params(self) -> Float32[Tensor, "num_bboxes num_Box3DFieldIndex"]:
         """
