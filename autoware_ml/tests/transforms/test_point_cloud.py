@@ -8,11 +8,7 @@ from autoware_ml.transforms.point_cloud.crop import (
     PointsRangeFilter,
     SphereCrop,
 )
-from autoware_ml.transforms.point_cloud.geometry import (
-    GlobalRotScaleTrans,
-    RandomFlip3D,
-    RandomRotateTargetAngle,
-)
+from autoware_ml.transforms.point_cloud.geometry import RandomRotateTargetAngle
 from autoware_ml.transforms.point_cloud.perturbation import RandomShift, RandomStrengthJitter
 from autoware_ml.transforms.point_cloud.sampling import (
     ElasticDistortion,
@@ -127,45 +123,6 @@ class TestPointCloudTransforms:
         assert output["grid_coord"].shape == (2, 3)
         assert np.all(output["grid_coord"] >= 0)
         assert np.all(output["grid_coord"] < 2)
-
-    def test_random_flip3d_updates_detection_boxes(self):
-        sample = {
-            "points": np.array([[1.0, 2.0, 0.0, 1.0]], dtype=np.float32),
-            "gt_boxes": np.array(
-                [[1.0, 2.0, 0.0, 4.0, 2.0, 1.0, 0.25, 1.5, -0.5]],
-                dtype=np.float32,
-            ),
-        }
-
-        output = RandomFlip3D(flip_ratio_bev_horizontal=1.0, flip_ratio_bev_vertical=0.0)(sample)
-
-        assert np.allclose(output["points"][0, :2], np.array([1.0, -2.0], dtype=np.float32))
-        assert np.allclose(
-            output["gt_boxes"][0, [1, 6, 8]],
-            np.array([-2.0, -0.25, 0.5], dtype=np.float32),
-        )
-
-    def test_global_rot_scale_trans_updates_detection_boxes(self):
-        sample = {
-            "points": np.array([[1.0, 0.0, 0.0, 1.0]], dtype=np.float32),
-            "gt_boxes": np.array(
-                [[1.0, 0.0, 0.0, 4.0, 2.0, 1.0, 0.0, 1.0, 0.0]],
-                dtype=np.float32,
-            ),
-        }
-
-        np.random.seed(0)
-        output = GlobalRotScaleTrans(
-            rot_range=[0.1, 0.1],
-            scale_ratio_range=[2.0, 2.0],
-            translation_std=[0.0, 0.0, 0.0],
-        )(sample)
-
-        assert np.allclose(
-            output["gt_boxes"][0, 3:6],
-            np.array([8.0, 4.0, 2.0], dtype=np.float32),
-        )
-        assert np.allclose(output["gt_boxes"][0, 6], 0.1)
 
     def test_multi_sweeps_time_dim_overwrites_raw_column_with_time_lag(self, tmp_path):
         key_points = np.zeros((2, 5), dtype=np.float32)
@@ -462,61 +419,6 @@ class TestPointCloudTransforms:
         output = RandomRotateTargetAngle(angle=(0.5,), center=[0.0, 0.0, 0.0], p=0.5)(sample)
 
         assert np.allclose(output["coord"], np.array([[1.0, 0.0, 0.0]], dtype=np.float32))
-
-    def test_random_flip_uses_configured_probability_per_axis(self, monkeypatch):
-        sample = {
-            "coord": np.array([[1.0, 2.0, 0.0]], dtype=np.float32),
-            "normal": np.array([[0.5, 0.25, 1.0]], dtype=np.float32),
-        }
-        calls = iter([0.2, 0.8])
-        monkeypatch.setattr(np.random, "rand", lambda: next(calls))
-
-        # flip_ratio_bev_horizontal flips y-axis; flip_ratio_bev_vertical flips x-axis.
-        # rand() returns 0.2 < 0.5 so horizontal flip triggers (y flipped),
-        # rand() returns 0.8 >= 0.5 so vertical flip does not trigger.
-        output = RandomFlip3D(flip_ratio_bev_horizontal=0.5, flip_ratio_bev_vertical=0.5)(sample)
-
-        assert np.allclose(output["coord"], np.array([[1.0, -2.0, 0.0]], dtype=np.float32))
-        assert np.allclose(output["normal"], np.array([[0.5, -0.25, 1.0]], dtype=np.float32))
-
-    def test_random_flip_updates_boxes_on_coord(self):
-        sample = {
-            "coord": np.array([[1.0, 2.0, 0.0]], dtype=np.float32),
-            "gt_boxes": np.array(
-                [[1.0, 2.0, 0.0, 4.0, 2.0, 1.0, 0.25, 1.5, -0.5]],
-                dtype=np.float32,
-            ),
-        }
-
-        output = RandomFlip3D(flip_ratio_bev_horizontal=1.0, flip_ratio_bev_vertical=0.0)(sample)
-
-        assert np.allclose(output["coord"][0, :2], np.array([1.0, -2.0], dtype=np.float32))
-        assert np.allclose(
-            output["gt_boxes"][0, [1, 6, 8]],
-            np.array([-2.0, -0.25, 0.5], dtype=np.float32),
-        )
-
-    def test_global_rot_scale_trans_geometry_updates_boxes(self):
-        sample = {
-            "coord": np.array([[1.0, 0.0, 0.0]], dtype=np.float32),
-            "gt_boxes": np.array(
-                [[1.0, 0.0, 0.0, 4.0, 2.0, 1.0, 0.0, 1.0, 0.0]],
-                dtype=np.float32,
-            ),
-        }
-
-        np.random.seed(0)
-        output = GlobalRotScaleTrans(
-            rot_range=[0.1, 0.1],
-            scale_ratio_range=[2.0, 2.0],
-            translation_std=None,
-        )(sample)
-
-        assert np.allclose(
-            output["gt_boxes"][0, 3:6],
-            np.array([8.0, 4.0, 2.0], dtype=np.float32),
-        )
-        assert np.allclose(output["gt_boxes"][0, 6], 0.1)
 
     def test_random_shift_translates_all_points(self):
         sample = {"coord": np.zeros((2, 3), dtype=np.float32)}

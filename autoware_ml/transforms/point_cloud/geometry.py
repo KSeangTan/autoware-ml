@@ -15,10 +15,10 @@
 """Point-cloud geometric augmentations (lidar-only).
 
 Operate on the point representation (``coord`` and/or ``points``), per-point
-``normal`` and ``gt_boxes`` when present. They require a point cloud and never
-touch camera matrices - the camera-aware variants live in
-``transforms.camera_lidar.geometry`` and share the exact same math via
-``transforms.geometry3d``.
+``normal`` and ``gt_boxes`` when present, using the shared math of
+``transforms.geometry3d``. The global rotation / scale / translation and the BEV
+flips live in ``transforms.camera_lidar.geometry`` (``GlobalRotScaleTrans`` and
+``GlobalBEVRandomFlip``), which handle lidar-only, camera-only and fusion samples.
 """
 
 from __future__ import annotations
@@ -75,78 +75,4 @@ class RandomRotateTargetAngle(BaseTransform):
         g3d.rotate_points_about_center(input_dict, rotation, center)
         g3d.transform_normal(input_dict, rotation)
         g3d.rotate_boxes_about_center(input_dict, rotation, angle, center)
-        return input_dict
-
-
-class RandomFlip3D(BaseTransform):
-    """Randomly flip the point cloud (and boxes / normals) across the BEV axes."""
-
-    _required_keys: list[str] = []
-
-    def __init__(
-        self,
-        *,
-        flip_ratio_bev_horizontal: float = 0.5,
-        flip_ratio_bev_vertical: float = 0.5,
-    ) -> None:
-        """Initialize the RandomFlip3D transform.
-
-        Args:
-            flip_ratio_bev_horizontal: Probability of flipping the lateral (y) axis.
-            flip_ratio_bev_vertical: Probability of flipping the longitudinal (x) axis.
-        """
-        self.flip_ratio_bev_horizontal = flip_ratio_bev_horizontal
-        self.flip_ratio_bev_vertical = flip_ratio_bev_vertical
-
-    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
-        """Apply BEV flips to points, normals, and boxes."""
-        g3d.require_point_cloud(input_dict)
-        flip_x, flip_y = g3d.sample_bev_flips(
-            self.flip_ratio_bev_horizontal, self.flip_ratio_bev_vertical
-        )
-        if flip_y:
-            g3d.flip_points(input_dict, axis=1)
-            g3d.flip_normal(input_dict, axis=1)
-            g3d.flip_boxes(input_dict, axis=1)
-        if flip_x:
-            g3d.flip_points(input_dict, axis=0)
-            g3d.flip_normal(input_dict, axis=0)
-            g3d.flip_boxes(input_dict, axis=0)
-        return input_dict
-
-
-class GlobalRotScaleTrans(BaseTransform):
-    """Apply global rotation, scaling, and optional translation to the point cloud."""
-
-    _required_keys: list[str] = []
-
-    def __init__(
-        self,
-        *,
-        rot_range: Sequence[float],
-        scale_ratio_range: Sequence[float],
-        translation_std: Sequence[float] | None = None,
-    ) -> None:
-        """Initialize the GlobalRotScaleTrans transform.
-
-        Args:
-            rot_range: Min and max rotation angles in radians around z.
-            scale_ratio_range: Min and max scale factors.
-            translation_std: Optional per-axis Gaussian translation std ``[x, y, z]``.
-        """
-        self.rot_range = rot_range
-        self.scale_ratio_range = scale_ratio_range
-        self.translation_std = (
-            np.asarray(translation_std, dtype=np.float32) if translation_std is not None else None
-        )
-
-    def transform(self, input_dict: dict[str, Any]) -> dict[str, Any]:
-        """Rotate, scale, and translate points, normals, and boxes."""
-        g3d.require_point_cloud(input_dict)
-        rotation, rotation_angle, scale, translation = g3d.sample_rot_scale_trans(
-            self.rot_range, self.scale_ratio_range, self.translation_std
-        )
-        g3d.transform_points(input_dict, rotation, scale, translation)
-        g3d.transform_normal(input_dict, rotation)
-        g3d.transform_boxes(input_dict, rotation, rotation_angle, scale, translation)
         return input_dict

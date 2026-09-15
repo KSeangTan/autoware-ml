@@ -45,13 +45,13 @@ datamodule:
         pad_empty_sweeps: true
         remove_close: true
         test_mode: false
-      - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
-        rot_range: [-0.78539816, 0.78539816]
+      - _target_: autoware_ml.transforms.camera_lidar.geometry.GlobalRotScaleTrans
+        yaw_rot_range: [-0.78539816, 0.78539816]
         scale_ratio_range: [0.9, 1.1]
         translation_std: [0.0, 0.0, 0.0]
-      - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip3D
-        flip_ratio_bev_horizontal: 0.5
-        flip_ratio_bev_vertical: 0.5
+      - _target_: autoware_ml.transforms.camera_lidar.geometry.GlobalBEVRandomFlip
+        horizontal_flip_ratio: 0.5
+        vertical_flip_ratio: 0.5
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
         point_cloud_range: ${point_cloud_range}
       - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
