@@ -28,8 +28,8 @@ parameters and can be used as a loss or matching cost.
 
 from __future__ import annotations
 
+from jaxtyping import Bool, Float32, Int32, Int64
 import torch
-from torch import Tensor
 from torch.autograd import Function
 
 from . import diff_iou_rotated_ext
@@ -47,7 +47,12 @@ class SortVertices(Function):
     """Sort the valid vertices of every intersection polygon counter-clockwise."""
 
     @staticmethod
-    def forward(ctx, vertices: Tensor, mask: Tensor, num_valid: Tensor) -> Tensor:
+    def forward(
+        ctx,
+        vertices: Float32[torch.Tensor, "batch_size num_boxes 24 2"],
+        mask: Bool[torch.Tensor, "batch_size num_boxes 24"],
+        num_valid: Int32[torch.Tensor, "batch_size num_boxes"],
+    ) -> Int32[torch.Tensor, "batch_size num_boxes 9"]:
         """Run the CUDA sorting kernel.
 
         Args:
@@ -66,12 +71,15 @@ class SortVertices(Function):
         return idx
 
     @staticmethod
-    def backward(ctx, gradout: Tensor) -> tuple:
+    def backward(ctx, gradout: Int32[torch.Tensor, "batch_size num_boxes 9"]) -> tuple:
         """Indices carry no gradient."""
         return ()
 
 
-def enclosing_box_aligned(corners1: Tensor, corners2: Tensor) -> Tensor:
+def enclosing_box_aligned(
+    corners1: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
+    corners2: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
+) -> Float32[torch.Tensor, "batch_size num_boxes"]:
     """Area of the axis-aligned smallest box enclosing two rotated boxes.
 
     The cheapest of the enclosing variants, but the loosest one: the box is
@@ -89,7 +97,10 @@ def enclosing_box_aligned(corners1: Tensor, corners2: Tensor) -> Tensor:
     return wh[..., 0] * wh[..., 1]
 
 
-def enclosing_box_smallest(corners1: Tensor, corners2: Tensor) -> Tensor:
+def enclosing_box_smallest(
+    corners1: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
+    corners2: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
+) -> Float32[torch.Tensor, "batch_size num_boxes"]:
     """Area of the minimum-area (rotated) box enclosing two rotated boxes.
 
     A side of the minimum-area enclosing rectangle is always flush with an
@@ -122,7 +133,10 @@ def enclosing_box_smallest(corners1: Tensor, corners2: Tensor) -> Tensor:
     return (w * h).min(dim=-1)[0]
 
 
-def convex_hull_area(corners1: Tensor, corners2: Tensor) -> Tensor:
+def convex_hull_area(
+    corners1: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
+    corners2: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
+) -> Float32[torch.Tensor, "batch_size num_boxes"]:
     """Area of the convex hull of two rotated boxes.
 
     The tightest convex region containing both boxes, i.e. the smallest
@@ -166,7 +180,11 @@ def convex_hull_area(corners1: Tensor, corners2: Tensor) -> Tensor:
     return torch.stack(best, dim=-1).max(dim=-1)[0] / 2
 
 
-def enclosing_area(corners1: Tensor, corners2: Tensor, enclosing_type: str = "smallest") -> Tensor:
+def enclosing_area(
+    corners1: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
+    corners2: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
+    enclosing_type: str = "smallest",
+) -> Float32[torch.Tensor, "batch_size num_boxes"]:
     """Area of the region enclosing two rotated boxes.
 
     Args:
@@ -193,7 +211,13 @@ def enclosing_area(corners1: Tensor, corners2: Tensor, enclosing_type: str = "sm
     )
 
 
-def box_intersection(corners1: Tensor, corners2: Tensor) -> tuple[Tensor, Tensor]:
+def box_intersection(
+    corners1: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
+    corners2: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
+) -> tuple[
+    Float32[torch.Tensor, "batch_size num_boxes 4 4 2"],
+    Bool[torch.Tensor, "batch_size num_boxes 4 4"],
+]:
     """Find intersection points of rectangles.
 
     Convention: if two edges are (nearly) parallel there is no intersection point, and an
@@ -243,7 +267,10 @@ def box_intersection(corners1: Tensor, corners2: Tensor) -> tuple[Tensor, Tensor
     return intersections, mask
 
 
-def box1_in_box2(corners1: Tensor, corners2: Tensor) -> Tensor:
+def box1_in_box2(
+    corners1: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
+    corners2: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
+) -> Bool[torch.Tensor, "batch_size num_boxes 4"]:
     """Check if corners of box1 lie in box2.
 
     Convention: if a corner is exactly on the edge of the other box, it's also a valid point.
@@ -274,7 +301,12 @@ def box1_in_box2(corners1: Tensor, corners2: Tensor) -> Tensor:
     return cond1 * cond2
 
 
-def box_in_box(corners1: Tensor, corners2: Tensor) -> tuple[Tensor, Tensor]:
+def box_in_box(
+    corners1: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
+    corners2: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
+) -> tuple[
+    Bool[torch.Tensor, "batch_size num_boxes 4"], Bool[torch.Tensor, "batch_size num_boxes 4"]
+]:
     """Check if corners of two boxes lie in each other.
 
     Args:
@@ -290,13 +322,16 @@ def box_in_box(corners1: Tensor, corners2: Tensor) -> tuple[Tensor, Tensor]:
 
 
 def build_vertices(
-    corners1: Tensor,
-    corners2: Tensor,
-    c1_in_2: Tensor,
-    c2_in_1: Tensor,
-    intersections: Tensor,
-    valid_mask: Tensor,
-) -> tuple[Tensor, Tensor]:
+    corners1: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
+    corners2: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
+    c1_in_2: Bool[torch.Tensor, "batch_size num_boxes 4"],
+    c2_in_1: Bool[torch.Tensor, "batch_size num_boxes 4"],
+    intersections: Float32[torch.Tensor, "batch_size num_boxes 4 4 2"],
+    valid_mask: Bool[torch.Tensor, "batch_size num_boxes 4 4"],
+) -> tuple[
+    Float32[torch.Tensor, "batch_size num_boxes 24 2"],
+    Bool[torch.Tensor, "batch_size num_boxes 24"],
+]:
     """Find vertices of intersection area.
 
     Args:
@@ -330,7 +365,10 @@ def build_vertices(
     return vertices, mask
 
 
-def drop_duplicate_vertices(vertices: Tensor, mask: Tensor) -> Tensor:
+def drop_duplicate_vertices(
+    vertices: Float32[torch.Tensor, "batch_size num_boxes 24 2"],
+    mask: Bool[torch.Tensor, "batch_size num_boxes 24"],
+) -> Bool[torch.Tensor, "batch_size num_boxes 24"]:
     """Invalidate candidate vertices that coincide with an earlier valid candidate.
 
     Two boxes that share a corner, or that are (nearly) identical, produce the same point
@@ -365,7 +403,10 @@ def drop_duplicate_vertices(vertices: Tensor, mask: Tensor) -> Tensor:
     return mask & ~shadowed
 
 
-def sort_indices(vertices: Tensor, mask: Tensor) -> Tensor:
+def sort_indices(
+    vertices: Float32[torch.Tensor, "batch_size num_boxes 24 2"],
+    mask: Bool[torch.Tensor, "batch_size num_boxes 24"],
+) -> Int64[torch.Tensor, "batch_size num_boxes 9"]:
     """Sort indices.
 
     Note:
@@ -392,7 +433,12 @@ def sort_indices(vertices: Tensor, mask: Tensor) -> Tensor:
     return SortVertices.apply(vertices_normalized, mask, num_valid).long()
 
 
-def calculate_area(idx_sorted: Tensor, vertices: Tensor) -> tuple[Tensor, Tensor]:
+def calculate_area(
+    idx_sorted: Int64[torch.Tensor, "batch_size num_boxes 9"],
+    vertices: Float32[torch.Tensor, "batch_size num_boxes 24 2"],
+) -> tuple[
+    Float32[torch.Tensor, "batch_size num_boxes"], Float32[torch.Tensor, "batch_size num_boxes 9 2"]
+]:
     """Calculate area of intersection.
 
     Args:
@@ -414,7 +460,12 @@ def calculate_area(idx_sorted: Tensor, vertices: Tensor) -> tuple[Tensor, Tensor
     return area, selected
 
 
-def oriented_box_intersection_2d(corners1: Tensor, corners2: Tensor) -> tuple[Tensor, Tensor]:
+def oriented_box_intersection_2d(
+    corners1: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
+    corners2: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
+) -> tuple[
+    Float32[torch.Tensor, "batch_size num_boxes"], Float32[torch.Tensor, "batch_size num_boxes 9 2"]
+]:
     """Calculate intersection area of 2d rotated boxes.
 
     Args:
@@ -433,7 +484,9 @@ def oriented_box_intersection_2d(corners1: Tensor, corners2: Tensor) -> tuple[Te
     return calculate_area(sorted_indices, vertices)
 
 
-def box2corners(box: Tensor) -> Tensor:
+def box2corners(
+    box: Float32[torch.Tensor, "batch_size num_boxes 5"],
+) -> Float32[torch.Tensor, "batch_size num_boxes 4 2"]:
     """Convert rotated 2d box coordinate to corners.
 
     Args:
@@ -461,7 +514,10 @@ def box2corners(box: Tensor) -> Tensor:
     return rotated
 
 
-def diff_iou_rotated_2d(box1: Tensor, box2: Tensor) -> Tensor:
+def diff_iou_rotated_2d(
+    box1: Float32[torch.Tensor, "batch_size num_boxes 5"],
+    box2: Float32[torch.Tensor, "batch_size num_boxes 5"],
+) -> Float32[torch.Tensor, "batch_size num_boxes"]:
     """Calculate differentiable iou of rotated 2d boxes.
 
     Args:
@@ -481,7 +537,10 @@ def diff_iou_rotated_2d(box1: Tensor, box2: Tensor) -> Tensor:
     return iou
 
 
-def diff_iou_rotated_3d(box3d1: Tensor, box3d2: Tensor) -> Tensor:
+def diff_iou_rotated_3d(
+    box3d1: Float32[torch.Tensor, "batch_size num_boxes 7"],
+    box3d2: Float32[torch.Tensor, "batch_size num_boxes 7"],
+) -> Float32[torch.Tensor, "batch_size num_boxes"]:
     """Calculate differentiable iou of rotated 3d boxes.
 
     Args:
