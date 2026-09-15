@@ -11,8 +11,9 @@ dataset: ???
 grid_size: ???
 point_cloud_range: ???
 
-train_sweeps_num: 1
-val_sweeps_num: 1
+# Number of past sweeps appended to the current frame, 0 keeps the current frame only.
+train_sweeps_num: 0
+val_sweeps_num: 0
 
 datamodule:
   _target_: ???

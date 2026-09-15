@@ -48,11 +48,17 @@ datamodule:
         label_mapping: ${dataset.segmentation3d.seg_label_mapping}
         max_label: ${dataset.segmentation3d.max_label}
         ignore_index: ${dataset.segmentation3d.ignore_index}
-      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
-        sweeps_num: 1
+      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
         load_dim: 5
         use_dim: [0, 1, 2, 3]
-        remove_close: true
+        bev_remove_radius: 0.0
+      - _target_: autoware_ml.transforms.point_cloud.loading.LoadMultiSweepPointsFromFile
+        sweeps_num: 0
+        test_mode: true
+        use_timestamp_difference: false
+        load_dim: 5
+        use_dim: [0, 1, 2, 3]
+        bev_remove_radius: 1.0
       - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
       - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
       - _target_: autoware_ml.transforms.point_cloud.geometry.RandomRotateTargetAngle
@@ -105,11 +111,17 @@ datamodule:
         label_mapping: ${dataset.segmentation3d.seg_label_mapping}
         max_label: ${dataset.segmentation3d.max_label}
         ignore_index: ${dataset.segmentation3d.ignore_index}
-      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
-        sweeps_num: 1
+      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
         load_dim: 5
         use_dim: [0, 1, 2, 3]
-        remove_close: true
+        bev_remove_radius: 0.0
+      - _target_: autoware_ml.transforms.point_cloud.loading.LoadMultiSweepPointsFromFile
+        sweeps_num: 0
+        test_mode: true
+        use_timestamp_difference: false
+        load_dim: 5
+        use_dim: [0, 1, 2, 3]
+        bev_remove_radius: 1.0
       - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
       - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
@@ -133,11 +145,17 @@ datamodule:
   predict_transforms:
     _target_: autoware_ml.transforms.legacy_base.TransformsCompose
     pipeline:
-      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
-        sweeps_num: 1
+      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
         load_dim: 5
         use_dim: [0, 1, 2, 3]
-        remove_close: true
+        bev_remove_radius: 0.0
+      - _target_: autoware_ml.transforms.point_cloud.loading.LoadMultiSweepPointsFromFile
+        sweeps_num: 0
+        test_mode: true
+        use_timestamp_difference: false
+        load_dim: 5
+        use_dim: [0, 1, 2, 3]
+        bev_remove_radius: 1.0
       - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
         point_cloud_range: ${point_cloud_range}

@@ -87,7 +87,7 @@ def build_sweep_entries(sample: Mapping[str, Any]) -> list[dict[str, Any]]:
             and ``lidar_sweeps`` metadata.
 
     Returns:
-        Sweep dictionaries consumed by ``LoadPointsFromMultiSweeps``.
+        Sweep dictionaries carrying the path, timestamp and key-lidar transform of each sweep.
 
     Raises:
         KeyError: If a sweep is missing the pose or path metadata required to

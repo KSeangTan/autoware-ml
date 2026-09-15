@@ -151,6 +151,7 @@ class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
         load_dim: int = 5,
         use_dim: Sequence[int] | int = (0, 1, 2, 3),
         bev_remove_radius: float = 1.0,
+        pad_empty_sweeps: bool = False,
     ) -> None:
         """Initialize the multi-sweep point-cloud loader.
 
@@ -166,12 +167,16 @@ class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
             use_dim: Selected feature dimensions preserved in the loaded tensor.
             bev_remove_radius: Radius (x and y) within which points will be removed (e.g., to remove ego vehicle
                 points). Set to 0.0 to disable point removal.
+            pad_empty_sweeps: Whether to repeat the current frame ``sweeps_num`` times when the
+              sample has no sweep at all, so its point count stays comparable to samples with
+              sweeps. Samples with fewer sweeps than ``sweeps_num`` are not padded.
         """
         super().__init__(load_dim=load_dim, use_dim=use_dim)
         self.sweeps_num = sweeps_num
         self.test_mode = test_mode
         self.bev_remove_radius = bev_remove_radius
         self.use_timestamp_difference = use_timestamp_difference
+        self.pad_empty_sweeps = pad_empty_sweeps
 
     def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
         """Load multi-sweep point data from the current sample.
@@ -208,6 +213,12 @@ class LoadMultiSweepPointsFromFile(LoadPointsFromFile):
             current_frame_point_cloud_data.add_timestamp_difference(0.0)
 
         concat_points = [current_frame_point_cloud_data]
+        if not sweep_indices and self.pad_empty_sweeps:
+            # No sweep exists for this frame: repeat the current frame (already carrying a zero
+            # timestamp difference when enabled) in place of the missing sweeps.
+            concat_points += [
+                current_frame_point_cloud_data.deep_copy() for _ in range(self.sweeps_num)
+            ]
         for sweep_idx in sweep_indices:
             sweep_points = self.load_points_from_samples(
                 sweep_idx, multi_task_gt_sample.lidar_point_cloud_samples

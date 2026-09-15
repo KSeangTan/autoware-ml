@@ -37,11 +37,17 @@ datamodule:
     pipeline:
       - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
         name_mapping: ${dataset.detection3d.name_mapping}
-      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
-        sweeps_num: 10
+      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
         load_dim: 5
         use_dim: [0, 1, 2, 3]
-        remove_close: true
+        bev_remove_radius: 0.0
+      - _target_: autoware_ml.transforms.point_cloud.loading.LoadMultiSweepPointsFromFile
+        sweeps_num: 9
+        test_mode: true
+        use_timestamp_difference: false
+        load_dim: 5
+        use_dim: [0, 1, 2, 3]
+        bev_remove_radius: 1.0
       - _target_: autoware_ml.transforms.camera_lidar.geometry.GlobalRotScaleTrans
         yaw_rot_range: [-0.78539816, 0.78539816]
         scale_ratio_range: [0.9, 1.1]
@@ -62,22 +68,34 @@ datamodule:
     pipeline:
       - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
         name_mapping: ${dataset.detection3d.name_mapping}
-      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
-        sweeps_num: 10
+      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
         load_dim: 5
         use_dim: [0, 1, 2, 3]
-        remove_close: true
+        bev_remove_radius: 0.0
+      - _target_: autoware_ml.transforms.point_cloud.loading.LoadMultiSweepPointsFromFile
+        sweeps_num: 9
+        test_mode: true
+        use_timestamp_difference: false
+        load_dim: 5
+        use_dim: [0, 1, 2, 3]
+        bev_remove_radius: 1.0
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
         point_cloud_range: ${point_cloud_range}
   test_transforms: ${datamodule.val_transforms}
   predict_transforms:
     _target_: autoware_ml.transforms.legacy_base.TransformsCompose
     pipeline:
-      - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
-        sweeps_num: 10
+      - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
         load_dim: 5
         use_dim: [0, 1, 2, 3]
-        remove_close: true
+        bev_remove_radius: 0.0
+      - _target_: autoware_ml.transforms.point_cloud.loading.LoadMultiSweepPointsFromFile
+        sweeps_num: 9
+        test_mode: true
+        use_timestamp_difference: false
+        load_dim: 5
+        use_dim: [0, 1, 2, 3]
+        bev_remove_radius: 1.0
       - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
         point_cloud_range: ${point_cloud_range}
 

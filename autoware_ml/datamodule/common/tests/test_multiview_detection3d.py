@@ -14,7 +14,6 @@ from autoware_ml.datamodule.common.multiview_detection3d import MultiviewDetecti
 from autoware_ml.transforms.legacy_base import TransformsCompose
 from autoware_ml.transforms.boxes3d.loading import LoadAnnotations3D
 from autoware_ml.transforms.camera.loading import LoadMultiViewImagesFromFiles
-from autoware_ml.transforms.point_cloud.sweeps import LoadPointsFromMultiSweeps
 
 
 class _Dataset(MultiviewDetection3DDataset):
@@ -64,14 +63,12 @@ def test_multiview_detection_dataset_applies_loader_pipeline(tmp_path: Path) -> 
             [
                 LoadAnnotations3D(),
                 LoadMultiViewImagesFromFiles(),
-                LoadPointsFromMultiSweeps(load_dim=5, use_dim=[0, 1, 2, 3], sweeps_num=0),
             ]
         ),
     )
 
     output = dataset[0]
 
-    assert output["points"].shape == (1, 4)
     assert output["img"].shape == (1, 3, 4, 6)
     assert output["camera_intrinsics"].shape == (1, 4, 4)
     assert output["lidar2cam"].shape == (1, 4, 4)
