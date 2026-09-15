@@ -84,12 +84,12 @@ class MlflowRunContext:
 
 
 def get_user_config_name() -> str:
-    """Return the user-facing config name without the ``tasks/`` prefix.
+    """Return the user-facing config name without the ``experiments/`` prefix.
 
     Returns:
         Config name shown to users in run directories and MLflow tags.
     """
-    return HydraConfig.get().job.config_name.removeprefix("tasks/")
+    return HydraConfig.get().job.config_name.removeprefix("experiments/")
 
 
 def generate_experiment_name(config_name: str) -> str:

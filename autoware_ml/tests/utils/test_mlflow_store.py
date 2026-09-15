@@ -26,9 +26,11 @@ from autoware_ml.utils.mlflow_store import (
     prepare_export_output_dir,
 )
 
-SAMPLE_CONFIG_NAME = "calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2"
+SAMPLE_CONFIG_NAME = (
+    "detection3d/centerpoint/voxel024_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base"
+)
 SAMPLE_EXPERIMENT_NAME = (
-    "calibration_status_calibration_status_classifier_resnet18_t4dataset_j6gen2"
+    "detection3d_centerpoint_voxel024_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base"
 )
 
 
@@ -41,9 +43,10 @@ class TestNormalizeExperimentName:
     def test_derives_experiment_name_from_config_name(self) -> None:
         assert normalize_experiment_name(None, SAMPLE_CONFIG_NAME) == SAMPLE_EXPERIMENT_NAME
 
-    def test_strips_tasks_prefix_from_config_name(self) -> None:
+    def test_strips_experiments_prefix_from_config_name(self) -> None:
         assert (
-            normalize_experiment_name(None, f"tasks/{SAMPLE_CONFIG_NAME}") == SAMPLE_EXPERIMENT_NAME
+            normalize_experiment_name(None, f"experiments/{SAMPLE_CONFIG_NAME}")
+            == SAMPLE_EXPERIMENT_NAME
         )
 
 

@@ -43,9 +43,11 @@ from autoware_ml.utils.cli.helpers import (
 )
 from autoware_ml.utils.session import SessionCommandError
 
-SAMPLE_CONFIG_NAME = "calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2"
-SAMPLE_CONFIG_PATH = f"tasks/{SAMPLE_CONFIG_NAME}"
-SAMPLE_SESSION_NAME = "calibration-status-train"
+SAMPLE_CONFIG_NAME = (
+    "detection3d/centerpoint/voxel024_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base"
+)
+SAMPLE_CONFIG_PATH = f"experiments/{SAMPLE_CONFIG_NAME}"
+SAMPLE_SESSION_NAME = "centerpoint-train"
 
 
 class TestParseExtraArgs:
@@ -73,11 +75,11 @@ class TestExpandConfigPath:
     """Tests for expand_config_path."""
 
     def test_expand_short_path(self) -> None:
-        result = expand_config_path(SAMPLE_CONFIG_NAME, "tasks")
+        result = expand_config_path(SAMPLE_CONFIG_NAME, "experiments")
         assert result == SAMPLE_CONFIG_PATH
 
     def test_keep_existing_prefix(self) -> None:
-        result = expand_config_path(SAMPLE_CONFIG_PATH, "tasks")
+        result = expand_config_path(SAMPLE_CONFIG_PATH, "experiments")
         assert result == SAMPLE_CONFIG_PATH
 
 
@@ -86,7 +88,7 @@ class TestResolveConfigReference:
 
     def test_resolve_bundled_config_name(self) -> None:
         config_path, config_name, hydra_overrides = resolve_config_reference(
-            SAMPLE_CONFIG_NAME, "tasks"
+            SAMPLE_CONFIG_NAME, "experiments"
         )
         assert config_path is None
         assert config_name == SAMPLE_CONFIG_PATH
@@ -94,15 +96,13 @@ class TestResolveConfigReference:
 
     def test_resolve_packaged_yaml_path(self) -> None:
         config_path, config_name, hydra_overrides = resolve_config_reference(
-            "autoware_ml/configs/tasks/calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2.yaml",
-            "tasks",
+            "autoware_ml/configs/experiments/detection3d/centerpoint/"
+            "voxel024_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base.yaml",
+            "experiments",
         )
 
         assert config_path is None
-        assert (
-            config_name
-            == "tasks/calibration_status/calibration_status_classifier/resnet18_t4dataset_j6gen2"
-        )
+        assert config_name == SAMPLE_CONFIG_PATH
         assert hydra_overrides == []
 
     def test_resolve_relative_yaml_path(self, tmp_path: Path, monkeypatch) -> None:
@@ -111,7 +111,7 @@ class TestResolveConfigReference:
         monkeypatch.chdir(tmp_path)
 
         config_path, config_name, hydra_overrides = resolve_config_reference(
-            "./custom_train.yaml", "tasks"
+            "./custom_train.yaml", "experiments"
         )
 
         assert config_path == str(tmp_path)
@@ -123,7 +123,7 @@ class TestResolveConfigReference:
         config_file.write_text("trainer:\n  max_epochs: 1\n", encoding="utf-8")
 
         config_path, config_name, hydra_overrides = resolve_config_reference(
-            str(config_file), "tasks"
+            str(config_file), "experiments"
         )
 
         assert config_path == str(tmp_path)
@@ -135,18 +135,16 @@ class TestCompleteConfigValue:
     """Tests for config completion helpers."""
 
     def test_complete_bundled_configs(self, tmp_path: Path, monkeypatch) -> None:
-        config_root = tmp_path / "tasks" / "calibration_status" / "calibration_status_classifier"
+        config_root = tmp_path / "experiments" / "detection3d" / "centerpoint"
         config_root.mkdir(parents=True)
         (config_root / "base.yaml").write_text("", encoding="utf-8")
-        (config_root / "resnet18_t4dataset_j6gen2.yaml").write_text("", encoding="utf-8")
+        (config_root / f"{Path(SAMPLE_CONFIG_NAME).name}.yaml").write_text("", encoding="utf-8")
         monkeypatch.setattr(helpers, "CONFIGS_ROOT", tmp_path)
 
-        completions = complete_config_value(
-            "calibration_status/calibration_status_classifier/resnet18_t", "tasks"
-        )
+        completions = complete_config_value("detection3d/centerpoint/voxel024", "experiments")
 
         assert completions == [SAMPLE_CONFIG_NAME]
-        assert "calibration_status/calibration_status_classifier/base" not in completions
+        assert "detection3d/centerpoint/base" not in completions
 
     def test_complete_filesystem_yaml_paths(self, tmp_path: Path, monkeypatch) -> None:
         config_dir = tmp_path / "configs"
@@ -155,7 +153,7 @@ class TestCompleteConfigValue:
         (config_dir / "notes.txt").write_text("", encoding="utf-8")
         monkeypatch.chdir(tmp_path)
 
-        completions = complete_config_value("./configs/cus", "tasks")
+        completions = complete_config_value("./configs/cus", "experiments")
 
         assert completions == ["./configs/custom_a.yaml"]
 
@@ -212,7 +210,7 @@ class TestCliCommands:
             hydra_overrides=[],
             resume_checkpoint=None,
             new_run=False,
-            config_prefix=cli.TASK_CONFIG_PREFIX,
+            config_prefix=cli.EXPERIMENT_CONFIG_PREFIX,
         )
 
     def test_train_runs_with_weights(self) -> None:
@@ -233,7 +231,7 @@ class TestCliCommands:
             hydra_overrides=["+weights=[seg.ckpt]"],
             resume_checkpoint=None,
             new_run=False,
-            config_prefix=cli.TASK_CONFIG_PREFIX,
+            config_prefix=cli.EXPERIMENT_CONFIG_PREFIX,
         )
 
     def test_train_runs_with_resume_checkpoint(self, tmp_path: Path) -> None:
@@ -263,7 +261,7 @@ class TestCliCommands:
             hydra_overrides=[f"+resume_checkpoint={checkpoint_path.resolve()}"],
             resume_checkpoint=str(checkpoint_path.resolve()),
             new_run=False,
-            config_prefix=cli.TASK_CONFIG_PREFIX,
+            config_prefix=cli.EXPERIMENT_CONFIG_PREFIX,
         )
 
     def test_train_resolves_relative_resume_checkpoint(self, tmp_path: Path, monkeypatch) -> None:
@@ -338,7 +336,35 @@ class TestCliCommands:
             extra_args=[],
             hydra_overrides=["+weights=[model.ckpt]"],
             checkpoints=["model.ckpt"],
-            config_prefix=cli.TASK_CONFIG_PREFIX,
+            config_prefix=cli.EXPERIMENT_CONFIG_PREFIX,
+        )
+
+    def test_deploy_forwards_release_override(self) -> None:
+        with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
+            result = self.runner.invoke(
+                app,
+                [
+                    "deploy",
+                    "--config-name",
+                    SAMPLE_CONFIG_NAME,
+                    "--weights",
+                    "model.ckpt",
+                    "--release",
+                    "v1.2.3",
+                ],
+            )
+
+        assert result.exit_code == 0
+        run_lazy_script_mock.assert_called_once_with(
+            cli.CLI_RUNTIME_MODULE,
+            "run_hydra_entrypoint",
+            entrypoint_module=cli.DEPLOY_ENTRYPOINT_MODULE,
+            config_name=SAMPLE_CONFIG_NAME,
+            stage="deploy",
+            extra_args=[],
+            hydra_overrides=["+weights=[model.ckpt]", "+release=v1.2.3"],
+            checkpoints=["model.ckpt"],
+            config_prefix=cli.EXPERIMENT_CONFIG_PREFIX,
         )
 
     def test_deploy_runs_with_multiple_weights(self) -> None:
@@ -366,7 +392,7 @@ class TestCliCommands:
             extra_args=[],
             hydra_overrides=["+weights=[seg.ckpt,det.ckpt]"],
             checkpoints=["seg.ckpt", "det.ckpt"],
-            config_prefix=cli.TASK_CONFIG_PREFIX,
+            config_prefix=cli.EXPERIMENT_CONFIG_PREFIX,
         )
 
     def test_test_requires_weights(self) -> None:
@@ -400,7 +426,7 @@ class TestCliCommands:
             # Test forces a single device by default.
             hydra_overrides=["+weights=[seg.ckpt,det.ckpt]", "++trainer.devices=1"],
             checkpoint="det.ckpt",
-            config_prefix=cli.TASK_CONFIG_PREFIX,
+            config_prefix=cli.EXPERIMENT_CONFIG_PREFIX,
         )
 
     def test_test_forces_single_device_over_many_devices(self) -> None:
@@ -429,7 +455,7 @@ class TestCliCommands:
             # and a single device wins over the user's trainer.devices=4.
             hydra_overrides=["+weights=[seg.ckpt]", "++trainer.devices=1"],
             checkpoint="seg.ckpt",
-            config_prefix=cli.TASK_CONFIG_PREFIX,
+            config_prefix=cli.EXPERIMENT_CONFIG_PREFIX,
         )
 
     def test_test_use_config_devices_keeps_config(self) -> None:
@@ -458,7 +484,7 @@ class TestCliCommands:
             # No forcing override: trainer.devices from config / extra args is honored.
             hydra_overrides=["+weights=[seg.ckpt]"],
             checkpoint="seg.ckpt",
-            config_prefix=cli.TASK_CONFIG_PREFIX,
+            config_prefix=cli.EXPERIMENT_CONFIG_PREFIX,
         )
 
     def test_test_single_device_override_wins_in_composed_config(self) -> None:
@@ -470,7 +496,7 @@ class TestCliCommands:
         GlobalHydra.instance().clear()
         with initialize_config_module(version_base=None, config_module="autoware_ml.configs"):
             cfg = compose(
-                config_name=f"tasks/{SAMPLE_CONFIG_NAME}",
+                config_name=f"experiments/{SAMPLE_CONFIG_NAME}",
                 overrides=["trainer.devices=4", "++trainer.devices=1"],
             )
         assert cfg.trainer.devices == 1
@@ -614,7 +640,7 @@ class TestCliRuntime:
         with (
             patch(
                 "autoware_ml.cli.runtime.resolve_config_reference",
-                return_value=(None, f"tasks/{config_name}", []),
+                return_value=(None, f"experiments/{config_name}", []),
             ),
             patch("autoware_ml.cli.runtime.initialize_config_module", return_value=nullcontext()),
             patch("autoware_ml.cli.runtime.compose", return_value=cfg),
@@ -633,7 +659,7 @@ class TestCliRuntime:
         ):
             env_updates = cli_runtime.prepare_runtime_environment(
                 config_name,
-                "tasks",
+                "experiments",
                 "deploy",
                 checkpoints=["seg.ckpt", "det.ckpt"],
             )
@@ -656,7 +682,7 @@ class TestCliRuntime:
         with (
             patch(
                 "autoware_ml.cli.runtime.resolve_config_reference",
-                return_value=(None, f"tasks/{config_name}", []),
+                return_value=(None, f"experiments/{config_name}", []),
             ),
             patch("autoware_ml.cli.runtime.initialize_config_module", return_value=nullcontext()),
             patch("autoware_ml.cli.runtime.compose", return_value=cfg),
@@ -680,7 +706,7 @@ class TestCliRuntime:
         ):
             env_updates = cli_runtime.prepare_runtime_environment(
                 config_name,
-                "tasks",
+                "experiments",
                 "train",
                 resume_checkpoint=str(tmp_path / "checkpoints" / "last.ckpt"),
             )
@@ -704,7 +730,7 @@ class TestCliRuntime:
         ):
             env_updates = cli_runtime.prepare_runtime_environment(
                 config_name,
-                "tasks",
+                "experiments",
                 "train",
                 resume_checkpoint=str(tmp_path / "last.ckpt"),
                 new_run=True,
@@ -724,7 +750,7 @@ class TestCliRuntime:
         ):
             cli_runtime.prepare_runtime_environment(
                 config_name,
-                "tasks",
+                "experiments",
                 "train",
                 resume_checkpoint=str(tmp_path / "last.ckpt"),
             )
@@ -743,7 +769,7 @@ class TestCliRuntime:
         ):
             cli_runtime.prepare_runtime_environment(
                 config_name,
-                "tasks",
+                "experiments",
                 "train",
                 resume_checkpoint=str(tmp_path / "last.ckpt"),
             )
@@ -761,7 +787,7 @@ class TestCliRuntime:
         ):
             cli_runtime.prepare_runtime_environment(
                 "multi/ptv3/voxel012",
-                "tasks",
+                "experiments",
                 "train",
                 resume_checkpoint=str(tmp_path / "last.ckpt"),
             )
@@ -769,14 +795,14 @@ class TestCliRuntime:
 
 class TestResolveHydraArgv:
     def test_does_not_inject_run_config_name_override(self) -> None:
-        hydra_argv = cli_runtime.resolve_hydra_argv(SAMPLE_CONFIG_NAME, "tasks")
+        hydra_argv = cli_runtime.resolve_hydra_argv(SAMPLE_CONFIG_NAME, "experiments")
         assert not any(arg.startswith("run_config_name=") for arg in hydra_argv)
 
     def test_adds_config_path_for_external_yaml(self, tmp_path: Path) -> None:
         config_file = tmp_path / "custom_train.yaml"
         config_file.write_text("trainer:\n  max_epochs: 1\n", encoding="utf-8")
 
-        hydra_argv = cli_runtime.resolve_hydra_argv(str(config_file), "tasks")
+        hydra_argv = cli_runtime.resolve_hydra_argv(str(config_file), "experiments")
 
         assert hydra_argv[:4] == [
             "--config-name",
@@ -792,7 +818,7 @@ class TestResolveHydraArgv:
 
         hydra_argv = cli_runtime.resolve_hydra_argv(
             str(config_file),
-            "tasks",
+            "experiments",
             extra_args=["hydra.searchpath=[file:///tmp/custom]"],
         )
 
@@ -803,10 +829,10 @@ class TestResolveHydraArgv:
         runtime_argv = cli_runtime.resolve_hydra_entrypoint_argv(
             "autoware_ml.scripts.train",
             SAMPLE_CONFIG_NAME,
-            "tasks",
+            "experiments",
         )
         assert runtime_argv[0] == "autoware_ml.scripts.train"
-        assert runtime_argv[1:] == cli_runtime.resolve_hydra_argv(SAMPLE_CONFIG_NAME, "tasks")
+        assert runtime_argv[1:] == cli_runtime.resolve_hydra_argv(SAMPLE_CONFIG_NAME, "experiments")
 
 
 class TestSessionCompletion:
@@ -817,7 +843,7 @@ class TestSessionCompletion:
     def test_suggests_config_names_after_flag(self) -> None:
         suggestions = complete_session_command_value(
             ["train", "--config-name"],
-            "calibration_status/calibration_status_classifier/resnet18_t",
+            "detection3d/centerpoint/voxel024",
         )
         assert SAMPLE_CONFIG_NAME in suggestions
 
@@ -877,7 +903,7 @@ class TestSessionNameCompletion:
             "autoware_ml.utils.cli.helpers.list_tmux_session_names",
             return_value=["default", SAMPLE_SESSION_NAME],
         ):
-            assert complete_session_name_value("cal") == [SAMPLE_SESSION_NAME]
+            assert complete_session_name_value("cen") == [SAMPLE_SESSION_NAME]
 
     def test_returns_empty_when_tmux_unavailable(self) -> None:
         with patch("autoware_ml.utils.cli.helpers.shutil.which", return_value=None):

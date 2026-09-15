@@ -51,7 +51,7 @@ from autoware_ml.utils.mlflow_helpers import (
 HYDRA_CONFIG_NAME_OPTION = "--config-name"
 HYDRA_CONFIG_PATH_OPTION = "--config-path"
 HYDRA_SEARCHPATH_PREFIX = "hydra.searchpath="
-TASK_CONFIG_PREFIX = "tasks"
+EXPERIMENT_CONFIG_PREFIX = "experiments"
 
 
 def resolve_module_spec(module_name: str) -> ModuleSpec:
@@ -285,7 +285,7 @@ def run_hydra_entrypoint(
     checkpoints: Sequence[str] = (),
     resume_checkpoint: str | None = None,
     new_run: bool = False,
-    config_prefix: str = TASK_CONFIG_PREFIX,
+    config_prefix: str = EXPERIMENT_CONFIG_PREFIX,
 ) -> None:
     """Execute one Hydra-backed runtime entrypoint through the CLI wrapper."""
     env_updates: dict[str, str | None] = {}

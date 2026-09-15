@@ -191,7 +191,6 @@ model:
       out_size_factor: ${out_size_factor}
       labels_to_ignore_rotation: [traffic_cone]
       loss_weight: 0.10
-    # iou_loss: null
 
   optimizer: ${optimizer}
   scheduler:

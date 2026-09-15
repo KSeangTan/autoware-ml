@@ -96,7 +96,7 @@ def expand_config_path(config_path: str, prefix: str) -> str:
 
     Args:
         config_path: Short or fully namespaced config path.
-        prefix: Prefix to add to the config path (e.g., "tasks").
+        prefix: Prefix to add to the config path (e.g., "experiments").
     Returns:
         Fully namespaced config path.
     """
@@ -111,7 +111,7 @@ def resolve_config_reference(config_value: str, prefix: str) -> tuple[str | None
 
     Args:
         config_value: Config value from CLI, either a task shorthand or a filesystem path.
-        prefix: Prefix for bundled configs (e.g. ``tasks``).
+        prefix: Prefix for bundled configs (e.g. ``experiments``).
 
     Returns:
         Tuple of (config_path, config_name, hydra_overrides).
@@ -146,7 +146,7 @@ def infer_user_config_name(config_value: str, prefix: str) -> str:
 
     Args:
         config_value: Config value from CLI, either a bundled config path or a filesystem path.
-        prefix: Bundled config namespace prefix such as ``tasks``.
+        prefix: Bundled config namespace prefix such as ``experiments``.
 
     Returns:
         User-facing config name without the bundled namespace prefix.
@@ -159,7 +159,7 @@ def list_config_names(prefix: str) -> list[str]:
     """List bundled config names without YAML suffixes for shell completion.
 
     Args:
-        prefix: Config namespace prefix such as ``tasks``.
+        prefix: Config namespace prefix such as ``experiments``.
 
     Returns:
         Sorted list of bundled config names.
@@ -177,7 +177,7 @@ def complete_config_value(incomplete: str, prefix: str) -> list[str]:
 
     Args:
         incomplete: Current completion prefix entered by the user.
-        prefix: Config namespace prefix such as ``tasks``.
+        prefix: Config namespace prefix such as ``experiments``.
 
     Returns:
         Completion candidates for config values.
@@ -287,7 +287,7 @@ def complete_session_command_value(command_args: list[str], incomplete: str) -> 
         last = command_args[-1]
 
         if root in {"train", "test", "deploy"} and last == "--config-name":
-            return complete_config_value(incomplete, "tasks")
+            return complete_config_value(incomplete, "experiments")
         if root in {"train", "test", "deploy"} and last == "--weights":
             return complete_path_value(incomplete, file_suffixes=(".ckpt",))
         if root == "train" and last == "--resume-checkpoint":
@@ -299,7 +299,7 @@ def complete_session_command_value(command_args: list[str], incomplete: str) -> 
                 return complete_path_value(incomplete)
             if len(command_args) >= 2 and command_args[1] == "export":
                 if last == "--config-name":
-                    return complete_config_value(incomplete, "tasks")
+                    return complete_config_value(incomplete, "experiments")
                 if last == "--db-path":
                     return complete_path_value(incomplete)
                 if last == "--export-dir":
@@ -336,7 +336,7 @@ def complete_session_command_value(command_args: list[str], incomplete: str) -> 
                 if option.startswith(incomplete)
             ]
         if command_args[1] == "export" and last_arg == "--config-name":
-            return complete_config_value(incomplete, "tasks")
+            return complete_config_value(incomplete, "experiments")
         if command_args[1] == "export":
             return [
                 option

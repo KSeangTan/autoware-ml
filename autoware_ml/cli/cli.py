@@ -55,14 +55,10 @@ session_app = typer.Typer(
     no_args_is_help=True,
 )
 
-TASK_CONFIG_PREFIX = "tasks"
-MULTI_TASK_CONFIG_PREFIX = "experiments"
+EXPERIMENT_CONFIG_PREFIX = "experiments"
 TRAIN_ENTRYPOINT_MODULE = "autoware_ml.scripts.train"
-MULTI_TASK_TRAIN_ENTRYPOINT_MODULE = "autoware_ml.scripts.multi_task_train"
 DEPLOY_ENTRYPOINT_MODULE = "autoware_ml.scripts.deploy"
-MULTI_TASK_DEPLOY_ENTRYPOINT_MODULE = "autoware_ml.scripts.multi_task_deploy"
 TEST_ENTRYPOINT_MODULE = "autoware_ml.scripts.test"
-MULTI_TASK_TEST_ENTRYPOINT_MODULE = "autoware_ml.scripts.multi_task_test"
 CLI_RUNTIME_MODULE = "autoware_ml.cli.runtime"
 
 
@@ -141,7 +137,7 @@ def complete_task_config(incomplete: str) -> list[str]:
     Returns:
         Completion candidates for bundled task configs and YAML config paths.
     """
-    return complete_config_value(incomplete, TASK_CONFIG_PREFIX)
+    return complete_config_value(incomplete, EXPERIMENT_CONFIG_PREFIX)
 
 
 def complete_checkpoint_path(incomplete: str) -> list[str]:
@@ -291,96 +287,7 @@ def train(
         hydra_overrides=hydra_overrides,
         resume_checkpoint=resume_checkpoint,
         new_run=new_run,
-        config_prefix=TASK_CONFIG_PREFIX,
-    )
-
-
-@app.command(
-    name="multi_task_train",
-    cls=OptionFirstTyperCommand,
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)
-def multi_task_train(
-    ctx: typer.Context,
-    config_name: Annotated[
-        str,
-        typer.Option(
-            "--config-name",
-            help="Config name or YAML config path",
-            autocompletion=complete_task_config,
-        ),
-    ],
-    weights: Annotated[
-        list[str] | None,
-        typer.Option(
-            "--weights",
-            help="One or more checkpoint paths for pretrained weight initialization "
-            "(repeatable; later checkpoints overwrite earlier ones). "
-            "Mutually exclusive with --resume-checkpoint.",
-            autocompletion=complete_checkpoint_path,
-        ),
-    ] = None,
-    resume_checkpoint: Annotated[
-        str | None,
-        typer.Option(
-            "--resume-checkpoint",
-            help="Full Lightning checkpoint path to resume training from "
-            "(restores model weights, optimizer state, and epoch, and continues "
-            "the checkpoint's source MLflow run). Mutually exclusive with --weights.",
-            autocompletion=complete_checkpoint_path,
-        ),
-    ] = None,
-    new_run: Annotated[
-        bool,
-        typer.Option(
-            "--new-run",
-            help="With --resume-checkpoint: continue the training state in a new "
-            "MLflow run instead of the checkpoint's source run.",
-        ),
-    ] = False,
-) -> None:
-    """Run model training through the Hydra-backed training entrypoint.
-
-    Pass ``--weights`` to initialize model parameters from one or more pretrained
-    checkpoints before training starts (e.g. transfer learning from a seg3d backbone
-    into a det3d model). Pass ``--resume-checkpoint`` to resume an interrupted training
-    run from its full saved state; it continues inside the checkpoint's source MLflow
-    run unless ``--new-run`` forks it. The two options are mutually exclusive.
-
-    Args:
-        ctx: Typer context containing additional Hydra overrides.
-        config_name: Config name or config file path to train.
-        weights: One or more checkpoint paths for pretrained weight initialization.
-        resume_checkpoint: Full Lightning checkpoint path to resume training from.
-        new_run: Whether to fork the resumed training into a new MLflow run.
-    """
-    if weights and resume_checkpoint:
-        raise typer.BadParameter("--weights and --resume-checkpoint are mutually exclusive.")
-    if new_run and not resume_checkpoint:
-        raise typer.BadParameter("--new-run requires --resume-checkpoint.")
-
-    hydra_overrides: list[str] = []
-    if weights:
-        weights_list = "[" + ",".join(weights) + "]"
-        hydra_overrides.append(f"+weights={weights_list}")
-    if resume_checkpoint:
-        resume_path = Path(resume_checkpoint).expanduser().resolve()
-        if not resume_path.is_file():
-            raise typer.BadParameter(f"Resume checkpoint '{resume_checkpoint}' does not exist.")
-        resume_checkpoint = str(resume_path)
-        hydra_overrides.append(f"+resume_checkpoint={resume_checkpoint}")
-
-    run_lazy_script(
-        CLI_RUNTIME_MODULE,
-        "run_hydra_entrypoint",
-        entrypoint_module=MULTI_TASK_TRAIN_ENTRYPOINT_MODULE,
-        config_name=config_name,
-        stage="train",
-        extra_args=ctx.args,
-        hydra_overrides=hydra_overrides,
-        resume_checkpoint=resume_checkpoint,
-        new_run=new_run,
-        config_prefix=MULTI_TASK_CONFIG_PREFIX,
+        config_prefix=EXPERIMENT_CONFIG_PREFIX,
     )
 
 
@@ -454,64 +361,7 @@ def deploy(
         extra_args=ctx.args,
         hydra_overrides=hydra_overrides,
         checkpoints=weights,
-        config_prefix=TASK_CONFIG_PREFIX,
-    )
-
-
-@app.command(
-    name="multi_task_deploy",
-    cls=OptionFirstTyperCommand,
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)
-def multi_task_deploy(
-    ctx: typer.Context,
-    config_name: Annotated[
-        str,
-        typer.Option(
-            "--config-name",
-            help="Config name or YAML config path",
-            autocompletion=complete_task_config,
-        ),
-    ],
-    weights: Annotated[
-        list[str] | None,
-        typer.Option(
-            "--weights",
-            help="One or more checkpoint paths to merge into the export model "
-            "(repeatable; later checkpoints overwrite earlier ones)",
-            autocompletion=complete_checkpoint_path,
-        ),
-    ] = None,
-) -> None:
-    """Export a trained model through the deployment entrypoint.
-
-    Pass ``--weights`` once per checkpoint that should contribute parameters to
-    the exported model. Every parameter in the export model must be covered by
-    at least one of the supplied checkpoints. Single-task exports use one
-    ``--weights``; multi-task exports stack multiple ``--weights`` to merge
-    independently trained heads into one model.
-
-    Args:
-        ctx: Typer context containing additional Hydra overrides.
-        config_name: Config name or config file path to deploy.
-        weights: One or more checkpoint paths to merge into the export model.
-    """
-    if not weights:
-        raise typer.BadParameter("--weights <path> (repeatable) must be specified.")
-
-    weights_list = "[" + ",".join(weights) + "]"
-    hydra_overrides = [f"+weights={weights_list}"]
-
-    run_lazy_script(
-        CLI_RUNTIME_MODULE,
-        "run_hydra_entrypoint",
-        entrypoint_module=MULTI_TASK_DEPLOY_ENTRYPOINT_MODULE,
-        config_name=config_name,
-        stage="deploy",
-        extra_args=ctx.args,
-        hydra_overrides=hydra_overrides,
-        checkpoints=weights,
-        config_prefix=MULTI_TASK_CONFIG_PREFIX,
+        config_prefix=EXPERIMENT_CONFIG_PREFIX,
     )
 
 
@@ -584,80 +434,7 @@ def test(
         extra_args=ctx.args,
         hydra_overrides=hydra_overrides,
         checkpoint=primary_checkpoint,
-        config_prefix=TASK_CONFIG_PREFIX,
-    )
-
-
-@app.command(
-    name="multi_task_test",
-    cls=OptionFirstTyperCommand,
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)
-def multi_task_test(
-    ctx: typer.Context,
-    config_name: Annotated[
-        str,
-        typer.Option(
-            "--config-name",
-            help="Config name or YAML config path",
-            autocompletion=complete_task_config,
-        ),
-    ],
-    weights: Annotated[
-        list[str] | None,
-        typer.Option(
-            "--weights",
-            help="One or more checkpoint paths to load into the model for evaluation "
-            "(repeatable; later checkpoints overwrite earlier ones)",
-            autocompletion=complete_checkpoint_path,
-        ),
-    ] = None,
-    use_config_devices: Annotated[
-        bool,
-        typer.Option(
-            "--use-config-devices",
-            help="Evaluate on the trainer.devices from the config. By default test forces a "
-            "single device for deterministic evaluation that avoids distributed-sampler padding.",
-        ),
-    ] = False,
-) -> None:
-    """Run multi-task model evaluation through the Hydra-backed test entrypoint.
-
-    Pass ``--weights`` once per checkpoint that should contribute parameters to
-    the evaluated model. Every parameter must be covered by at least one checkpoint;
-    multi-task evaluation stacks multiple ``--weights`` to merge independently
-    trained heads into one model.
-
-    By default evaluation runs on a single device, which is deterministic and free of
-    the distributed-sampler padding that slightly skews multi-GPU metrics. Pass
-    ``--use-config-devices`` to honor ``trainer.devices`` from the config instead.
-
-    Args:
-        ctx: Typer context containing additional Hydra overrides.
-        config_name: Config name or config file path to evaluate.
-        weights: One or more checkpoint paths to load into the model for evaluation.
-        use_config_devices: Keep the config's ``trainer.devices`` instead of forcing one device.
-    """
-    if not weights:
-        raise typer.BadParameter("--weights <path> (repeatable) must be specified.")
-
-    weights_list = "[" + ",".join(weights) + "]"
-    hydra_overrides = [f"+weights={weights_list}"]
-    if not use_config_devices:
-        # Applied after the user's extra args, so it wins: test defaults to one device.
-        hydra_overrides.append("++trainer.devices=1")
-    primary_checkpoint = weights[-1]
-
-    run_lazy_script(
-        CLI_RUNTIME_MODULE,
-        "run_hydra_entrypoint",
-        entrypoint_module=MULTI_TASK_TEST_ENTRYPOINT_MODULE,
-        config_name=config_name,
-        stage="test",
-        extra_args=ctx.args,
-        hydra_overrides=hydra_overrides,
-        checkpoint=primary_checkpoint,
-        config_prefix=MULTI_TASK_CONFIG_PREFIX,
+        config_prefix=EXPERIMENT_CONFIG_PREFIX,
     )
 
 

@@ -44,7 +44,7 @@ def normalize_experiment_name(experiment_name: str | None, config_name: str | No
     if experiment_name is not None and config_name is not None:
         raise ValueError("Use either --experiment-name or --config-name, not both.")
     if config_name is not None:
-        return infer_user_config_name(config_name, "tasks").replace("/", "_")
+        return infer_user_config_name(config_name, "experiments").replace("/", "_")
     return experiment_name
 
 

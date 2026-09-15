@@ -1,9 +1,8 @@
 # @package _global_
 defaults:
-  - base
+  - ../base_120m
   - /database@database: t4dataset/t4dataset_j6gen2_base
   - /datamodule@datamodule: t4dataset/default_detection3d_datamodule
-  - /metrics/t4dataset@metric_ranges: default_detection3d_120m_metric_ranges
   - _self_
 
 batch_size: 16

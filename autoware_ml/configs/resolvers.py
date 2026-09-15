@@ -20,16 +20,16 @@ from typing import Any, cast
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 
-def strip_tasks_prefix(config_name: str) -> str:
-    """Return the user-facing config name without the bundled ``tasks/`` prefix.
+def strip_experiments_prefix(config_name: str) -> str:
+    """Return the user-facing config name without the bundled ``experiments/`` prefix.
 
     Args:
         config_name: Config name as referenced on the command line.
 
     Returns:
-        The name without a leading ``tasks/`` component.
+        The name without a leading ``experiments/`` component.
     """
-    return str(config_name).removeprefix("tasks/")
+    return str(config_name).removeprefix("experiments/")
 
 
 def merge_lists(*lists: Iterable[Any]) -> ListConfig:
@@ -124,7 +124,7 @@ def class_mapping_to_ordered_names(
 
 def register_config_resolvers() -> None:
     """Register all custom OmegaConf resolvers required by bundled configs."""
-    OmegaConf.register_new_resolver("user_config_name", strip_tasks_prefix, replace=True)
+    OmegaConf.register_new_resolver("user_config_name", strip_experiments_prefix, replace=True)
     OmegaConf.register_new_resolver("seg_class_mapping", raw_name_to_train_index, replace=True)
     OmegaConf.register_new_resolver("seg_class_names", class_mapping_to_ordered_names, replace=True)
     OmegaConf.register_new_resolver("merge_lists", merge_lists, replace=True)
