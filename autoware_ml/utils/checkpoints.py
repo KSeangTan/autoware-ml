@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import torch
 
@@ -165,7 +165,7 @@ def load_matching_weights(
 
 def apply_matching_weights(
     model: torch.nn.Module,
-    weights: str | Path | list[str | Path] | tuple[str | Path, ...],
+    weights: str | Path | Sequence[str | Path] | tuple[str | Path, ...],
     *,
     map_location: str | torch.device = "cpu",
     device: torch.device | None = None,
