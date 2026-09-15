@@ -60,7 +60,7 @@ class LoadImageFromFile(BaseTransform):
 
         camera_image_data = BaseImages(
             images=decoded_image,
-            depth_images=None,  # No depth is loaded from an image file
+            depth_maps=None,  # No depth is loaded from an image file
             timestamps=timestamp,
             camera_intrinsics=camera_intrinsics,
             lidar2images=image_sample.lidar2image.unsqueeze(0),
@@ -152,7 +152,7 @@ class LoadMultiViewImagesFromFiles(BaseTransform):
 
         camera_image_data = BaseImages(
             images=torch.stack(images, dim=0),
-            depth_images=None,  # No depth is loaded from an image file
+            depth_maps=None,  # No depth is loaded from an image file
             camera_intrinsics=stacked_camera_intrinsics,
             lidar2images=torch.stack(lidar2images, dim=0),
             lidar2cams=torch.stack(lidar2cams, dim=0),

@@ -136,7 +136,7 @@ class TestLiDARDepthSparseTransform(unittest.TestCase):
         output = LiDARDepthSparseTransform()(sample)
 
         assert output.camera_image_data is not None
-        depth_images = output.camera_image_data.depth_images
+        depth_images = output.camera_image_data.depth_maps
         assert depth_images is not None
         self.assertEqual(depth_images.shape, (1, self.height, self.width))
         self.assertEqual(depth_images.dtype, torch.float32)
@@ -153,8 +153,8 @@ class TestLiDARDepthSparseTransform(unittest.TestCase):
         output = LiDARDepthSparseTransform()(sample)
 
         assert output.camera_image_data is not None
-        assert output.camera_image_data.depth_images is not None
-        self.assertEqual(float(output.camera_image_data.depth_images.abs().sum()), 0.0)
+        assert output.camera_image_data.depth_maps is not None
+        self.assertEqual(float(output.camera_image_data.depth_maps.abs().sum()), 0.0)
 
     def test_points_outside_the_image_are_dropped(self) -> None:
         """Test that points projecting outside the image bounds never write to the depth map."""
@@ -168,8 +168,8 @@ class TestLiDARDepthSparseTransform(unittest.TestCase):
         output = LiDARDepthSparseTransform()(sample)
 
         assert output.camera_image_data is not None
-        assert output.camera_image_data.depth_images is not None
-        self.assertEqual(float(output.camera_image_data.depth_images.abs().sum()), 0.0)
+        assert output.camera_image_data.depth_maps is not None
+        self.assertEqual(float(output.camera_image_data.depth_maps.abs().sum()), 0.0)
 
     def test_each_camera_gets_its_own_projection(self) -> None:
         """Test that the same point lands on different pixels of differently placed cameras."""
@@ -182,7 +182,7 @@ class TestLiDARDepthSparseTransform(unittest.TestCase):
         output = LiDARDepthSparseTransform()(sample)
 
         assert output.camera_image_data is not None
-        depth_images = output.camera_image_data.depth_images
+        depth_images = output.camera_image_data.depth_maps
         assert depth_images is not None
         self.assertEqual(depth_images.shape, (2, self.height, self.width))
         expected_depth_images = torch.zeros((2, self.height, self.width), dtype=torch.float32)
@@ -199,9 +199,9 @@ class TestLiDARDepthSparseTransform(unittest.TestCase):
         output = LiDARDepthSparseTransform()(sample)
 
         assert output.camera_image_data is not None
-        assert output.camera_image_data.depth_images is not None
+        assert output.camera_image_data.depth_maps is not None
         self.assertEqual(
-            float(output.camera_image_data.depth_images[0, int(self.center_y), int(self.center_x)]),
+            float(output.camera_image_data.depth_maps[0, int(self.center_y), int(self.center_x)]),
             3.0,
         )
 
@@ -212,7 +212,7 @@ class TestLiDARDepthSparseTransform(unittest.TestCase):
         output = LiDARDepthSparseTransform()(sample)
 
         assert output.camera_image_data is not None
-        depth_images = output.camera_image_data.depth_images
+        depth_images = output.camera_image_data.depth_maps
         assert depth_images is not None
         self.assertTrue(torch.equal(depth_images, torch.zeros((1, self.height, self.width))))
 
@@ -228,8 +228,8 @@ class TestLiDARDepthSparseTransform(unittest.TestCase):
         assert output.camera_image_data is not None
         original = sample.camera_image_data
         with_depth = output.camera_image_data
-        self.assertIsNone(original.depth_images)
-        self.assertIsNotNone(with_depth.depth_images)
+        self.assertIsNone(original.depth_maps)
+        self.assertIsNotNone(with_depth.depth_maps)
         self.assertTrue(torch.equal(with_depth.images, original.images))
         self.assertTrue(torch.equal(with_depth.lidar2images, original.lidar2images))
         self.assertTrue(torch.equal(with_depth.lidar2cams, original.lidar2cams))

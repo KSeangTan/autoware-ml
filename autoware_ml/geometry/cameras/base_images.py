@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from jaxtyping import Float32
+from jaxtyping import Float32, Int64
 from pydantic import BaseModel, ConfigDict
 import torch
 
@@ -48,8 +48,10 @@ class BaseImages(BaseModel):
         Note that a non-affine image transform, such as the undistortion applied by
         ``UndistortImage``, is not composed into it, so it describes the augmentations
         alone rather than the full raw-image-to-augmented-image mapping.
-        noises: Optional homogeneous perturbation transform applied by calibration
-        augmentation.
+        noises: Per-camera 4x4 homogeneous perturbation applied to ``lidar2cams`` by the
+        calibration-misalignment augmentation, ``None`` when no perturbation was applied.
+        calibration_statuses: Per-camera ``CalibrationStatus`` value written by the
+        calibration-misalignment augmentation, ``None`` until it has run.
     """
 
     # ``revalidate_instances`` makes ``model_validate`` re-run the field validation on an
@@ -73,7 +75,8 @@ class BaseImages(BaseModel):
     distortion_coefficients: Sequence[Float32[torch.Tensor, " num_coefficients"]]
     augmented_camera_intrinsics: Float32[torch.Tensor, "num_cameras 3 3"]
     image_augmentation_matrices: Float32[torch.Tensor, "num_cameras 4 4"]
-    noises: Float32[torch.Tensor, " num_cameras"] | None = None
+    noises: Float32[torch.Tensor, "num_cameras 4 4"] | None = None
+    calibration_statuses: Int64[torch.Tensor, " num_cameras"] | None = None
 
     @staticmethod
     def identity_image_augmentation_matrices(
