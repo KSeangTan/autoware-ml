@@ -1,5 +1,6 @@
 # @package _global_
 defaults:
+  - ../base_120m
   - base_lidar_voxel0170_120m
   - /database@database: t4dataset/t4dataset_jpntaxi_base
   - _self_

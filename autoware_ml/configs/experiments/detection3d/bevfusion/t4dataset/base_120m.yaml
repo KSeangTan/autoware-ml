@@ -1,6 +1,7 @@
 # @package _global_
 defaults:
   - ../base
+  - /datamodule@datamodule: t4dataset/default_detection3d_datamodule
   - /metrics/t4dataset@metric_ranges: default_detection3d_120m_metric_ranges
   - _self_
 
