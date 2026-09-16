@@ -8,6 +8,7 @@ import torch
 from autoware_ml.dataclasses.batch.detection3d import (
     Detection3DGTBatch,
 )
+from autoware_ml.dataclasses.batch.frame_meta import FrameMetaBatch, FrameMetaSample
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTSample
 from autoware_ml.dataclasses.geometry.transformation import LiDARTransformationSample
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
@@ -41,6 +42,10 @@ class ModelGTSample(NamedTuple):
     # Information about lidar transformation
     lidar_transformation_sample: LiDARTransformationSample | None = None
 
+    # Per-frame evaluation metadata (map pose and scene identifier) read by the metrics.
+    # None when the dataset does not provide it.
+    frame_meta: FrameMetaSample | None = None
+
     # Temporary per-sample flag telling whether traffic cones and barriers are annotated in the
     # frame, so 3D detection can treat missing cone/barrier boxes as unlabeled rather than
     # negatives. None when the dataset does not carry the flag.
@@ -69,6 +74,9 @@ class ModelGTBatch(NamedTuple):
     # Summed io_processing_time of every sample collated into this batch.
     io_processing_time: float = 0.0
 
+    # Per-frame evaluation metadata, None when the samples carry none.
+    frame_meta_batch: FrameMetaBatch | None = None
+
     def to_device(self, device: torch.device) -> ModelGTBatch:
         """
         Move the ModelGTBatch to the specified device.
@@ -90,6 +98,9 @@ class ModelGTBatch(NamedTuple):
             if self.image_gt_batch is not None
             else None,
             io_processing_time=self.io_processing_time,
+            frame_meta_batch=self.frame_meta_batch.to_device(device)
+            if self.frame_meta_batch is not None
+            else None,
         )
 
     def infer_batch_size(self) -> Int32:
@@ -210,6 +221,38 @@ class ModelGTBatch(NamedTuple):
         return image_gt_batch
 
     @staticmethod
+    def collate_frame_meta_samples(gt_samples: Sequence[ModelGTSample]) -> FrameMetaBatch | None:
+        """
+        Collate the frame metadata of a sequence of ModelGTSample into a FrameMetaBatch.
+
+        Args:
+          gt_samples: Sequence of ModelGTSample to be collated.
+
+        Returns:
+          FrameMetaBatch: Collated frame metadata, None when the samples carry none.
+
+        Raises:
+          ValueError: If only some of the samples carry frame metadata.
+        """
+        if len(gt_samples) == 0 or gt_samples[0].frame_meta is None:
+            if any(sample.frame_meta is not None for sample in gt_samples):
+                raise ValueError("All samples must have frame_meta for collating.")
+            return None
+
+        frame_meta_samples = []
+        for sample in gt_samples:
+            if sample.frame_meta is None:
+                raise ValueError("All samples must have frame_meta for collating.")
+            frame_meta_samples.append(sample.frame_meta)
+
+        return FrameMetaBatch.collate_gt_samples(
+            frame_meta_samples=frame_meta_samples,
+            lidar_transformation_samples=[
+                sample.lidar_transformation_sample for sample in gt_samples
+            ],
+        )
+
+    @staticmethod
     def collate_gt_samples(
         gt_samples: Sequence[ModelGTSample], max_num_3d_gt_bboxes: int
     ) -> ModelGTBatch:
@@ -233,9 +276,13 @@ class ModelGTBatch(NamedTuple):
         # Collate image gt batch
         image_gt_batch = ModelGTBatch.collate_image_gt_samples(gt_samples=gt_samples)
 
+        # Collate the per-frame evaluation metadata
+        frame_meta_batch = ModelGTBatch.collate_frame_meta_samples(gt_samples=gt_samples)
+
         return ModelGTBatch(
             point_cloud_gt_batch=point_cloud_gt_batch,
             detection3d_gt_batch=detection3d_gt_batch,
             image_gt_batch=image_gt_batch,
             io_processing_time=sum(sample.io_processing_time for sample in gt_samples),
+            frame_meta_batch=frame_meta_batch,
         )

@@ -22,7 +22,9 @@ import unittest
 import torch
 
 from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
+from autoware_ml.dataclasses.batch.frame_meta import FrameMetaBatch, FrameMetaSample
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch, ModelGTSample
+from autoware_ml.dataclasses.geometry.transformation import LiDARTransformationSample
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.types.geometry import Box3DCenterCoordinateType, Box3DFieldIndex
 
@@ -159,6 +161,95 @@ class TestModelGTBatchDetection3DCollation(unittest.TestCase):
         self.assertEqual(moved_with_status.gt_traffic_cone_barrier_bbox_status.device, device)
         self.assertEqual(moved_with_status.gt_traffic_cone_barrier_bbox_status.tolist(), [True])
         self.assertIsNone(moved_without_status.gt_traffic_cone_barrier_bbox_status)
+
+
+class TestModelGTBatchFrameMetaCollation(unittest.TestCase):
+    """Unit tests for the frame metadata part of ``ModelGTBatch.collate_gt_samples``."""
+
+    def _build_ego2global(self, translation_x: float) -> torch.Tensor:
+        ego2global = torch.eye(4, dtype=torch.float32)
+        ego2global[0, 3] = translation_x
+        return ego2global
+
+    def _build_sample(
+        self,
+        frame_meta: FrameMetaSample | None,
+        lidar_transformation_sample: LiDARTransformationSample | None = None,
+    ) -> ModelGTSample:
+        """Build a sample holding only frame metadata and an optional lidar augmentation."""
+        return ModelGTSample(
+            lidar_point_cloud_samples=None,
+            image_samples=None,
+            point_cloud_data=None,
+            camera_image_data=None,
+            detection3d_gt_bboxes_3d=None,
+            segmentation3d_gt_sample=None,
+            lidar_transformation_sample=lidar_transformation_sample,
+            frame_meta=frame_meta,
+        )
+
+    def _collate(self, samples: Sequence[ModelGTSample]) -> FrameMetaBatch | None:
+        return ModelGTBatch.collate_gt_samples(samples, max_num_3d_gt_bboxes=0).frame_meta_batch
+
+    def test_sample_defaults_to_no_frame_meta(self) -> None:
+        self.assertIsNone(self._build_sample(frame_meta=None).frame_meta)
+
+    def test_collate_stacks_poses_and_scene_tokens_in_batch_order(self) -> None:
+        samples = [
+            self._build_sample(FrameMetaSample(self._build_ego2global(1.0), "db/scene_a/0")),
+            self._build_sample(FrameMetaSample(self._build_ego2global(2.0), "db/scene_b/1")),
+        ]
+
+        frame_meta_batch = self._collate(samples)
+
+        assert frame_meta_batch is not None
+        self.assertEqual(tuple(frame_meta_batch.ego2globals.shape), (2, 4, 4))
+        torch.testing.assert_close(frame_meta_batch.ego2globals[:, 0, 3], torch.tensor([1.0, 2.0]))
+        self.assertEqual(list(frame_meta_batch.scene_tokens), ["db/scene_a/0", "db/scene_b/1"])
+
+    def test_collate_follows_the_lidar_augmentation(self) -> None:
+        # The augmentation moved the points by +5 m along x, so the augmented frame sits 5 m
+        # further along x than the raw lidar frame and the map transform must undo that.
+        augmentation = torch.eye(4, dtype=torch.float32)
+        augmentation[0, 3] = 5.0
+        sample = self._build_sample(
+            FrameMetaSample(self._build_ego2global(1.0), "db/scene/0"),
+            LiDARTransformationSample(transformation_matrix=augmentation, transformation_order=[]),
+        )
+
+        frame_meta_batch = self._collate([sample])
+
+        assert frame_meta_batch is not None
+        expected = self._build_ego2global(1.0) @ torch.linalg.inv(augmentation)
+        torch.testing.assert_close(frame_meta_batch.ego2globals[0], expected)
+        # A point at the augmented origin maps to x = 1 - 5 in the map frame.
+        origin = frame_meta_batch.ego2globals[0] @ torch.tensor([0.0, 0.0, 0.0, 1.0])
+        self.assertAlmostEqual(float(origin[0]), -4.0, places=5)
+
+    def test_collate_without_frame_meta_leaves_it_none(self) -> None:
+        self.assertIsNone(self._collate([self._build_sample(None), self._build_sample(None)]))
+
+    def test_collate_rejects_partial_frame_meta(self) -> None:
+        with_meta = self._build_sample(FrameMetaSample(self._build_ego2global(0.0), "db/s/0"))
+        without_meta = self._build_sample(None)
+
+        with self.assertRaisesRegex(ValueError, "frame_meta"):
+            self._collate([with_meta, without_meta])
+        with self.assertRaisesRegex(ValueError, "frame_meta"):
+            self._collate([without_meta, with_meta])
+
+    def test_to_device_moves_poses_and_keeps_tokens(self) -> None:
+        batch = ModelGTBatch.collate_gt_samples(
+            [self._build_sample(FrameMetaSample(self._build_ego2global(3.0), "db/s/0"))],
+            max_num_3d_gt_bboxes=0,
+        )
+
+        moved = batch.to_device(torch.device("cpu"))
+
+        assert moved.frame_meta_batch is not None
+        torch.testing.assert_close(moved.frame_meta_batch.ego2globals[0, 0, 3], torch.tensor(3.0))
+        self.assertEqual(list(moved.frame_meta_batch.scene_tokens), ["db/s/0"])
+        self.assertIsNone(batch.to_device(torch.device("cpu")).point_cloud_gt_batch)
 
 
 if __name__ == "__main__":

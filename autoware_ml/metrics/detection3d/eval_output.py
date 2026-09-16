@@ -71,12 +71,18 @@ def multi_task_eval_output(
 
     gt_detections = multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch
     valid = gt_detections.gt_valid_bboxes
-    batch = {
+    batch: dict[str, Any] = {
         "gt_boxes": [gt_detections.gt_bboxes_3d[i, : valid[i]] for i in range(len(valid))],
         "gt_labels": [gt_detections.gt_labels_3d[i, : valid[i]] for i in range(len(valid))],
         "gt_num_points": [
             gt_detections.gt_bboxes_num_points[i, : valid[i]] for i in range(len(valid))
         ],
     }
+    # Per-frame evaluation metadata for the region and collision filters, when the dataset
+    # attached it to the samples.
+    frame_meta_batch = multi_task_batch_inputs.multi_task_gt_batch.frame_meta_batch
+    if frame_meta_batch is not None:
+        batch["ego2global"] = list(frame_meta_batch.ego2globals)
+        batch["scene_token"] = list(frame_meta_batch.scene_tokens)
 
     return detection_eval_output(predictions=multi_task_predictions.to_list(), batch=batch)

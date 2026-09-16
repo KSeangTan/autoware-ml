@@ -10,11 +10,13 @@ import torch
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDatasetSchema
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.dataclasses.geometry.point_clouds import LiDARPointCloudSample
+from autoware_ml.dataclasses.batch.frame_meta import FrameMetaSample
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.datamodule.base_dataset import (
     BaseDataset,
 )
 from autoware_ml.datamodule.base_dataset_task import BaseDatasetTask
+from autoware_ml.datamodule.t4dataset.frame_meta import scene_dir_fragment
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.types.tasks import TaskType
 from autoware_ml.types.dataset import SplitType
@@ -118,12 +120,46 @@ class T4Dataset(BaseDataset):
         # Merge the data samples from different tasks into a single multi-task data row
         return ModelGTSample(
             lidar_point_cloud_samples=lidar_pointcloud_samples,
+            frame_meta=self.build_frame_meta_sample(
+                lidar_pointcloud_samples, str(self.database_root_path)
+            ),
             point_cloud_data=None,  # point cloud data will be populated in the transform pipeline
             detection3d_gt_bboxes_3d=detection3d_gt_bboxes_3d,
             segmentation3d_gt_sample=segmentation3d_gt_sample,
             image_samples=None,
             camera_image_data=None,
             detection3d_traffic_cone_barrier_bbox_status=detection3d_traffic_cone_barrier_bbox_status,
+        )
+
+    @staticmethod
+    def build_frame_meta_sample(
+        lidar_pointcloud_samples: Sequence[LiDARPointCloudSample], database_root_path: str
+    ) -> FrameMetaSample:
+        """
+        Build the evaluation metadata of a frame from its main lidar record.
+
+        The points and boxes are expressed in the main lidar frame, so the map transform the
+        metrics read as ``ego2global`` composes the lidar mounting into the ego pose. The scene
+        token is the ``<db>/<scene_uuid>/<version>`` fragment of the lidar path below the
+        database root, which the lanelet map provider resolves to the scene's map.
+
+        Args:
+          lidar_pointcloud_samples: Lidar records of the frame, the main lidar first.
+          database_root_path: Root directory of the database.
+
+        Returns:
+          FrameMetaSample: Map transform and scene token of the frame.
+
+        Raises:
+          ValueError: If the frame has no lidar record.
+        """
+        if len(lidar_pointcloud_samples) == 0:
+            raise ValueError("At least one lidar point cloud sample is required for frame_meta.")
+        main_lidar = lidar_pointcloud_samples[0]
+        return FrameMetaSample(
+            ego2global=main_lidar.lidar_to_ego_pose_to_global_matrix
+            @ main_lidar.sensor_to_ego_pose_matrix,
+            scene_token=scene_dir_fragment(main_lidar.point_cloud_path, database_root_path),
         )
 
     def _update_lidar_pointcloud_path(self, lidar_pointcloud_path: str) -> str:
