@@ -2,7 +2,7 @@
 region_filters:
   road:
     _target_: autoware_ml.metrics.filters.RegionFilter
-    region: ${t4dataset.drivable_region}
+    region: ${datamodule.test_dataset.map_provider.drivable_region}
     name: region_road
     map_provider: ${datamodule.test_dataset.map_provider}
   walkway:
