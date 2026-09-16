@@ -1,8 +1,9 @@
 # @package _global_
 defaults:
   - /experiments/default_experiment
+  - /metrics/t4dataset/detection3d/default_detection3d_metrics
   - /optimizers@optimizer: default_adamw
-  - /metrics/t4dataset@metrics: default_detection3d_metrics
+  - /metrics/t4dataset/detection3d@metrics: default_detection3d_metric_suites
   - _self_
 
 database: ???

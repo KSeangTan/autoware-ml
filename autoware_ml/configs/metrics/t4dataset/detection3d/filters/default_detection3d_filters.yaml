@@ -15,7 +15,7 @@ corridor_filter:
 collision_filter:
   _target_: autoware_ml.metrics.filters.CollisionFilter
   map_provider: ${datamodule.test_dataset.map_provider}
-  vehicle: ${collision_models.vehicle}
+  vehicle: ${metric_params.collision_models.vehicle}
   region: ${datamodule.test_dataset.map_provider.drivable_region}
-  max_speed_mps: ${collision_models.max_speed_mps}
-  params: ${collision_models.reachability}
+  max_speed_mps: ${metric_params.collision_models.max_speed_mps}
+  params: ${metric_params.collision_models.reachability}
