@@ -714,7 +714,7 @@ class T4RecordsGenerator:
         image_channel_sweep_data_models = []
         current_sample = sample
 
-        for _ in range(self.max_sweeps):
+        for _ in range(_MAX_SWEEPS):
             if not current_sample.prev:
                 break
 
