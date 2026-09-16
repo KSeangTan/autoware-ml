@@ -21,6 +21,7 @@ from typing import Sequence
 import unittest
 
 import numpy as np
+from omegaconf import OmegaConf
 
 from autoware_ml.databases.box3d_pipelines.box3d_merger import Box3DExtendLongerMerger
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel
@@ -165,6 +166,23 @@ class TestBox3DExtendLongerMerger(unittest.TestCase):
         self.assertEqual(len(merged), len(boxes))
         for merged_box, box in zip(merged, boxes):
             self.assertIs(merged_box, box)
+
+    def test_hydra_target_labels_are_accepted(self) -> None:
+        """Test that target labels composed by Hydra, a DictConfig, drive the merge like a mapping."""
+        merger = Box3DExtendLongerMerger(
+            target_labels=OmegaConf.create({"truck": ["truck", "trailer"]}),
+            proximity_distance_threshold=self.proximity_distance_threshold,
+            label_names=list(self.label_names),
+        )
+
+        merged = merger(
+            [
+                self._build_box([0, 0, 0, 4, 2, 2, 0], "truck"),
+                self._build_box([5, 0, 0, 4, 2, 2, 0], "trailer"),
+            ]
+        )
+
+        self.assertEqual(self._label_names(merged), ["truck"])
 
     def test_target_label_without_exactly_two_source_labels_raises(self) -> None:
         """Test that a target label must be built from exactly two source labels."""

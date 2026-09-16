@@ -331,6 +331,25 @@ class TestGlobalRotScaleTrans(BaseCameraLidarGeometryTestCase):
             torch.allclose(bbox_params[:, 3:6], self.original_bbox_params[:, 3:6] * 2.0, atol=1e-5)
         )
 
+    def test_scale_applies_to_bbox_centers_dimensions_and_velocity(self) -> None:
+        """Test that a pure scale shrinks the bbox center, dimensions and velocity alike, not yaw."""
+        output = GlobalRotScaleTrans(yaw_rot_range=[0.0, 0.0], scale_ratio_range=[0.5, 0.5])(
+            self.sample
+        )
+
+        assert output.detection3d_gt_bboxes_3d is not None
+        bbox_params = output.detection3d_gt_bboxes_3d.bbox_params
+        # Original box: center (1, 2, 0), dims (4, 2, 1), yaw 0.3, velocity (1.5, -0.5).
+        self.assertTrue(
+            torch.allclose(bbox_params[0, :3], torch.tensor([0.5, 1.0, 0.0]), atol=1e-5)
+        )
+        self.assertTrue(
+            torch.allclose(bbox_params[0, 3:6], torch.tensor([2.0, 1.0, 0.5]), atol=1e-5)
+        )
+        self.assertAlmostEqual(float(bbox_params[0, 6]), 0.3, places=5)
+        # Velocity is a spatial quantity per unit time, so it scales with space.
+        self.assertTrue(torch.allclose(bbox_params[0, 7:9], torch.tensor([0.75, -0.25]), atol=1e-5))
+
     def test_bbox_centers_and_points_share_the_transformation(self) -> None:
         """Test that the bbox centers move exactly like the points would."""
         output = self.build_transform()(self.sample)
