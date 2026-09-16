@@ -20,5 +20,3 @@ class_groups:
   grouped_two_wheeler: [motorcycle, bicycle]
   grouped_pedestrian_animal: [pedestrian, animal]
   grouped_static_obstacle: [barrier, traffic_cone]
-  grouped_debris: [debris]
-  grouped_structure: [bicycle_rack]
