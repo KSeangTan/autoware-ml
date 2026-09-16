@@ -18,12 +18,12 @@ from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
-import numpy.typing as npt
 import torch
+from jaxtyping import UInt32
 from cumm import tensorview as tv
 from spconv import constants
 from spconv.algo import CONV_CPP
-from spconv.constants import SPCONV_DO_SORT, SPCONV_USE_DIRECT_TABLE, AllocKeys
+from spconv.constants import SPCONV_DO_SORT, AllocKeys
 from spconv.core import ConvAlgo
 from spconv.core_cc.csrc.sparse.all import SpconvOps
 from spconv.core_cc.csrc.sparse.convops.spops import ConvGemmOps
@@ -576,7 +576,7 @@ class ImplicitGemm(Function):
         pair_mask_fwd_splits: torch.Tensor,
         mask_argsort_fwd_splits: torch.Tensor,
         num_activate_out: int,
-        masks: list[npt.NDArray],
+        masks: Sequence[UInt32[np.ndarray, " 1"] | None],
         is_train: bool,
         is_subm: bool,
         timer: CUDAKernelTimer,
@@ -626,7 +626,7 @@ class ImplicitGemm(Function):
         pair_mask_fwd_splits: torch.Tensor,
         mask_argsort_fwd_splits: torch.Tensor,
         num_activate_out: int,
-        masks: list[npt.NDArray],
+        masks: Sequence[UInt32[np.ndarray, " 1"] | None],
         is_train: bool,
         is_subm: bool,
         timer: CUDAKernelTimer = CUDAKernelTimer(False),
