@@ -10,7 +10,7 @@ collision:
   class_names: ${database.database_task_configs.detection3d.label_names}
   map_provider: ${datamodule.test_dataset.map_provider}
   vehicle: ${metric_params.collision_models.vehicle}
-  region: ${metric_params.collision_models.drivable_region}
+  region: ${datamodule.test_dataset.map_provider.drivable_region}
   max_speed_mps: ${metric_params.collision_models.max_speed_mps}
   params: ${metric_params.collision_models.reachability}
 
