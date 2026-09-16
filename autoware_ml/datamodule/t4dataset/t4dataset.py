@@ -18,6 +18,7 @@ from autoware_ml.datamodule.base_dataset_task import BaseDatasetTask
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.types.tasks import TaskType
 from autoware_ml.types.dataset import SplitType
+from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider
 
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ class T4Dataset(BaseDataset):
         database_root_path: str,
         max_num_3d_gt_bboxes: int,
         split_type: SplitType,
+        map_provider: LaneletMapProvider,
         dataset_records_dataframe: pl.DataFrame | None,
         transforms: TransformsCompose | None,
         dataset_tasks: MappingProxyType[TaskType | str, BaseDatasetTask],
@@ -58,6 +60,7 @@ class T4Dataset(BaseDataset):
             transforms=transforms,
             split_type=split_type,
         )
+        self.map_provider = map_provider
 
         # Convert the dataset_tasks to TaskType: BaseDatasetTask mapping if the keys are strings
         self.dataset_tasks: MappingProxyType[TaskType, BaseDatasetTask] = MappingProxyType(

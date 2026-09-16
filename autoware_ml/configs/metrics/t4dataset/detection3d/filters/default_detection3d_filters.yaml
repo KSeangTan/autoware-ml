@@ -1,0 +1,21 @@
+# Filters
+region_filters:
+  road:
+    _target_: autoware_ml.metrics.filters.RegionFilter
+    region: ${t4dataset.drivable_region}
+    name: region_road
+    map_provider: ${datamodule.test_dataset.map_provider}
+  walkway:
+    _target_: autoware_ml.metrics.filters.RegionFilter
+    region: [walkway]
+    map_provider: ${datamodule.test_dataset.map_provider}
+corridor_filter:
+  _target_: autoware_ml.metrics.filters.CorridorFilter
+  width_m: 3.0
+collision_filter:
+  _target_: autoware_ml.metrics.filters.CollisionFilter
+  map_provider: ${datamodule.test_dataset.map_provider}
+  vehicle: ${collision_models.vehicle}
+  region: ${datamodule.test_dataset.map_provider.drivable_region}
+  max_speed_mps: ${collision_models.max_speed_mps}
+  params: ${collision_models.reachability}

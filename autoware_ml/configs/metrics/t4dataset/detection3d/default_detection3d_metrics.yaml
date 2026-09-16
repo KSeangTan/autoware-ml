@@ -1,0 +1,60 @@
+# @package _global_
+defaults:
+  - filters: default_detection3d_filters
+  - collision_models: default_collision_model
+  - components: default_detection3d_components
+  - _self_
+
+collision:
+  _target_: autoware_ml.metrics.detection3d.collision.CollisionTTC
+  class_names: ${database.database_task_configs.detection3d.label_names}
+  map_provider: ${datamodule.test_dataset.map_provider}
+  vehicle: ${metrics.collision_models.vehicle}
+  region: ${metrics.collision_models.drivable_region}
+  max_speed_mps: ${metrics.collision_models.max_speed_mps}
+  params: ${metrics.collision_models.reachability}
+
+# Grouped classes for evaluation
+class_groups:
+  grouped_vehicle: [car, truck, bus, train, vehicle_extension]
+  grouped_two_wheeler: [motorcycle, bicycle]
+  grouped_pedestrian_animal: [pedestrian, animal]
+  grouped_static_obstacle: [barrier, traffic_cone]
+  grouped_debris: [debris]
+  grouped_structure: [bicycle_rack]
+
+# Detection metric suites, per class, then grouped, then split by occlusion.
+suites:
+  - _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
+    components: ${metrics.components.detection_components}
+    class_names: ${database.database_task_configs.detection3d.label_names}
+    min_num_points: 2
+    eval_class_range: ${eval_class_range}
+    collision: ${metrics.collision}
+    ranges: ${metric_ranges}
+
+  - _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
+    prefix: det3d_grouped
+    components: ${metrics.components.detection_components}
+    class_names: ${database.database_task_configs.detection3d.label_names}
+    min_num_points: 2
+    eval_class_range: ${eval_class_range}
+    class_groups: ${metrics.class_groups}
+    collision: ${metrics.collision}
+    ranges: ${metric_ranges}
+
+  - _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
+    prefix: det3d_visible
+    components: ${metrics.components.occlusion_split_components}
+    class_names: ${database.database_task_configs.detection3d.label_names}
+    min_num_points: 1
+    eval_class_range: ${eval_class_range}
+    ranges: ${metric_ranges}
+
+  - _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
+    prefix: det3d_overall
+    components: ${metrics.components.occlusion_split_components}
+    class_names: ${database.database_task_configs.detection3d.label_names}
+    min_num_points: 0
+    eval_class_range: ${eval_class_range}
+    ranges: ${metric_ranges}

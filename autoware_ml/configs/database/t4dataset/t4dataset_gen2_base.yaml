@@ -17,7 +17,6 @@ defaults:
   - t4dataset/scenarios@scenarios.db_j6gen2: detection3d/db_j6gen2
   - t4dataset/scenarios@scenarios.db_largebus: detection3d/db_largebus
   - t4dataset/scenarios@scenarios.db_jpntaxi_gen2: detection3d/db_jpntaxi_gen2
-
   - _self_
 
 # Number of features in the lidar pointcloud

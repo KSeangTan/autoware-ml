@@ -28,7 +28,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, Sequence
 
 import lanelet2
 import numpy as np
@@ -525,6 +525,7 @@ class LaneletMapProvider:
             a path when called and answers ``available``.
     """
 
+    drivable_region: Sequence[str]
     resolve_osm: OsmPathResolver
 
     @property

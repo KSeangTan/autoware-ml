@@ -26,7 +26,7 @@ from typing import Any
 
 from autoware_ml.datamodule.base import DataModule, Dataset
 from autoware_ml.datamodule.common.serialization import SerializedSampleList
-from autoware_ml.datamodule.nuscenes.common import resolve_lidar_path
+from autoware_ml.datamodule.nuscenes.common import resolve_lidar_path, lidar_to_map
 from autoware_ml.transforms.legacy_base import TransformsCompose
 
 
@@ -95,6 +95,9 @@ class NuscenesSegmentation3DDataset(Dataset):
             "pts_semantic_mask_path": os.path.join(
                 self.lidarseg_dir, sample["pts_semantic_mask_path"]
             ),
+            "timestamp": sample.get("timestamp"),
+            "ego2global": lidar_to_map(sample),
+            "scene_token": sample["scene_token"],
         }
 
 

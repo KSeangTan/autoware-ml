@@ -31,7 +31,7 @@ from autoware_ml.datamodule.common.detection3d import (
     load_detection_data_infos,
 )
 from autoware_ml.datamodule.common.serialization import SerializedSampleList
-from autoware_ml.datamodule.nuscenes.common import resolve_lidar_path
+from autoware_ml.datamodule.nuscenes.common import resolve_lidar_path, lidar_to_map
 from autoware_ml.transforms.legacy_base import TransformsCompose
 
 
@@ -129,6 +129,8 @@ class NuscenesDetection3DDataset(Dataset):
                 sample.get("num_features", sample.get("lidar_points", {}).get("num_pts_feats", 5))
             ),
             "sweeps": self._resolve_sweeps(sample),
+            "ego2global": lidar_to_map(sample),
+            "scene_token": sample["scene_token"],
         }
 
 
