@@ -29,13 +29,6 @@ model:
       dense_output_shapes: ???
 
 datamodule:
-  # Overwrite dataloader
-  train_dataloader:
-    shuffle: true
-  predict_dataloader:
-    shuffle: false
-    batch_size: 1
-
   # Overwrite transforms
   train_dataset:
     transforms:
