@@ -5,12 +5,16 @@ defaults:
   - components: default_detection3d_components
   - _self_
 
+# Lanelet2 tokens a vehicle may drive on: the road slice of the region filters and the
+# surface the collision area and TTC are clipped to.
+drivable_region: [road, road_shoulder, crosswalk, drivable_area, intersection_area, crosswalk_polygon]
+
 collision:
   _target_: autoware_ml.metrics.detection3d.collision.CollisionTTC
   class_names: ${database.database_task_configs.detection3d.label_names}
   map_provider: ${datamodule.test_dataset.map_provider}
   vehicle: ${metric_params.collision_models.vehicle}
-  region: ${datamodule.test_dataset.map_provider.drivable_region}
+  region: ${metric_params.drivable_region}
   max_speed_mps: ${metric_params.collision_models.max_speed_mps}
   params: ${metric_params.collision_models.reachability}
 

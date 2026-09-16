@@ -2,7 +2,7 @@
 region_filters:
   road:
     _target_: autoware_ml.metrics.filters.RegionFilter
-    region: ${datamodule.test_dataset.map_provider.drivable_region}
+    region: ${metric_params.drivable_region}
     name: region_road
     map_provider: ${datamodule.test_dataset.map_provider}
   walkway:
@@ -16,6 +16,6 @@ collision_filter:
   _target_: autoware_ml.metrics.filters.CollisionFilter
   map_provider: ${datamodule.test_dataset.map_provider}
   vehicle: ${metric_params.collision_models.vehicle}
-  region: ${datamodule.test_dataset.map_provider.drivable_region}
+  region: ${metric_params.drivable_region}
   max_speed_mps: ${metric_params.collision_models.max_speed_mps}
   params: ${metric_params.collision_models.reachability}

@@ -1,6 +1,4 @@
 _target_: autoware_ml.metrics.geometry.lanelet.LaneletMapProvider
-# Lanelet2 tokens a vehicle may drive on, also the road slice of the region filters.
-drivable_region: [road, road_shoulder, crosswalk, drivable_area, intersection_area, crosswalk_polygon]
 resolve_osm:
   _target_: autoware_ml.metrics.geometry.lanelet.T4LaneletMapResolver
   data_root: ${database.root_path}
