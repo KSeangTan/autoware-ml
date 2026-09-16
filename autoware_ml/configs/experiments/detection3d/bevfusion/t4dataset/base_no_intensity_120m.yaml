@@ -23,7 +23,7 @@ model:
     pts_middle_encoder:
       _target_: autoware_ml.models.detection3d.encoders.sparse.sparse_encoder.SparseEncoder
       # The sin/cos encoder emits 2 * in_channels ** 2 features.
-      in_channels: 28
+      in_channels: 32
       sparse_shape: ???
       output_channels: 128
       dense_output_shapes: ???
