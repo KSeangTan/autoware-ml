@@ -40,7 +40,7 @@ datamodule:
           _convert_: all
 
           load_dim: ${database.lidar_pointcloud_num_features}
-          use_dim: [0, 1, 2] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
+          use_dim: [0, 1, 2] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z] (intensity dropped)
           bev_remove_radius: 0.0
 
         - _target_: autoware_ml.transforms.point_cloud.loading.LoadMultiSweepPointsFromFile
@@ -51,7 +51,7 @@ datamodule:
           test_mode: false
           use_timestamp_difference: true
           load_dim: ${database.lidar_pointcloud_num_features}
-          use_dim: [0, 1, 2] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z, intensity]
+          use_dim: [0, 1, 2] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z] (intensity dropped)
 
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesPhysicalFilter
           _convert_: all
@@ -123,3 +123,59 @@ datamodule:
               - vehicle_state.parked
               - cycle_state.without_rider
               - motorcycle_state.without_rider
+
+  # The encoder is built for 4 channels (x, y, z, timestamp), so validation, test and predict
+  # pipelines must also drop intensity. Hydra replaces lists wholesale, so the full default
+  # test pipeline is repeated here with `use_dim: [0, 1, 2]`.
+  validation_dataset:
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+
+      pipeline:
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+          _convert_: all
+
+          load_dim: ${database.lidar_pointcloud_num_features}
+          use_dim: [0, 1, 2] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z] (intensity dropped)
+          bev_remove_radius: 0.0
+
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadMultiSweepPointsFromFile
+          _convert_: all
+
+          sweeps_num: 2
+          bev_remove_radius: 1.0
+          test_mode: true
+          use_timestamp_difference: true
+          load_dim: ${database.lidar_pointcloud_num_features}
+          use_dim: [0, 1, 2] # Refer PointFieldIndex for the name of each dimensionality, [x, y, z] (intensity dropped)
+
+        - _target_: autoware_ml.transforms.point_cloud.filters.PointsRangeFilter
+          _convert_: all
+
+          points_range: ${point_cloud_range}
+
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesPhysicalFilter
+          _convert_: all
+
+          max_absolute_speed: 150.0 # m/s, 540 km/h
+
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
+          _convert_: all
+
+          label_names_to_keep: ${database.database_task_configs.detection3d.label_names}
+
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesAttributeFilter
+          _convert_: all
+
+          attributes_to_filter:
+            bicycle:
+              - vehicle_state.parked
+              - cycle_state.without_rider
+              - motorcycle_state.without_rider
+
+  test_dataset:
+    transforms: ${datamodule.validation_dataset.transforms}
+
+  predict_dataset:
+    transforms: ${datamodule.validation_dataset.transforms}
