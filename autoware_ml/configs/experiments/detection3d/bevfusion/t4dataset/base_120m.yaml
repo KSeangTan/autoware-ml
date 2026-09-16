@@ -2,7 +2,7 @@
 defaults:
   - ../base
   - /datamodule@datamodule: t4dataset/default_detection3d_datamodule
-  - /metrics/t4dataset@metric_ranges: default_detection3d_120m_metric_ranges
+  - /metrics/t4dataset/detection3d@metric_ranges: default_detection3d_120m_metric_ranges
   - _self_
 
 point_cloud_range: [-122.4, -122.4, -3.0, 122.4, 122.4, 5.0]

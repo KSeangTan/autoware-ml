@@ -2,7 +2,7 @@ _target_: autoware_ml.datamodule.t4dataset.t4dataset.T4Dataset
 _convert_: all
 
 defaults:
-  - map_provider: default_map
+  - map_provider: default_map_provider
   - detection3d@dataset_tasks.detection3d: default_detection3d
   - ../../transforms@transforms: default_test_transforms
 
