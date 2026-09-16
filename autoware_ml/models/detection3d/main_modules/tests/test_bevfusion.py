@@ -445,6 +445,29 @@ class TestBEVFusionDetectionModelLidarOnly(_BEVFusionDetectionModelTestCase):
                 sample_predictions.labels_3d.shape[0], sample_predictions.bboxes_3d.shape[0]
             )
 
+    def test_forward_invokes_the_branches_through_module_hooks(self) -> None:
+        """
+        Test that the lidar branch and the head run through ``nn.Module.__call__`` so forward
+        hooks fire. Lightning's model summary relies on them to report per-layer FLOPs and sizes;
+        calling ``.forward`` directly used to leave the lidar branch at zero FLOPs.
+        """
+        called: list[str] = []
+        handles = [
+            self.model.lidar_network.register_forward_hook(
+                lambda module, args, output: called.append("lidar_network")
+            ),
+            self.model.bbox_head.register_forward_hook(
+                lambda module, args, output: called.append("bbox_head")
+            ),
+        ]
+        try:
+            self.model(self.batch_inputs)
+        finally:
+            for handle in handles:
+                handle.remove()
+
+        self.assertEqual(called, ["lidar_network", "bbox_head"])
+
     def test_build_eval_output_pairs_predictions_with_ground_truth(self) -> None:
         """Test that the eval output carries the valid ground-truth boxes of every sample."""
         multi_task_outputs = self.model(self.batch_inputs)

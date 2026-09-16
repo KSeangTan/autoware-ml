@@ -376,7 +376,9 @@ class BEVFusionDetectionModel(ModuleBaseModel):
                     "ModelBatchInputs must contain depth_maps for BEVFusion camera forward pass."
                 )
 
-            image_bev = self.camera_network.forward(
+            # Call the module rather than its forward so module hooks (model summary sizes and
+            # FLOP counting) see the branch.
+            image_bev = self.camera_network(
                 image_batch=image_data.images,
                 depth_maps=image_data.depth_maps,
                 camera_intrinsics=image_data.camera_intrinsics,
@@ -397,7 +399,7 @@ class BEVFusionDetectionModel(ModuleBaseModel):
             assert batch_size is not None, "Batch size must be provided for lidar forward pass."
             batch_coords = voxels_data.concat_batch_indices_coords()
             other_bev_features = [image_bev] if image_bev is not None else None
-            lidar_bev = self.lidar_network.forward(
+            lidar_bev = self.lidar_network(
                 voxels=voxels_data.voxels,
                 coords=batch_coords,
                 num_points=voxels_data.num_points,

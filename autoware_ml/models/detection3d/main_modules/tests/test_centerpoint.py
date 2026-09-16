@@ -23,7 +23,11 @@ from autoware_ml.dataclasses.batch.detection3d import (
     Detection3DGTBatch,
 )
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
-from autoware_ml.models.detection3d.main_modules.centerpoint import CenterPointDetectionModel
+from autoware_ml.models.detection3d.main_modules.centerpoint import (
+    CenterPointDetectionModel,
+    _CenterPointBackboneNeckHeadExportWrapper,
+    _CenterPointVoxelEncoderExportWrapper,
+)
 from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
 from autoware_ml.models.detection3d.encoders.pillars.pillar_feature_net import PillarFeatureNet
 from autoware_ml.models.detection3d.encoders.pillars.point_pillar_scatter import PointPillarsScatter
@@ -52,6 +56,7 @@ class TestCenterPointDetectionModel(unittest.TestCase):
                     point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
                     max_num_points=16,
                     max_voxels=16,
+                    eval_max_voxels=16,
                     voxelization_z_order_first=False,
                 )
             ]
@@ -74,7 +79,19 @@ class TestCenterPointDetectionModel(unittest.TestCase):
             out_channels=[128, 128, 128],
             upsample_strides=[1, 2, 4],
         )
-        self.bbox_head = CenterHead(
+        self.bbox_head = self._build_bbox_head(use_velocity=True)
+        self.log_dict_configs = LogDictConfigs(
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            sync_dist=True,
+        )
+
+        self.centerpoint = self._build_centerpoint(self.bbox_head)
+
+    def _build_bbox_head(self, use_velocity: bool) -> CenterHead:
+        """Build the CenterPoint dense head on the 8x8 neck grid, with or without velocity."""
+        return CenterHead(
             in_channels=384,
             class_names=self.class_names,
             shared_channels=64,
@@ -85,22 +102,18 @@ class TestCenterPointDetectionModel(unittest.TestCase):
             score_threshold=0.1,
             post_max_size=10,
             nms_min_radius=1.0,
-            use_velocity=True,
-        )
-        self.log_dict_configs = LogDictConfigs(
-            on_step=False,
-            on_epoch=True,
-            prog_bar=True,
-            sync_dist=True,
+            use_velocity=use_velocity,
         )
 
-        self.centerpoint = CenterPointDetectionModel(
+    def _build_centerpoint(self, bbox_head: CenterHead) -> CenterPointDetectionModel:
+        """Build the detector around the shared encoders, backbone and neck with the given head."""
+        return CenterPointDetectionModel(
             data_preprocessor=self.data_preprocessor,
             pts_voxel_encoder=self.pillar_feature_net,
             pts_middle_encoder=self.middle_encoder,
             pts_backbone=self.backbone,
             pts_neck=self.neck,
-            bbox_head=self.bbox_head,
+            bbox_head=bbox_head,
             log_dict_configs=self.log_dict_configs,
         ).to(self.device)
 
@@ -216,6 +229,89 @@ class TestCenterPointDetectionModel(unittest.TestCase):
             self.assertEqual(
                 sample_predictions.labels_3d.shape[0], sample_predictions.bboxes_3d.shape[0]
             )
+
+    def test_build_export_specs_splits_pillar_encoder_and_backbone_neck_head(self) -> None:
+        """
+        Test that deployment export follows the CenterPoint split: decorated pillar features feed
+        the PFN module and dense BEV features feed the backbone/neck/head module, with the runtime
+        input and output names and the velocity branch appended last.
+        """
+        self.centerpoint.eval()
+        multi_task_batch_inputs = self._build_multi_task_batch_inputs()
+        voxels_data = multi_task_batch_inputs.voxels_data
+        assert voxels_data is not None
+        num_pillars, max_num_points = voxels_data.voxels.shape[:2]
+        # [x, y, z, i, t, cluster-offset xyz, voxel-center-offset xyz]
+        num_decorated_channels = 11
+
+        specs = self.centerpoint.build_export_specs(multi_task_batch_inputs)
+
+        self.assertEqual(
+            list(specs), ["pts_voxel_encoder_centerpoint", "pts_backbone_neck_head_centerpoint"]
+        )
+
+        voxel_spec = specs["pts_voxel_encoder_centerpoint"]
+        self.assertIsInstance(voxel_spec.module, _CenterPointVoxelEncoderExportWrapper)
+        self.assertEqual(voxel_spec.input_param_names, ["input_features"])
+        self.assertEqual(voxel_spec.output_names, ["pillar_features"])
+        (input_features,) = voxel_spec.args
+        self.assertEqual(
+            input_features.shape, (num_pillars, max_num_points, num_decorated_channels)
+        )
+        with torch.no_grad():
+            pillar_features = voxel_spec.module(*voxel_spec.args)
+        # The singleton point dimension is kept for the runtime pillar-feature ABI.
+        self.assertEqual(pillar_features.shape, (num_pillars, 1, 32))
+
+        head_spec = specs["pts_backbone_neck_head_centerpoint"]
+        self.assertIsInstance(head_spec.module, _CenterPointBackboneNeckHeadExportWrapper)
+        self.assertEqual(head_spec.input_param_names, ["spatial_features"])
+        self.assertEqual(head_spec.output_names, ["heatmap", "reg", "height", "dim", "rot", "vel"])
+        (spatial_features,) = head_spec.args
+        self.assertEqual(spatial_features.shape, (self.batch_size, 32, 16, 16))
+        with torch.no_grad():
+            outputs = head_spec.module(*head_spec.args)
+        self.assertEqual([output.shape[1] for output in outputs], [self.num_classes, 2, 1, 3, 2, 2])
+        for output in outputs:
+            self.assertEqual(output.shape[0], self.batch_size)
+            self.assertEqual(output.shape[2:], (8, 8))
+
+    def test_build_export_specs_follow_head_velocity_configuration(self) -> None:
+        """Test that a head built without velocity exports no ``vel`` output."""
+        centerpoint = self._build_centerpoint(self._build_bbox_head(use_velocity=False)).eval()
+
+        specs = centerpoint.build_export_specs(self._build_multi_task_batch_inputs())
+
+        head_spec = specs["pts_backbone_neck_head_centerpoint"]
+        self.assertEqual(head_spec.output_names, ["heatmap", "reg", "height", "dim", "rot"])
+        with torch.no_grad():
+            outputs = head_spec.module(*head_spec.args)
+        self.assertEqual([output.shape[1] for output in outputs], [self.num_classes, 2, 1, 3, 2])
+
+    def test_build_export_specs_requires_voxels_data(self) -> None:
+        """Test that export spec construction rejects a batch without voxel data."""
+        multi_task_batch_inputs = self._build_multi_task_batch_inputs()
+        multi_task_batch_inputs = ModelBatchInputs(
+            multi_task_gt_batch=multi_task_batch_inputs.multi_task_gt_batch,
+            voxels_data=None,
+            image_data=None,
+        )
+
+        with self.assertRaisesRegex(ValueError, "voxels_data"):
+            self.centerpoint.build_export_specs(multi_task_batch_inputs)
+
+    def test_build_export_spec_rejects_single_module_export(self) -> None:
+        """Test that the single-module export entry point points at the split export."""
+        with self.assertRaisesRegex(RuntimeError, "build_export_specs"):
+            self.centerpoint.build_export_spec(self._build_multi_task_batch_inputs())
+
+    def test_build_export_specs_keeps_training_mode(self) -> None:
+        """Test that tracing the split modules leaves a training model in training mode."""
+        self.centerpoint.train()
+
+        self.centerpoint.build_export_specs(self._build_multi_task_batch_inputs())
+
+        self.assertTrue(self.centerpoint.training)
 
 
 if __name__ == "__main__":
