@@ -35,7 +35,7 @@ from shapely import affinity
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
 
-from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.legacy_base import BaseTransform
 
 
 class MergeObjects3D(BaseTransform):

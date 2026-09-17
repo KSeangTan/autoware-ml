@@ -23,7 +23,6 @@ from __future__ import annotations
 import os
 from typing import Any
 
-import numpy as np
 
 from autoware_ml.datamodule.base import Dataset
 from autoware_ml.datamodule.common.multiview_detection3d import (
@@ -31,7 +30,7 @@ from autoware_ml.datamodule.common.multiview_detection3d import (
     MultiviewDetection3DDataset,
 )
 from autoware_ml.datamodule.nuscenes.common import lidar_to_map, resolve_lidar_path
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.legacy_base import TransformsCompose
 
 
 class NuscenesMultiviewDetection3DDataset(MultiviewDetection3DDataset):

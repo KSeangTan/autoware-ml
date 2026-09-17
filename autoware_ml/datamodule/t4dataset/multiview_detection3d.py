@@ -29,7 +29,7 @@ from autoware_ml.datamodule.common.multiview_detection3d import (
     MultiviewDetection3DDataModule,
     MultiviewDetection3DDataset,
 )
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.legacy_base import TransformsCompose
 
 
 class T4MultiviewDetection3DDataset(MultiviewDetection3DDataset):

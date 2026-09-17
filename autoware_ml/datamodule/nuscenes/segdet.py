@@ -23,7 +23,6 @@ from typing import Any
 
 from torch.utils.data import DataLoader
 
-import numpy as np
 from autoware_ml.datamodule.base import DataModule, Dataset
 from autoware_ml.datamodule.common.detection3d import (
     build_detection_dataloader,
@@ -38,7 +37,7 @@ from autoware_ml.datamodule.t4dataset.detection3d import (
     coerce_frame_sampling,
     compute_frame_sampling_weights,
 )
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.legacy_base import TransformsCompose
 
 
 def _resolve_path(base: str, path: str) -> str:

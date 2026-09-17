@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.legacy_base import TransformsCompose
 
 logger = logging.getLogger(__name__)
 

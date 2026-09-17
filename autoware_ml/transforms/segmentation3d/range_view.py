@@ -20,7 +20,7 @@ from typing import Any
 
 import numpy as np
 
-from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.legacy_base import BaseTransform
 from autoware_ml.transforms.segmentation3d.utils import project_range
 
 
