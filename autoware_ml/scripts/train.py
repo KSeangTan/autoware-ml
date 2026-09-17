@@ -152,6 +152,7 @@ def main(cfg: DictConfig):
         device=torch.device("cpu"),
         set_eval=False,
         enforce_full_coverage=False,
+        skip_mismatched_weights=bool(cfg.get("skip_mismatched_weights", False)),
     )
 
     logger.info("Instantiating callbacks...")

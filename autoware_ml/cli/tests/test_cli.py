@@ -239,6 +239,33 @@ class TestCliCommands:
             config_prefix=cli.EXPERIMENT_CONFIG_PREFIX,
         )
 
+    def test_train_forwards_skip_mismatched_weights(self) -> None:
+        with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
+            result = self.runner.invoke(
+                app,
+                [
+                    "train",
+                    "--config-name",
+                    SAMPLE_CONFIG_NAME,
+                    "--weights",
+                    "seg.ckpt",
+                    "--skip-mismatched-weights",
+                ],
+            )
+
+        assert result.exit_code == 0
+        hydra_overrides = run_lazy_script_mock.call_args.kwargs["hydra_overrides"]
+        assert hydra_overrides == ["+weights=[seg.ckpt]", "+skip_mismatched_weights=true"]
+
+    def test_train_rejects_skip_mismatched_weights_without_weights(self) -> None:
+        result = self.runner.invoke(
+            app,
+            ["train", "--config-name", SAMPLE_CONFIG_NAME, "--skip-mismatched-weights"],
+        )
+
+        assert result.exit_code != 0
+        assert "--skip-mismatched-weights requires --weights" in result.output
+
     def test_train_runs_with_resume_checkpoint(self, tmp_path: Path) -> None:
         checkpoint_path = tmp_path / "last.ckpt"
         checkpoint_path.touch()

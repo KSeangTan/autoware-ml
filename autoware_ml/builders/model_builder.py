@@ -48,6 +48,7 @@ def build_model(
     resume_checkpoint_path: str | None,
     set_eval: bool = False,
     enforce_full_coverage: bool = False,
+    skip_mismatched_weights: bool = False,
 ) -> ModuleBaseModel:
     """
     Build a model from the Hydra configuration.
@@ -60,6 +61,8 @@ def build_model(
         resume_checkpoint_path: Path to the checkpoint file to resume training from.
         set_eval: Whether to set the model to evaluation mode after loading weights.
         enforce_full_coverage: Whether to enforce that all model parameters are covered by the weights.
+        skip_mismatched_weights: Whether to skip, with a warning, weight tensors whose key matches a
+            model tensor of a different shape instead of raising.
 
     Returns:
         Pytorch-Lightning ModuleBaseModel for multi-task learning/inference.
@@ -78,6 +81,7 @@ def build_model(
             map_location=device,
             logger=logger,
             enforce_full_coverage=enforce_full_coverage,
+            skip_mismatched_shapes=skip_mismatched_weights,
             set_eval=set_eval,
         )
 
