@@ -9,11 +9,30 @@ defaults:
 # surface the collision area and TTC are clipped to.
 drivable_region: [road, road_shoulder, crosswalk, drivable_area, intersection_area, crosswalk_polygon]
 
+# Reachable-set kind of every detection label, keyed by the label names of the database task.
+# Values are the names of autoware_ml.types.metrics.AgentKind. Same tables as the coarse
+# detection taxonomy under database/t4dataset/taxonomy/detection3d, restricted to the labels
+# this task trains.
+collision_kinds:
+  car: wheeled
+  truck: wheeled
+  bus: wheeled
+  bicycle: living
+  pedestrian: living
+  traffic_cone: static
+  barrier: static
+# Run speed in m/s of every living label above, the radius growth of its reachable disc.
+living_speeds:
+  bicycle: 6.0
+  pedestrian: 3.0
+
 collision:
   _target_: autoware_ml.metrics.detection3d.collision.CollisionTTC
   class_names: ${database.database_task_configs.detection3d.label_names}
   map_provider: ${datamodule.test_dataset.map_provider}
   vehicle: ${metric_params.collision_models.vehicle}
+  kinds: ${metric_params.collision_kinds}
+  living_speeds: ${metric_params.living_speeds}
   region: ${metric_params.drivable_region}
   max_speed_mps: ${metric_params.collision_models.max_speed_mps}
   params: ${metric_params.collision_models.reachability}
