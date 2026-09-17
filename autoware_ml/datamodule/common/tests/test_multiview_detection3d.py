@@ -15,7 +15,7 @@ from autoware_ml.datamodule.nuscenes.multiview_detection3d import (
     NuscenesMultiviewDetection3DDataset,
 )
 from autoware_ml.datamodule.t4dataset.multiview_detection3d import T4MultiviewDetection3DDataset
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.legacy_base import TransformsCompose
 from autoware_ml.transforms.boxes3d.loading import LoadAnnotations3D
 from autoware_ml.transforms.camera.loading import LoadMultiViewImagesFromFiles
 from autoware_ml.transforms.point_cloud.sweeps import LoadPointsFromMultiSweeps

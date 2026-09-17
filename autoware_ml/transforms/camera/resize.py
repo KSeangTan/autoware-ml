@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 import numpy.typing as npt
 
-from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.legacy_base import BaseTransform
 from autoware_ml.transforms.camera.utils import as_hwc_image_list, restore_image_container
 from autoware_ml.utils.calibration import CalibrationData
 

@@ -22,7 +22,7 @@ from typing import Any
 
 import numpy as np
 
-from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.legacy_base import BaseTransform
 from autoware_ml.transforms.boxes3d.annotations import (
     box_is_physical,
     normalize_filter_attributes,
