@@ -43,7 +43,10 @@ from autoware_ml.databases.schemas.frame_basic_metadata import FrameBasicMetadat
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDataModel
 from autoware_ml.databases.schemas.lidar_sources import LidarSourceDataModel
-from autoware_ml.databases.schemas.image_frames import ImageFrameDataModel
+from autoware_ml.databases.schemas.image_frames import (
+    ImageFrameDataModel,
+    distortion_model_from_coefficients,
+)
 from autoware_ml.databases.schemas.category_mapping import CategoryMappingDataModel
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel, Box3DDatasetSchema
 from autoware_ml.databases.scenarios import ScenarioData
@@ -640,6 +643,10 @@ class T4RecordsGenerator:
         image_height = sd_record.height
         image_width = sd_record.width
         cam2img = np.asarray(cs_record.camera_intrinsic, dtype=np.float64)
+        # OpenCV order, empty when the images ship already rectified.
+        image_distortion_coefficients = [
+            float(coefficient) for coefficient in np.asarray(cs_record.camera_distortion).ravel()
+        ]
 
         cam2global = image_frame_ego_pose_to_global_matrix @ image_sensor_to_ego_matrix
         global2cam = np.linalg.inv(cam2global)
@@ -660,6 +667,10 @@ class T4RecordsGenerator:
             image_height=image_height,
             image_width=image_width,
             cam2img=cam2img,
+            image_distortion_coefficients=image_distortion_coefficients,
+            image_distortion_model=distortion_model_from_coefficients(
+                image_distortion_coefficients
+            ),
             image_sensor_to_ego_pose_matrix=image_sensor_to_ego_matrix,
             image_frame_ego_pose_to_global_matrix=image_frame_ego_pose_to_global_matrix,
             lidar2cam=lidar2cam,

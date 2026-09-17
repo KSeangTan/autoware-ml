@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 class NuScenesRecordsGenerator:
     """
-    RecordsGenerator for NuScenesDataset. 
+    RecordsGenerator for NuScenesDataset.
 
     It reuses T4SampleRecord as the intermediate per-sample container since the unified dataset
     row model (DatasetRecord) is shared across all dataset families.
@@ -221,7 +221,7 @@ class NuScenesRecordsGenerator:
             return []
 
         # NuScenes.box_velocity() returns velocity in the **global** frame, unlike box.center
-        # from get_sample_data() which is already in the sensor frame. 
+        # from get_sample_data() which is already in the sensor frame.
         global_to_ego_rotation = lidar_frame_ego_pose_to_global_matrix[:3, :3].T
         ego_to_sensor_rotation = lidar_sensor_to_ego_pose_matrix[:3, :3].T
         global_to_sensor_rotation = ego_to_sensor_rotation @ global_to_ego_rotation
@@ -389,7 +389,9 @@ class NuScenesRecordsGenerator:
 
         sensor_to_ego_pose_matrix = convert_quaternion_to_matrix(
             rotation_quaternion=Quaternion(sensor_calibrated_sensor_record["rotation"]),
-            translation=np.asarray(sensor_calibrated_sensor_record["translation"], dtype=np.float64),
+            translation=np.asarray(
+                sensor_calibrated_sensor_record["translation"], dtype=np.float64
+            ),
             convert_to_float32=False,
         )
 
@@ -595,6 +597,9 @@ class NuScenesRecordsGenerator:
             image_height=image_height,
             image_width=image_width,
             cam2img=cam2img,
+            # nuScenes publishes rectified images and no distortion in calibrated_sensor.
+            image_distortion_coefficients=[],
+            image_distortion_model="",
             image_sensor_to_ego_pose_matrix=image_sensor_to_ego_matrix,
             image_frame_ego_pose_to_global_matrix=image_frame_ego_pose_to_global_matrix,
             lidar2cam=lidar2cam,
