@@ -13,6 +13,11 @@ experiment_name: lidar_voxel0170_second_secfpn_b16_50e_t4dataset_120m
 trainer:
   max_epochs: 50
 
+callbacks:
+  dynamic_validation:
+    # Keep the last 10 epochs at epoch resolution for the 50-epoch schedule.
+    epoch_intervals: [[0, 5], [40, 1]]
+
 # Include weights for pre-training
 weights: ???
 

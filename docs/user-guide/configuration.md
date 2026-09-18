@@ -185,7 +185,18 @@ callbacks:
     monitor: val/loss
     patience: 10
     mode: min
+
+  dynamic_validation:
+    _target_: autoware_ml.callbacks.dynamic_validation.DynamicValidation
+    # [start_epoch, check_val_every_n_epoch] pairs: validate every 5 epochs, then every epoch
+    # from epoch 20 onwards.
+    epoch_intervals: [[0, 5], [20, 1]]
 ```
+
+`DynamicValidation` rewrites `trainer.check_val_every_n_epoch` at the start of every epoch
+according to its schedule, so the validation frequency can change as training progresses. It
+requires `trainer.val_check_interval: 1.0` and an integer `trainer.check_val_every_n_epoch`,
+which is the initial value before the first epoch. It never modifies `trainer.log_every_n_steps`.
 
 ### `logger`
 

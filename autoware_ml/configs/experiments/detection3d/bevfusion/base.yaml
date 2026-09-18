@@ -36,9 +36,19 @@ data_preprocessor:
 
 trainer:
   max_epochs: ???
+  # Initial value only, the dynamic_validation callback below rewrites it per epoch.
   check_val_every_n_epoch: 5
   gradient_clip_val: 35.0
   gradient_clip_algorithm: norm
+
+callbacks:
+  dynamic_validation:
+    _target_: autoware_ml.callbacks.dynamic_validation.DynamicValidation
+    # [start_epoch, check_val_every_n_epoch] pairs. Validate every 5 epochs while the loss is
+    # still falling quickly, then every epoch from epoch 20 so the best checkpoint is picked at
+    # epoch resolution. The callback rewrites trainer.check_val_every_n_epoch at every epoch
+    # start; 50-epoch experiments override the second entry.
+    epoch_intervals: [[0, 5], [20, 1]]
 
 # Lidar-only models export the bevfusion_lidar main body; camera-lidar models export
 # bevfusion_image_backbone plus the bevfusion_camera_lidar main body.
