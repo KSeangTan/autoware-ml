@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Sequence, NamedTuple
 
-from jaxtyping import Int32
 import torch
 
 from autoware_ml.dataclasses.batch.detection3d import (
@@ -103,7 +102,7 @@ class ModelGTBatch(NamedTuple):
             else None,
         )
 
-    def infer_batch_size(self) -> Int32:
+    def infer_batch_size(self) -> int:
         """
         Infer the batch size from the collated multi-task GT batch.
 
@@ -111,7 +110,7 @@ class ModelGTBatch(NamedTuple):
             Batch size if it can be inferred, otherwise raises ValueError.
         """
         if self.point_cloud_gt_batch is not None:
-            return torch.max(self.point_cloud_gt_batch.batch_indices) + 1
+            return self.point_cloud_gt_batch.batch_size
         elif self.detection3d_gt_batch is not None:
             return self.detection3d_gt_batch.gt_bboxes_3d.shape[0]
         elif self.image_gt_batch is not None:
@@ -133,10 +132,6 @@ class ModelGTBatch(NamedTuple):
           PointCloudGTBatch: Collated point cloud GT batch.
         """
         if len(gt_samples) == 0:
-            return None
-
-        available_pointcloud = gt_samples[0].point_cloud_data is not None
-        if not available_pointcloud:
             return None
 
         pointcloud_samples = []
@@ -164,11 +159,6 @@ class ModelGTBatch(NamedTuple):
           Detection3DGTBatch: Collated detection3d GT batch.
         """
         if len(gt_samples) == 0:
-            return None
-
-        # Check if detection3d_gt_bboxes_3d are available in the samples
-        available_detection3d_gt_bboxes_3d = gt_samples[0].detection3d_gt_bboxes_3d is not None
-        if not available_detection3d_gt_bboxes_3d:
             return None
 
         detection3d_gt_bboxes_3d = []
@@ -205,11 +195,6 @@ class ModelGTBatch(NamedTuple):
         if len(gt_samples) == 0:
             return None
 
-        # Check if detection3d_gt_bboxes_3d are available in the samples
-        available_camera_image_data = gt_samples[0].camera_image_data is not None
-        if not available_camera_image_data:
-            return None
-
         image_gt_samples = []
         for sample in gt_samples:
             if sample.camera_image_data is None:
@@ -234,9 +219,7 @@ class ModelGTBatch(NamedTuple):
         Raises:
           ValueError: If only some of the samples carry frame metadata.
         """
-        if len(gt_samples) == 0 or gt_samples[0].frame_meta is None:
-            if any(sample.frame_meta is not None for sample in gt_samples):
-                raise ValueError("All samples must have frame_meta for collating.")
+        if len(gt_samples) == 0:
             return None
 
         frame_meta_samples = []
