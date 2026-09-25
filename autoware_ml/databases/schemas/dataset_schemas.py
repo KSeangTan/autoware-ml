@@ -42,6 +42,8 @@ class DatasetTableSchema:
     Attributes:
       SCENARIO_ID: Scenario ID column.
       SAMPLE_ID: Sample ID column.
+      PREVIOUS_SAMPLE_ID: Sample ID of the previous record in the same scenario, null for the
+        first record of a scenario.
       SAMPLE_INDEX: Sample index column.
       LOCATION: Location column.
       VEHICLE_TYPE: Vehicle type column.
@@ -63,6 +65,7 @@ class DatasetTableSchema:
     # Basic Schema
     SCENARIO_ID = DatasetTableColumn("scenario_id", pl.String)
     SAMPLE_ID = DatasetTableColumn("sample_id", pl.String)
+    PREVIOUS_SAMPLE_ID = DatasetTableColumn("previous_sample_id", pl.String)
     SAMPLE_INDEX = DatasetTableColumn("sample_index", pl.Int32)
     TIMESTAMP_SECONDS = DatasetTableColumn("timestamp_seconds", pl.Float64)
     LOCATION = DatasetTableColumn("location", pl.String)
@@ -125,6 +128,8 @@ class DatasetRecord(BaseModel, DataModelInterface):
       # Basic Metadata
       scenario_id: Scenario ID.
       sample_id: Sample ID.
+      previous_sample_id: Sample ID of the previous record in the same scenario, None for the
+        first record of a scenario.
       sample_index: Sample index.
       location: Location of the vehicle.
       vehicle_type: Type of the vehicle.
@@ -151,6 +156,7 @@ class DatasetRecord(BaseModel, DataModelInterface):
     # Basic Dataset Record
     scenario_id: str
     sample_id: str
+    previous_sample_id: str | None
     sample_index: int
     timestamp_seconds: float
     location: str | None
@@ -174,6 +180,7 @@ class DatasetRecord(BaseModel, DataModelInterface):
         data_model = {
             DatasetTableSchema.SCENARIO_ID.name: self.scenario_id,
             DatasetTableSchema.SAMPLE_ID.name: self.sample_id,
+            DatasetTableSchema.PREVIOUS_SAMPLE_ID.name: self.previous_sample_id,
             DatasetTableSchema.SAMPLE_INDEX.name: self.sample_index,
             DatasetTableSchema.TIMESTAMP_SECONDS.name: self.timestamp_seconds,
             DatasetTableSchema.LOCATION.name: self.location,
@@ -268,6 +275,8 @@ class DatasetRecord(BaseModel, DataModelInterface):
         return cls(
             scenario_id=data_model[DatasetTableSchema.SCENARIO_ID.name],
             sample_id=data_model[DatasetTableSchema.SAMPLE_ID.name],
+            # Older database caches predate this column.
+            previous_sample_id=data_model.get(DatasetTableSchema.PREVIOUS_SAMPLE_ID.name),
             sample_index=data_model[DatasetTableSchema.SAMPLE_INDEX.name],
             timestamp_seconds=data_model[DatasetTableSchema.TIMESTAMP_SECONDS.name],
             location=data_model[DatasetTableSchema.LOCATION.name],

@@ -22,6 +22,8 @@ class FrameBasicMetadata(BaseModel):
     Attributes:
       scenario_id: Scenario ID.
       sample_id: Sample ID.
+      previous_sample_id: Sample ID of the previous record in the same scenario, None for the
+        first record of a scenario.
       sample_index: Sample index.
       timestamp_seconds: Timestamp in seconds.
       scenario_name: Scenario name.
@@ -35,6 +37,7 @@ class FrameBasicMetadata(BaseModel):
 
     scenario_id: str
     sample_id: str
+    previous_sample_id: str | None
     sample_index: int
     timestamp_seconds: float
     scenario_name: str

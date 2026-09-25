@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 class T4Dataset(BaseDataset):
     """
     A dataset class that supports T4Dataset with multiple tasks.
-    It extends BaseDataset  to include implementation of data retrieval for multiple
+    It extends BaseDataset to include implementation of data retrieval for multiple
     tasks in a single interface.
     """
 
@@ -42,6 +42,9 @@ class T4Dataset(BaseDataset):
         dataset_records_dataframe: pl.DataFrame | None,
         transforms: TransformsCompose | None,
         dataset_tasks: MappingProxyType[TaskType | str, BaseDatasetTask],
+        camera_order: Sequence[str] | None = None,
+        filter_frames_with_camera_order: bool = False,
+        filter_all_time_steps: bool = False,
     ) -> None:
         """
         Initialize the T4Dataset class.
@@ -54,6 +57,14 @@ class T4Dataset(BaseDataset):
           transforms: Global transforms to be applied to the dataset records.
           dataset_tasks: Every task dataset that is part of the multi-task dataset, mapped by
             task type.
+          camera_order: Ordered camera names expected by the model. Required when
+            ``filter_frames_with_camera_order`` is set.
+          filter_frames_with_camera_order: Drop frames missing any camera in
+            ``camera_order`` (absent or null image path), so downstream image loading always
+            sees a complete multiview.
+          filter_all_time_steps: When ``filter_frames_with_camera_order`` is set, check every
+            time step of ``IMAGE_FRAMES`` (the current frame and all previous frames) instead
+            of only the current frame at index 0.
         """
         super().__init__(
             database_root_path=database_root_path,
@@ -61,6 +72,9 @@ class T4Dataset(BaseDataset):
             dataset_records_dataframe=dataset_records_dataframe,
             transforms=transforms,
             split_type=split_type,
+            camera_order=camera_order,
+            filter_frames_with_camera_order=filter_frames_with_camera_order,
+            filter_all_time_steps=filter_all_time_steps,
         )
         self.map_provider = map_provider
 
@@ -162,13 +176,13 @@ class T4Dataset(BaseDataset):
             scene_token=scene_dir_fragment(main_lidar.point_cloud_path, database_root_path),
         )
 
-    def _update_lidar_pointcloud_path(self, lidar_pointcloud_path: str) -> str:
+    def _resolve_sensor_data_path(self, sensor_data_path: str) -> str:
         """
-        Remove the absolute path prefix from the lidar pointcloud path and return the updated path with the dataset root.
+        Remove the absolute path prefix from the sensor data path and return the updated path with the dataset root.
         Note that this is dataset-specific.
         """
         # Return the relative path from the lidar pointcloud path
-        relative_path = "/".join(lidar_pointcloud_path.split("/")[-6:])
+        relative_path = "/".join(sensor_data_path.split("/")[-6:])
         return str(self.database_root_path / relative_path)
 
     def get_lidar_pointcloud_data_samples(self, idx: int) -> Sequence[LiDARPointCloudSample]:
@@ -197,7 +211,7 @@ class T4Dataset(BaseDataset):
                     LidarFrameDatasetSchema.lidar_sensor_to_lidar_sweep_matrix.name
                 ]
             )
-            lidar_pointcloud_path = self._update_lidar_pointcloud_path(
+            lidar_pointcloud_path = self._resolve_sensor_data_path(
                 lidar_pointcloud_metadata[LidarFrameDatasetSchema.lidar_pointcloud_path.name]
             )
 
@@ -231,6 +245,10 @@ class T4Dataset(BaseDataset):
         Args:
             dataset_records_dataframe: Polars DataFrame of dataset records.
         """
+        if self.filter_frames_with_camera_order:
+            dataset_records_dataframe = self._filter_frames_with_camera_order(
+                dataset_records_dataframe
+            )
         self.dataset_records_dataframe = dataset_records_dataframe
         for dataset_task in self.dataset_tasks.values():
             filtered_dataset_records_dataframe = dataset_task.pre_filter_dataset_records(

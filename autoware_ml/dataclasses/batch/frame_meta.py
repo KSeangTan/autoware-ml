@@ -26,10 +26,14 @@ class FrameMetaSample(NamedTuple):
             main lidar frame) to the map frame. It is named after the ``ego2global`` key the
             metrics read; the lidar mounting is already composed in.
         scene_token: Scene identifier the lanelet map provider resolves to the scene's map.
+        prev_exists: Whether the previous frame of the stream was fed right before this one, so
+            a stateful temporal model may keep its memory. None when the dataset is not
+            streamed.
     """
 
     ego2global: Float32[Tensor, "4 4"]
     scene_token: str
+    prev_exists: bool | None = None
 
 
 class FrameMetaBatch(NamedTuple):
@@ -38,10 +42,13 @@ class FrameMetaBatch(NamedTuple):
     Attributes:
         ego2globals: Per-frame 4x4 transforms from the (augmented) lidar frame to the map frame.
         scene_tokens: Per-frame scene identifiers.
+        prev_exists: Per-frame stream continuity flags, 1.0 when the previous frame of the
+            stream was fed right before, else 0.0. None when the dataset is not streamed.
     """
 
     ego2globals: Float32[Tensor, "batch_size 4 4"]
     scene_tokens: Sequence[str]
+    prev_exists: Float32[Tensor, " batch_size"] | None = None
 
     @staticmethod
     def collate_gt_samples(
@@ -63,7 +70,8 @@ class FrameMetaBatch(NamedTuple):
             The stacked frame metadata.
 
         Raises:
-            ValueError: If the two sequences differ in length or are empty.
+            ValueError: If the two sequences differ in length or are empty, or if only a part
+                of the samples carries ``prev_exists``.
         """
         if len(frame_meta_samples) == 0:
             raise ValueError("At least one frame metadata sample is required for collating.")
@@ -84,9 +92,28 @@ class FrameMetaBatch(NamedTuple):
                 )
             ego2globals.append(ego2global)
 
+        # Stream continuity is optional, but either every sample of the batch carries it or
+        # none does, otherwise a temporal model cannot tell which memories to keep.
+        samples_with_prev_exists = [
+            frame_meta.prev_exists
+            for frame_meta in frame_meta_samples
+            if frame_meta.prev_exists is not None
+        ]
+        if len(samples_with_prev_exists) == 0:
+            prev_exists = None
+        elif len(samples_with_prev_exists) == len(frame_meta_samples):
+            prev_exists = torch.tensor(samples_with_prev_exists, dtype=torch.float32)
+        else:
+            raise ValueError(
+                "All samples must either carry prev_exists or none of them, got "
+                f"{len(samples_with_prev_exists)} out of {len(frame_meta_samples)} samples "
+                "with prev_exists."
+            )
+
         return FrameMetaBatch(
             ego2globals=torch.stack(ego2globals, dim=0),
             scene_tokens=[frame_meta.scene_token for frame_meta in frame_meta_samples],
+            prev_exists=prev_exists,
         )
 
     def to_device(self, device: torch.device) -> FrameMetaBatch:
@@ -99,5 +126,7 @@ class FrameMetaBatch(NamedTuple):
             The batch with its transforms on ``device``.
         """
         return FrameMetaBatch(
-            ego2globals=self.ego2globals.to(device), scene_tokens=self.scene_tokens
+            ego2globals=self.ego2globals.to(device),
+            scene_tokens=self.scene_tokens,
+            prev_exists=self.prev_exists.to(device) if self.prev_exists is not None else None,
         )

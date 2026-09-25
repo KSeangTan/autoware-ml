@@ -48,6 +48,7 @@ class T4SampleRecord(BaseModel):
         return DatasetRecord(
             scenario_id=self.frame_basic_metadata.scenario_id,
             sample_id=self.frame_basic_metadata.sample_id,
+            previous_sample_id=self.frame_basic_metadata.previous_sample_id,
             sample_index=self.frame_basic_metadata.sample_index,
             timestamp_seconds=self.frame_basic_metadata.timestamp_seconds,
             scenario_name=self.frame_basic_metadata.scenario_name,

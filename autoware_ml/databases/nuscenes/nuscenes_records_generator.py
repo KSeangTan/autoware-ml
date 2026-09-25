@@ -150,10 +150,15 @@ class NuScenesRecordsGenerator:
             f"with sample steps: {self.sample_steps} and max sweeps: {self.max_sweeps}"
         )
 
+        # Sample ID of the last emitted record, so that the previous-sample chain only links
+        # records that exist in the table even when samples are stepped over or skipped
+        previous_sample_id: str | None = None
         for sample_index in range(0, len(self.sample_tokens), self.sample_steps):
             sample_token = self.sample_tokens[sample_index]
             sample = self.nusc.get("sample", sample_token)
-            nuscenes_sample_record = self.extract_nuscenes_sample_record(sample, sample_index)
+            nuscenes_sample_record = self.extract_nuscenes_sample_record(
+                sample, sample_index, previous_sample_id
+            )
 
             if nuscenes_sample_record is None:
                 logger.info(
@@ -165,11 +170,12 @@ class NuScenesRecordsGenerator:
                 continue
 
             records.append(nuscenes_sample_record.to_dataset_record())
+            previous_sample_id = nuscenes_sample_record.frame_basic_metadata.sample_id
 
         return records
 
     def _extract_sample_basic_metadata(
-        self, sample: Mapping[str, Any], sample_index: int
+        self, sample: Mapping[str, Any], sample_index: int, previous_sample_id: str | None
     ) -> FrameBasicMetadata:
         """
         Extract basic metadata from a NuScenes sample.
@@ -177,6 +183,7 @@ class NuScenesRecordsGenerator:
         Args:
           sample: NuScenes sample record.
           sample_index: Sample index.
+          previous_sample_id: Sample ID of the previous record, None for the first record.
 
         Returns:
           FrameBasicMetadata: Frame basic metadata of the NuScenes sample.
@@ -185,6 +192,7 @@ class NuScenesRecordsGenerator:
         return FrameBasicMetadata(
             scenario_id=self.scenario_data.scenario_id,
             sample_id=sample["token"],
+            previous_sample_id=previous_sample_id,
             sample_index=sample_index,
             location=self.scenario_data.location,
             vehicle_type=self.scenario_data.vehicle_type,
@@ -723,7 +731,10 @@ class NuScenesRecordsGenerator:
         )
 
     def extract_nuscenes_sample_record(
-        self, sample: Mapping[str, Any], sample_index: int
+        self,
+        sample: Mapping[str, Any],
+        sample_index: int,
+        previous_sample_id: str | None = None,
     ) -> T4SampleRecord | None:
         """
         Extract a T4SampleRecord (unified intermediate sample container) from a NuScenes sample.
@@ -731,6 +742,7 @@ class NuScenesRecordsGenerator:
         Args:
           sample: NuScenes sample record.
           sample_index: Sample index.
+          previous_sample_id: Sample ID of the previous record, None for the first record.
 
         Returns:
           T4SampleRecord | None: T4SampleRecord, or None if no supported lidar channel was found.
@@ -744,7 +756,7 @@ class NuScenesRecordsGenerator:
             return None
 
         frame_basic_metadata = self._extract_sample_basic_metadata(
-            sample=sample, sample_index=sample_index
+            sample=sample, sample_index=sample_index, previous_sample_id=previous_sample_id
         )
 
         lidar_frame_data_model, box3d = self._extract_lidar_frame(

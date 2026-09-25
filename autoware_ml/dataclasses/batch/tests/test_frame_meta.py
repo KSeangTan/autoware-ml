@@ -68,10 +68,18 @@ class TestFrameMetaSample(FrameMetaTestCase):
         """
         Input: the class itself.
         Expected: the tuple exposes ``ego2global`` then ``scene_token``, since the dataset
-        builds it positionally.
+        builds it positionally, and the optional ``prev_exists`` last.
         Check: compare ``_fields`` against the expected names.
         """
-        self.assertEqual(FrameMetaSample._fields, ("ego2global", "scene_token"))
+        self.assertEqual(FrameMetaSample._fields, ("ego2global", "scene_token", "prev_exists"))
+
+    def test_prev_exists_defaults_to_none(self) -> None:
+        """
+        Input: the first fixture sample, built without a stream continuity flag.
+        Expected: ``prev_exists`` is None, since only streamed datasets set it.
+        Check: read the field back.
+        """
+        self.assertIsNone(self.samples[0].prev_exists)
 
     def test_holds_given_fields(self) -> None:
         """
@@ -100,10 +108,68 @@ class TestFrameMetaBatchFields(FrameMetaTestCase):
     def test_field_order(self) -> None:
         """
         Input: the class itself.
-        Expected: the tuple exposes ``ego2globals`` then ``scene_tokens``.
+        Expected: the tuple exposes ``ego2globals`` then ``scene_tokens`` and the optional
+        ``prev_exists`` last.
         Check: compare ``_fields`` against the expected names.
         """
-        self.assertEqual(FrameMetaBatch._fields, ("ego2globals", "scene_tokens"))
+        self.assertEqual(FrameMetaBatch._fields, ("ego2globals", "scene_tokens", "prev_exists"))
+
+    def test_collate_keeps_prev_exists_none_when_no_sample_carries_it(self) -> None:
+        """
+        Input: the fixture samples, none of which carries ``prev_exists``.
+        Expected: the batch ``prev_exists`` is None, so non-streamed datasets stay unaffected.
+        Check: read the field back.
+        """
+        batch = FrameMetaBatch.collate_gt_samples(self.samples, [None, None])
+
+        self.assertIsNone(batch.prev_exists)
+
+    def test_collate_stacks_prev_exists_as_float32(self) -> None:
+        """
+        Input: the fixture samples flagged as a stream start and a stream continuation.
+        Expected: the batch holds ``[0.0, 1.0]`` as float32, the layout the memory refresh
+        of a temporal model multiplies with.
+        Check: compare the tensor with ``assert_close``.
+        """
+        samples = [
+            self.samples[0]._replace(prev_exists=False),
+            self.samples[1]._replace(prev_exists=True),
+        ]
+
+        batch = FrameMetaBatch.collate_gt_samples(samples, [None, None])
+
+        self.assertIsNotNone(batch.prev_exists)
+        assert batch.prev_exists is not None
+        torch.testing.assert_close(batch.prev_exists, torch.tensor([0.0, 1.0]))
+
+    def test_collate_rejects_partial_prev_exists(self) -> None:
+        """
+        Input: one fixture sample flagged and one without ``prev_exists``.
+        Expected: ValueError, since a temporal model cannot tell which memories to keep.
+        Check: collate and expect the error.
+        """
+        samples = [self.samples[0]._replace(prev_exists=True), self.samples[1]]
+
+        with self.assertRaises(ValueError):
+            FrameMetaBatch.collate_gt_samples(samples, [None, None])
+
+    def test_to_device_moves_prev_exists_and_keeps_none(self) -> None:
+        """
+        Input: a batch with ``prev_exists`` and one without.
+        Expected: the flags follow the poses to the device and None stays None.
+        Check: compare the moved flags and read the None back.
+        """
+        with_flags = FrameMetaBatch.collate_gt_samples(
+            [sample._replace(prev_exists=True) for sample in self.samples], [None, None]
+        )
+        without_flags = FrameMetaBatch.collate_gt_samples(self.samples, [None, None])
+
+        moved_with_flags = with_flags.to_device(self.device)
+        moved_without_flags = without_flags.to_device(self.device)
+
+        assert moved_with_flags.prev_exists is not None
+        torch.testing.assert_close(moved_with_flags.prev_exists, torch.tensor([1.0, 1.0]))
+        self.assertIsNone(moved_without_flags.prev_exists)
 
     def test_is_immutable(self) -> None:
         """

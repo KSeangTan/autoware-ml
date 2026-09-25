@@ -153,9 +153,14 @@ class T4RecordsGenerator:
             f"Generating dataset records for scenario: {self.scenario_data.scenario_id} with sample steps: {self.sample_steps} and max sweeps: {_MAX_SWEEPS}"
         )
 
+        # Sample ID of the last emitted record, so that the previous-sample chain only links
+        # records that exist in the table even when samples are stepped over or skipped
+        previous_sample_id: str | None = None
         for sample_index in range(0, len(self.t4_devkit_dataset.sample), self.sample_steps):
             sample = self.t4_devkit_dataset.sample[sample_index]
-            t4_sample_record = self.extract_t4_sample_record(sample, sample_index)
+            t4_sample_record = self.extract_t4_sample_record(
+                sample, sample_index, previous_sample_id
+            )
 
             if t4_sample_record is None:
                 logger.info(
@@ -167,11 +172,12 @@ class T4RecordsGenerator:
                 continue
 
             records.append(t4_sample_record.to_dataset_record())
+            previous_sample_id = t4_sample_record.frame_basic_metadata.sample_id
 
         return records
 
     def _extract_sample_basic_metadata(
-        self, sample: Sample, sample_index: int
+        self, sample: Sample, sample_index: int, previous_sample_id: str | None
     ) -> FrameBasicMetadata:
         """
         Extract basic metadata from a T4 sample.
@@ -179,6 +185,7 @@ class T4RecordsGenerator:
         Args:
           sample: T4 Sample.
           sample_index: Sample index.
+          previous_sample_id: Sample ID of the previous record, None for the first record.
 
         Returns:
           FrameBasicMetadata: Frame basic metadata of the T4 sample.
@@ -188,6 +195,7 @@ class T4RecordsGenerator:
         return FrameBasicMetadata(
             scenario_id=self.scenario_data.scenario_id,
             sample_id=sample.token,
+            previous_sample_id=previous_sample_id,
             sample_index=sample_index,
             location=self.scenario_data.location,
             vehicle_type=self.scenario_data.vehicle_type,
@@ -856,13 +864,16 @@ class T4RecordsGenerator:
             )
         return updated_boxes_3d_data_models
 
-    def extract_t4_sample_record(self, sample: Sample, sample_index: int) -> T4SampleRecord | None:
+    def extract_t4_sample_record(
+        self, sample: Sample, sample_index: int, previous_sample_id: str | None = None
+    ) -> T4SampleRecord | None:
         """
         Extract T4 sample record from a T4Dataset.
 
         Args:
           sample: Sample.
           sample_index: Sample index.
+          previous_sample_id: Sample ID of the previous record, None for the first record.
         Returns:
           T4SampleRecord: T4 sample record.
         """
@@ -877,7 +888,7 @@ class T4RecordsGenerator:
 
         # 1) Extract basic information from the T4Dataset
         frame_basic_metadata = self._extract_sample_basic_metadata(
-            sample=sample, sample_index=sample_index
+            sample=sample, sample_index=sample_index, previous_sample_id=previous_sample_id
         )
 
         # 2) Extract lidar information from the T4Dataset
