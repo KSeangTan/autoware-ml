@@ -138,25 +138,33 @@ class TestMultiTaskEvalOutput(unittest.TestCase):
         self.assertIn("gt_labels", eval_outputs)
         self.assertIn("gt_num_points", eval_outputs)
 
-        assert self.multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch is not None
-        self.assertTrue(
-            torch.allclose(
-                eval_outputs["gt_boxes"],
-                self.multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch.gt_bboxes_3d,
+        # The ground truth is handed to the metric per frame, trimmed to the valid boxes of
+        # that frame, so the padding rows of the batch tensors must not show up.
+        detection3d_gt_batch = self.multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch
+        assert detection3d_gt_batch is not None
+        valid_counts = detection3d_gt_batch.gt_valid_bboxes.tolist()
+        self.assertEqual(len(eval_outputs["gt_boxes"]), len(valid_counts))
+        self.assertEqual(len(eval_outputs["gt_labels"]), len(valid_counts))
+        self.assertEqual(len(eval_outputs["gt_num_points"]), len(valid_counts))
+        for batch_idx, valid_count in enumerate(valid_counts):
+            self.assertTrue(
+                torch.equal(
+                    eval_outputs["gt_boxes"][batch_idx],
+                    detection3d_gt_batch.gt_bboxes_3d[batch_idx, :valid_count],
+                )
             )
-        )
-        self.assertTrue(
-            torch.allclose(
-                eval_outputs["gt_labels"],
-                self.multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch.gt_labels_3d,
+            self.assertTrue(
+                torch.equal(
+                    eval_outputs["gt_labels"][batch_idx],
+                    detection3d_gt_batch.gt_labels_3d[batch_idx, :valid_count],
+                )
             )
-        )
-        self.assertTrue(
-            torch.allclose(
-                eval_outputs["gt_num_points"],
-                self.multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch.gt_bboxes_num_points,
+            self.assertTrue(
+                torch.equal(
+                    eval_outputs["gt_num_points"][batch_idx],
+                    detection3d_gt_batch.gt_bboxes_num_points[batch_idx, :valid_count],
+                )
             )
-        )
 
         assert self.multi_task_predictions.detection3d_predictions is not None
         for batch_idx in range(len(eval_outputs["predictions"])):
