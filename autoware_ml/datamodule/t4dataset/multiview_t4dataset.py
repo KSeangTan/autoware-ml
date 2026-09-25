@@ -230,6 +230,7 @@ class MultiViewT4Dataset(T4Dataset):
         if image_frames is None or len(image_frames) == 0:
             raise ValueError(f"Dataset record at index {index} has no image frames.")
 
+        # index-0 means the current frame
         current_image_frames: Mapping[str, Mapping[str, Any]] = {
             image_frame[ImageFrameDatasetSchema.image_sensor_channel_name.name]: image_frame
             for image_frame in image_frames[0]
