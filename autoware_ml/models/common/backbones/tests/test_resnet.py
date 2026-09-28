@@ -36,13 +36,14 @@ class TestResNetMultiScale(unittest.TestCase):
             self.batch_size, 3, self.image_size, self.image_size, device=self.device
         )
 
-    def test_resnet18_returns_three_feature_levels(self) -> None:
-        """Test that ResNet-18 returns ``layer2`` to ``layer4`` at strides 8, 16 and 32."""
+    def test_resnet18_returns_four_feature_levels(self) -> None:
+        """Test that ResNet-18 returns ``layer1`` to ``layer4`` at strides 4, 8, 16 and 32."""
         backbone = ResNet18MultiScale(in_channels=3).to(self.device).eval()
 
         with torch.no_grad():
-            c3, c4, c5 = backbone(self.images)
+            c2, c3, c4, c5 = backbone(self.images)
 
+        self.assertEqual(c2.shape, (self.batch_size, 64, 32, 32))
         self.assertEqual(c3.shape, (self.batch_size, 128, 16, 16))
         self.assertEqual(c4.shape, (self.batch_size, 256, 8, 8))
         self.assertEqual(c5.shape, (self.batch_size, 512, 4, 4))
@@ -52,8 +53,9 @@ class TestResNetMultiScale(unittest.TestCase):
         backbone = ResNet50MultiScale(in_channels=3).to(self.device).eval()
 
         with torch.no_grad():
-            c3, c4, c5 = backbone(self.images)
+            c2, c3, c4, c5 = backbone(self.images)
 
+        self.assertEqual(c2.shape, (self.batch_size, 256, 32, 32))
         self.assertEqual(c3.shape, (self.batch_size, 512, 16, 16))
         self.assertEqual(c4.shape, (self.batch_size, 1024, 8, 8))
         self.assertEqual(c5.shape, (self.batch_size, 2048, 4, 4))
@@ -66,10 +68,10 @@ class TestResNetMultiScale(unittest.TestCase):
         )
 
         with torch.no_grad():
-            c3, _, _ = backbone(images)
+            c2, _, _, _ = backbone(images)
 
         self.assertEqual(backbone.conv1.in_channels, 1)
-        self.assertEqual(c3.shape, (self.batch_size, 128, 16, 16))
+        self.assertEqual(c2.shape, (self.batch_size, 64, 32, 32))
 
     def test_classification_layers_are_removed(self) -> None:
         """Test that the average pooling and the classifier head are dropped from the backbone."""

@@ -29,7 +29,9 @@ model:
     in_channels: 3
   img_neck:
     _target_: autoware_ml.models.common.necks.lss_fpn.GeneralizedLSSFPN
-    in_channels: [128, 256, 512]
+    # ResNet18MultiScale hands over layer1 to layer4, the neck starts at layer2 (stride 8).
+    in_channels: [64, 128, 256, 512]
+    start_level: 1
     out_channels: 128
   view_transform:
     _target_: autoware_ml.models.detection3d.view_transforms.depth_lss.DepthLSSTransform

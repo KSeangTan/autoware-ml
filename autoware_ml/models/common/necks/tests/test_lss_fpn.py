@@ -55,10 +55,53 @@ class TestGeneralizedLSSFPN(unittest.TestCase):
         for output in outputs:
             self.assertTrue(torch.isfinite(output).all())
 
+    def test_start_level_skips_the_shallow_levels(self) -> None:
+        """Test that a four-level pyramid with ``start_level=1`` matches the three-level neck."""
+        pyramid = (torch.randn(self.batch_size, 64, 32, 32, device=self.device),) + self.pyramid
+        neck = (
+            GeneralizedLSSFPN(
+                in_channels=[64, 128, 256, 512], out_channels=self.out_channels, start_level=1
+            )
+            .to(self.device)
+            .eval()
+        )
+        neck.load_state_dict(self.neck.state_dict())
+
+        with torch.no_grad():
+            outputs = neck(pyramid)
+            expected_outputs = self.neck(self.pyramid)
+
+        self.assertEqual(len(outputs), 2)
+        for output, expected_output in zip(outputs, expected_outputs):
+            torch.testing.assert_close(output, expected_output)
+
+    def test_start_level_neck_checks_the_full_pyramid_depth(self) -> None:
+        """Test that the neck still expects one map per ``in_channels`` entry."""
+        neck = GeneralizedLSSFPN(
+            in_channels=[64, 128, 256, 512], out_channels=self.out_channels, start_level=1
+        ).to(self.device)
+
+        with self.assertRaisesRegex(ValueError, "Expected 4 input feature maps, got 3"):
+            neck(self.pyramid)
+
     def test_rejects_single_level_pyramid(self) -> None:
         """Test that the top-down pathway needs at least two feature levels."""
         with self.assertRaisesRegex(ValueError, "at least two feature levels"):
             GeneralizedLSSFPN(in_channels=[128], out_channels=self.out_channels)
+
+    def test_rejects_start_level_leaving_one_level(self) -> None:
+        """Test that ``start_level`` must leave at least two levels for the neck."""
+        with self.assertRaisesRegex(ValueError, "at least two feature levels"):
+            GeneralizedLSSFPN(
+                in_channels=self.in_channels, out_channels=self.out_channels, start_level=2
+            )
+
+    def test_rejects_start_level_out_of_range(self) -> None:
+        """Test that ``start_level`` must index an input level."""
+        with self.assertRaisesRegex(ValueError, "must index one of the 3 input feature levels"):
+            GeneralizedLSSFPN(
+                in_channels=self.in_channels, out_channels=self.out_channels, start_level=3
+            )
 
     def test_gradients_reach_every_level(self) -> None:
         """Test that every input level contributes to the fused outputs."""

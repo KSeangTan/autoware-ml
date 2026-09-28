@@ -39,31 +39,47 @@ class GeneralizedLSSFPN(nn.Module):
         self,
         in_channels: Sequence[int],
         out_channels: int,
+        start_level: int = 0,
         upsample_mode: str = "bilinear",
         align_corners: bool = False,
     ) -> None:
         """Initialize the generalized LSS FPN neck.
 
         Args:
-            in_channels: Input channel dimensions for the image feature pyramid.
+            in_channels: Input channel dimensions for the whole image feature pyramid handed to
+                the neck, from high to low resolution.
             out_channels: Output channel dimension for fused features.
+            start_level: Index of the first pyramid level used by the neck. Shallower levels
+                are accepted in ``forward`` but ignored.
             upsample_mode: Interpolation mode used for the top-down pathway.
             align_corners: Whether bilinear interpolation aligns corner pixels.
+
+        Raises:
+            ValueError: If ``start_level`` is out of range or leaves fewer than two levels.
         """
         super().__init__()
-        if len(in_channels) < 2:
-            raise ValueError("GeneralizedLSSFPN requires at least two feature levels.")
         self.in_channels = list(in_channels)
+        if start_level < 0 or start_level >= len(self.in_channels):
+            raise ValueError(
+                f"start_level ({start_level}) must index one of the {len(self.in_channels)} "
+                "input feature levels."
+            )
+        self.used_in_channels = self.in_channels[start_level:]
+        if len(self.used_in_channels) < 2:
+            raise ValueError("GeneralizedLSSFPN requires at least two feature levels.")
         self.out_channels = out_channels
+        self.start_level = start_level
         self.upsample_mode = upsample_mode
         self.align_corners = align_corners
 
         lateral_convs = []
         output_convs = []
-        for level in range(len(self.in_channels) - 1):
-            input_width = self.in_channels[level]
+        for level in range(len(self.used_in_channels) - 1):
+            input_width = self.used_in_channels[level]
             skip_width = (
-                self.in_channels[level + 1] if level == len(self.in_channels) - 2 else out_channels
+                self.used_in_channels[level + 1]
+                if level == len(self.used_in_channels) - 2
+                else out_channels
             )
             lateral_convs.append(
                 nn.Sequential(
@@ -87,17 +103,19 @@ class GeneralizedLSSFPN(nn.Module):
         """Fuse image pyramid features into LSS-friendly feature levels.
 
         Args:
-            inputs: Image feature pyramid ordered from high to low resolution.
+            inputs: Image feature pyramid ordered from high to low resolution, one map per
+                entry of ``in_channels``. Levels below ``start_level`` are ignored.
 
         Returns:
-            Tuple of fused feature maps passed to LSS-style view transforms.
+            Tuple of fused feature maps passed to LSS-style view transforms, one fewer than
+            the used levels.
         """
         if len(inputs) != len(self.in_channels):
             raise ValueError(
                 f"Expected {len(self.in_channels)} input feature maps, got {len(inputs)}."
             )
 
-        laterals = list(inputs)
+        laterals = list(inputs[self.start_level :])
         for level in range(len(laterals) - 2, -1, -1):
             upsampled = F.interpolate(
                 laterals[level + 1],
