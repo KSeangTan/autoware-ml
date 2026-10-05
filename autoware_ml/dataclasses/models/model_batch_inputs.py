@@ -1,10 +1,14 @@
+"""
+Modules to save the batched inputs to multi-task models.
+"""
+
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, InstanceOf
 
 from autoware_ml.dataclasses.geometry.images import ImageGTBatch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
-from autoware_ml.ops.voxelization.voxelization import VoxelsData
+from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 
 
 class ModelBatchInputs(BaseModel):
@@ -12,15 +16,16 @@ class ModelBatchInputs(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
 
-    # InstanceOf keeps pydantic from recursing into the NamedTuple's fields, whose jaxtyping
-    # annotations use symbolic axes (e.g. "batch_size*num_points") that can only be resolved
-    # inside a @jaxtyped scope.
+    # Every field below is a NamedTuple. InstanceOf keeps pydantic from recursing into their
+    # fields, whose jaxtyping annotations use symbolic axes (e.g. "batch_size*num_points") that
+    # can only be resolved inside a @jaxtyped scope, and it also keeps the validated payload the
+    # very object that was passed in instead of a rebuilt copy.
     multi_task_gt_batch: InstanceOf[ModelGTBatch]
 
-    voxels_data: VoxelsData | None
+    voxels_data: InstanceOf[VoxelsData] | None
 
     # Image data
-    image_data: ImageGTBatch | None
+    image_data: InstanceOf[ImageGTBatch] | None
 
     # TODO(Kok Seang): Add input features for 3D segmentation model.
 

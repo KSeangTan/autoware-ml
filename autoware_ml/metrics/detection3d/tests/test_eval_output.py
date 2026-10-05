@@ -55,7 +55,7 @@ class TestMultiTaskEvalOutput(unittest.TestCase):
                         [[4.9, 0.2, 0.1, 6.8, 7.2, 9.2, 40.0, 50.0, 60.0]], device=self.device
                     ),
                     scores_3d=torch.tensor([0.9], dtype=torch.float32, device=self.device),
-                    labels_3d=torch.tensor([1, 2], dtype=torch.int64, device=self.device),
+                    labels_3d=torch.tensor([1], dtype=torch.int64, device=self.device),
                 ),
             ]
         )
@@ -138,25 +138,35 @@ class TestMultiTaskEvalOutput(unittest.TestCase):
         self.assertIn("gt_labels", eval_outputs)
         self.assertIn("gt_num_points", eval_outputs)
 
-        assert self.multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch is not None
-        self.assertTrue(
-            torch.allclose(
-                eval_outputs["gt_boxes"],
-                self.multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch.gt_bboxes_3d,
+        # Ground truth comes back as one tensor per sample, trimmed to the valid boxes, which is
+        # the layout the detection metric consumes.
+        detection3d_gt_batch = self.multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch
+        assert detection3d_gt_batch is not None
+        batch_size = detection3d_gt_batch.gt_valid_bboxes.shape[0]
+        self.assertEqual(len(eval_outputs["gt_boxes"]), batch_size)
+        self.assertEqual(len(eval_outputs["gt_labels"]), batch_size)
+        self.assertEqual(len(eval_outputs["gt_num_points"]), batch_size)
+        for batch_idx in range(batch_size):
+            num_valid = int(detection3d_gt_batch.gt_valid_bboxes[batch_idx])
+            self.assertEqual(eval_outputs["gt_boxes"][batch_idx].shape[0], num_valid)
+            self.assertTrue(
+                torch.equal(
+                    eval_outputs["gt_boxes"][batch_idx],
+                    detection3d_gt_batch.gt_bboxes_3d[batch_idx, :num_valid],
+                )
             )
-        )
-        self.assertTrue(
-            torch.allclose(
-                eval_outputs["gt_labels"],
-                self.multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch.gt_labels_3d,
+            self.assertTrue(
+                torch.equal(
+                    eval_outputs["gt_labels"][batch_idx],
+                    detection3d_gt_batch.gt_labels_3d[batch_idx, :num_valid],
+                )
             )
-        )
-        self.assertTrue(
-            torch.allclose(
-                eval_outputs["gt_num_points"],
-                self.multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch.gt_bboxes_num_points,
+            self.assertTrue(
+                torch.equal(
+                    eval_outputs["gt_num_points"][batch_idx],
+                    detection3d_gt_batch.gt_bboxes_num_points[batch_idx, :num_valid],
+                )
             )
-        )
 
         assert self.multi_task_predictions.detection3d_predictions is not None
         for batch_idx in range(len(eval_outputs["predictions"])):

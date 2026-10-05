@@ -4,7 +4,7 @@ Modules to save decoded predictions from multi-task models.
 
 from typing import Sequence
 
-from jaxtyping import Float32
+from jaxtyping import Float32, Int64
 from pydantic import BaseModel, ConfigDict
 import torch
 
@@ -16,7 +16,7 @@ class ModelPredictions(BaseModel):
     Dataclass to save decoded predictions from multi-task models.
 
     Attributes:
-      detection_3d_predictions: Decoded predictions from a 3D detection task.
+      detection3d_predictions: Decoded predictions from a 3D detection task.
     """
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
@@ -24,7 +24,7 @@ class ModelPredictions(BaseModel):
     # Decoded predictions across samples.
     detection3d_predictions: Sequence[Detection3DSamplePredictions] | None
 
-    # TODO (Kok Seang): Add predictions for other tasks in the future.
+    # TODO(Kok Seang): Add predictions for other tasks in the future.
 
     def to_list(
         self,
@@ -32,7 +32,8 @@ class ModelPredictions(BaseModel):
         dict[
             str,
             Float32[torch.Tensor, "num_boxes num_bbox_params"]
-            | Float32[torch.Tensor, " num_boxes"],
+            | Float32[torch.Tensor, " num_boxes"]
+            | Int64[torch.Tensor, " num_boxes"],
         ]
     ]:
         """
@@ -44,7 +45,9 @@ class ModelPredictions(BaseModel):
         """
         predictions_list = []
         if self.detection3d_predictions is None:
-            return []
+            raise ValueError(
+                "ModelPredictions must contain detection3d_predictions for multi_task_eval_output."
+            )
 
         for detection_pred in self.detection3d_predictions:
             predictions_list.append(
