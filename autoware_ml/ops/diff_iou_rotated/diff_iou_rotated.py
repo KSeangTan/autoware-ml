@@ -13,9 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Adapted from mmcv/ops/diff_iou_rotated.py, itself adapted from
+# The polygon construction (box2corners, box_intersection, box_in_box, build_vertices,
+# sort_indices, calculate_area) and the IoU entry points are adapted from
+# mmcv/ops/diff_iou_rotated.py, itself adapted from
 # https://github.com/lilanxiao/Rotated_IoU/blob/master/box_intersection_2d.py and
 # https://github.com/lilanxiao/Rotated_IoU/blob/master/oriented_iou_loss.py
+#
+# New in this port: drop_duplicate_vertices and GEOMETRY_TOLERANCE, the zero-union guards,
+# the float32 enforcement under autocast, and the enclosing_box_smallest and convex_hull_area
+# enclosing regions.
 
 """Differentiable IoU of rotated 2D and 3D boxes.
 
@@ -28,19 +34,37 @@ parameters and can be used as a loss or matching cost.
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 from jaxtyping import Bool, Float32, Int32, Int64
 import torch
 from torch.autograd import Function
+
+from autoware_ml.types.geometry import Box3DFieldIndex
 
 from . import diff_iou_rotated_ext
 
 EPSILON = 1e-8
 # Relative tolerance below which two edges count as parallel (sine of the angle between them)
 # and an intersection counts as sitting on an edge endpoint. Both cases are already covered by
-# the corner-in-box test, which uses the same 1e-6 tolerance, so flagging them again as
+# the corner-in-box test, which uses the same tolerance, so flagging them again as
 # intersections only adds duplicate vertices. Float noise on rotated corners otherwise produces
 # them, and the intersection polygon then exceeds the 8 vertices two rectangles can share.
 GEOMETRY_TOLERANCE = 1e-6
+
+
+class EnclosingType(StrEnum):
+    """Shape of the region enclosing two rotated boxes, from loosest to tightest.
+
+    Attributes:
+        ALIGNED: Axis-aligned box.
+        SMALLEST: Minimum-area rotated box.
+        CONVEX_HULL: Convex hull of the two boxes.
+    """
+
+    ALIGNED = "aligned"
+    SMALLEST = "smallest"
+    CONVEX_HULL = "convex_hull"
 
 
 class SortVertices(Function):
@@ -51,29 +75,27 @@ class SortVertices(Function):
         ctx,
         vertices: Float32[torch.Tensor, "batch_size num_boxes 24 2"],
         mask: Bool[torch.Tensor, "batch_size num_boxes 24"],
-        num_valid: Int32[torch.Tensor, "batch_size num_boxes"],
-    ) -> Int32[torch.Tensor, "batch_size num_boxes 9"]:
+    ) -> Int32[torch.Tensor, "batch_size num_boxes 25"]:
         """Run the CUDA sorting kernel.
 
         Args:
             ctx: Autograd context.
             vertices: Candidate vertices normalized around their mean, ``(B, N, 24, 2)``.
             mask: Validity mask of the candidates, ``(B, N, 24)``.
-            num_valid: Number of valid candidates per pair, ``(B, N)``.
 
         Returns:
-            Sorted vertex indices of shape ``(B, N, 9)``.
+            Sorted vertex indices of shape ``(B, N, 25)``.
         """
         idx = diff_iou_rotated_ext.diff_iou_rotated_sort_vertices_forward(
-            vertices.contiguous(), mask.contiguous(), num_valid.contiguous()
+            vertices.contiguous(), mask.contiguous()
         )
         ctx.mark_non_differentiable(idx)
         return idx
 
     @staticmethod
-    def backward(ctx, gradout: Int32[torch.Tensor, "batch_size num_boxes 9"]) -> tuple:
-        """Indices carry no gradient."""
-        return ()
+    def backward(ctx, gradout: Int32[torch.Tensor, "batch_size num_boxes 25"]) -> tuple[None, None]:
+        """Indices carry no gradient: one ``None`` per forward input (vertices, mask)."""
+        return None, None
 
 
 def enclosing_box_aligned(
@@ -183,32 +205,30 @@ def convex_hull_area(
 def enclosing_area(
     corners1: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
     corners2: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
-    enclosing_type: str = "smallest",
+    enclosing_type: EnclosingType = EnclosingType.SMALLEST,
 ) -> Float32[torch.Tensor, "batch_size num_boxes"]:
     """Area of the region enclosing two rotated boxes.
 
     Args:
         corners1: ``(B, N, 4, 2)`` First batch of boxes.
         corners2: ``(B, N, 4, 2)`` Second batch of boxes.
-        enclosing_type: Shape of the enclosing region, one of ``'aligned'`` (axis-aligned
-            box), ``'smallest'`` (minimum-area rotated box) and ``'convex_hull'`` (tightest
-            convex region). Defaults to ``'smallest'``.
+        enclosing_type: Shape of the enclosing region, see :class:`EnclosingType`. Defaults
+            to the minimum-area rotated box.
 
     Returns:
         ``(B, N)`` Area of the enclosing region.
 
     Raises:
-        ValueError: If ``enclosing_type`` is not one of the supported values.
+        ValueError: If ``enclosing_type`` is not a member of :class:`EnclosingType`.
     """
-    if enclosing_type == "aligned":
+    if enclosing_type == EnclosingType.ALIGNED:
         return enclosing_box_aligned(corners1, corners2)
-    if enclosing_type == "smallest":
+    if enclosing_type == EnclosingType.SMALLEST:
         return enclosing_box_smallest(corners1, corners2)
-    if enclosing_type == "convex_hull":
+    if enclosing_type == EnclosingType.CONVEX_HULL:
         return convex_hull_area(corners1, corners2)
-    raise ValueError(
-        f"Unknown enclosing type {enclosing_type}. Supported: aligned, smallest, convex_hull"
-    )
+    supported = ", ".join(member.value for member in EnclosingType)
+    raise ValueError(f"Unknown enclosing type {enclosing_type}. Supported: {supported}")
 
 
 def box_intersection(
@@ -259,7 +279,7 @@ def box_intersection(
     u[parallel] = -1.0
     # intersection strictly inside line segment 2, away from its endpoints
     mask_u = (u > GEOMETRY_TOLERANCE) & (u < 1 - GEOMETRY_TOLERANCE)
-    mask = mask_t * mask_u
+    mask = mask_t & mask_u
     # overwrite with EPSILON. otherwise numerically unstable
     t = denumerator_t / (numerator + EPSILON)
     intersections = torch.stack([x1 + t * (x2 - x1), y1 + t * (y2 - y1)], dim=-1)
@@ -296,9 +316,12 @@ def box1_in_box2(
     norm_ad = torch.sum(ad * ad, dim=-1)  # (B, N, 1)
     # NOTE: the expression looks ugly but is stable if the two boxes
     # are exactly the same also stable with different scale of bboxes
-    cond1 = (prod_ab / norm_ab > -1e-6) * (prod_ab / norm_ab < 1 + 1e-6)  # (B, N, 4)
-    cond2 = (prod_ad / norm_ad > -1e-6) * (prod_ad / norm_ad < 1 + 1e-6)  # (B, N, 4)
-    return cond1 * cond2
+    # Projections onto the two edges of box2, normalized to [0, 1] inside it. (B, N, 4)
+    along_ab = prod_ab / norm_ab
+    along_ad = prod_ad / norm_ad
+    cond1 = (along_ab > -GEOMETRY_TOLERANCE) & (along_ab < 1 + GEOMETRY_TOLERANCE)
+    cond2 = (along_ad > -GEOMETRY_TOLERANCE) & (along_ad < 1 + GEOMETRY_TOLERANCE)
+    return cond1 & cond2
 
 
 def box_in_box(
@@ -365,18 +388,22 @@ def build_vertices(
     return vertices, mask
 
 
+@torch.no_grad()
 def drop_duplicate_vertices(
     vertices: Float32[torch.Tensor, "batch_size num_boxes 24 2"],
     mask: Bool[torch.Tensor, "batch_size num_boxes 24"],
 ) -> Bool[torch.Tensor, "batch_size num_boxes 24"]:
     """Invalidate candidate vertices that coincide with an earlier valid candidate.
 
+    Only a boolean mask comes out, so the pairwise distances are computed without autograd,
+    which skips the graph bookkeeping for the ``(B, N, 24, 24)`` distance tensors.
+
     Two boxes that share a corner, or that are (nearly) identical, produce the same point
-    several times: once per box corner and once more per edge pair meeting there. Exactly equal
-    duplicates are handled by the sorting kernel, but points a few float ulps apart are not, and
-    they break its angular ordering. Keeping only the first occurrence removes both kinds. The
-    candidate order is (corners of box1, corners of box2, intersections), so box1's corners are
-    always the ones kept and gradients keep flowing to them.
+    several times: once per box corner and once more per edge pair meeting there. The sorting
+    kernel cannot order equal or nearly equal points and expects every valid candidate to be
+    distinct. Keeping only the first occurrence removes both exact duplicates and points a few
+    float ulps apart. The candidate order is (corners of box1, corners of box2, intersections),
+    so box1's corners are always the ones kept and gradients keep flowing to them.
 
     Args:
         vertices: ``(B, N, 24, 2)`` Candidate vertices.
@@ -406,47 +433,52 @@ def drop_duplicate_vertices(
 def sort_indices(
     vertices: Float32[torch.Tensor, "batch_size num_boxes 24 2"],
     mask: Bool[torch.Tensor, "batch_size num_boxes 24"],
-) -> Int64[torch.Tensor, "batch_size num_boxes 9"]:
+) -> Int64[torch.Tensor, "batch_size num_boxes 25"]:
     """Sort indices.
 
     Note:
-        why 9? the polygon has maximal 8 vertices.
-        +1 to duplicate the first element.
-        the index should have following structure:
-            (A, B, C, ... , A, X, X, X)
-        and X indicates the index of arbitrary elements in the last
-        16 (intersections not corners) with value 0 and mask False.
-        (cause they have zero value and zero gradient)
+        The row has the structure (A, B, C, ..., A, X, X, X): the valid vertices sorted
+        counter-clockwise, the first one repeated to close the polygon, then X, the index of
+        an arbitrary invalid intersection candidate, whose value and gradient are zero.
+
+        Why 25 slots when two rectangles share at most 8 polygon vertices? The candidates are
+        classified with float tolerances, and near-degenerate pairs (nearly identical boxes
+        far from the origin, a box inscribed in the other) can leave more than 8 of the 24
+        candidates valid. The row has room for all of them plus the closing duplicate, so no
+        vertex is ever dropped; the extra ones sit on slivers of the polygon and add
+        negligible area.
 
     Args:
         vertices: ``(B, N, 24, 2)`` Box vertices.
         mask: ``(B, N, 24)`` Mask.
 
     Returns:
-        ``(B, N, 9)`` Sorted indices.
+        ``(B, N, 25)`` Sorted indices.
     """
-    num_valid = torch.sum(mask.int(), dim=2).int()  # (B, N)
-    mean = torch.sum(
-        vertices * mask.float().unsqueeze(-1), dim=2, keepdim=True
-    ) / num_valid.unsqueeze(-1).unsqueeze(-1)
+    # Disjoint boxes have no valid candidate; the clamp keeps their (unused) mean finite.
+    num_valid = torch.sum(mask.int(), dim=2, keepdim=True).unsqueeze(-1)  # (B, N, 1, 1)
+    mean = torch.sum(vertices * mask.float().unsqueeze(-1), dim=2, keepdim=True) / num_valid.clamp(
+        min=1
+    )
     vertices_normalized = vertices - mean  # normalization makes sorting easier
-    return SortVertices.apply(vertices_normalized, mask, num_valid).long()
+    return SortVertices.apply(vertices_normalized, mask).long()
 
 
 def calculate_area(
-    idx_sorted: Int64[torch.Tensor, "batch_size num_boxes 9"],
+    idx_sorted: Int64[torch.Tensor, "batch_size num_boxes 25"],
     vertices: Float32[torch.Tensor, "batch_size num_boxes 24 2"],
 ) -> tuple[
-    Float32[torch.Tensor, "batch_size num_boxes"], Float32[torch.Tensor, "batch_size num_boxes 9 2"]
+    Float32[torch.Tensor, "batch_size num_boxes"],
+    Float32[torch.Tensor, "batch_size num_boxes 25 2"],
 ]:
     """Calculate area of intersection.
 
     Args:
-        idx_sorted: ``(B, N, 9)`` Sorted vertex ids.
+        idx_sorted: ``(B, N, 25)`` Sorted vertex ids.
         vertices: ``(B, N, 24, 2)`` Vertices.
 
     Returns:
-        Tuple of the ``(B, N)`` intersection area and the ``(B, N, 9, 2)`` polygon vertices
+        Tuple of the ``(B, N)`` intersection area and the ``(B, N, 25, 2)`` polygon vertices
         with zero padding.
     """
     idx_ext = idx_sorted.unsqueeze(-1).repeat([1, 1, 1, 2])
@@ -464,7 +496,8 @@ def oriented_box_intersection_2d(
     corners1: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
     corners2: Float32[torch.Tensor, "batch_size num_boxes 4 2"],
 ) -> tuple[
-    Float32[torch.Tensor, "batch_size num_boxes"], Float32[torch.Tensor, "batch_size num_boxes 9 2"]
+    Float32[torch.Tensor, "batch_size num_boxes"],
+    Float32[torch.Tensor, "batch_size num_boxes 25 2"],
 ]:
     """Calculate intersection area of 2d rotated boxes.
 
@@ -473,15 +506,21 @@ def oriented_box_intersection_2d(
         corners2: ``(B, N, 4, 2)`` Second batch of boxes.
 
     Returns:
-        Tuple of the ``(B, N)`` intersection area and the ``(B, N, 9, 2)`` polygon vertices
+        Tuple of the ``(B, N)`` intersection area and the ``(B, N, 25, 2)`` polygon vertices
         with zero padding.
     """
-    intersections, valid_mask = box_intersection(corners1, corners2)
-    c12, c21 = box_in_box(corners1, corners2)
-    vertices, mask = build_vertices(corners1, corners2, c12, c21, intersections, valid_mask)
-    mask = drop_duplicate_vertices(vertices, mask)
-    sorted_indices = sort_indices(vertices, mask)
-    return calculate_area(sorted_indices, vertices)
+    corners1, corners2 = corners1.float(), corners2.float()
+    with torch.autocast(device_type=corners1.device.type, enabled=False):
+        intersections, valid_mask = box_intersection(corners1, corners2)
+        c12, c21 = box_in_box(corners1, corners2)
+        vertices, mask = build_vertices(corners1, corners2, c12, c21, intersections, valid_mask)
+        mask = drop_duplicate_vertices(vertices, mask)
+        # The sorting kernel pads every row with an invalid intersection candidate and relies on
+        # its value being zero, so the padding adds nothing to the shoelace sum. Candidates dropped
+        # as duplicates still hold their coordinates, so zero every invalid candidate explicitly.
+        vertices = vertices * mask.unsqueeze(-1)
+        sorted_indices = sort_indices(vertices, mask)
+        return calculate_area(sorted_indices, vertices)
 
 
 def box2corners(
@@ -490,28 +529,34 @@ def box2corners(
     """Convert rotated 2d box coordinate to corners.
 
     Args:
-        box: ``(B, N, 5)`` with x, y, w, h, alpha.
+        box: ``(B, N, 5)`` with (x, y, length, width, yaw); the length lies along the yaw
+            direction and the width across it.
 
     Returns:
         ``(B, N, 4, 2)`` Corners.
     """
-    batch_size, num_boxes = box.size()[0], box.size()[1]
-    x, y, w, h, alpha = box.split([1, 1, 1, 1, 1], dim=-1)
-    x4 = box.new_tensor([0.5, -0.5, -0.5, 0.5]).to(box.device)
-    x4 = x4 * w  # (B, N, 4)
-    y4 = box.new_tensor([0.5, 0.5, -0.5, -0.5]).to(box.device)
-    y4 = y4 * h  # (B, N, 4)
-    corners = torch.stack([x4, y4], dim=-1)  # (B, N, 4, 2)
-    sin = torch.sin(alpha)
-    cos = torch.cos(alpha)
-    row1 = torch.cat([cos, sin], dim=-1)
-    row2 = torch.cat([-sin, cos], dim=-1)  # (B, N, 2)
-    rot_t = torch.stack([row1, row2], dim=-2)  # (B, N, 2, 2)
-    rotated = torch.bmm(corners.view([-1, 4, 2]), rot_t.view([-1, 2, 2]))
-    rotated = rotated.view([batch_size, num_boxes, 4, 2])  # (B * N, 4, 2) -> (B, N, 4, 2)
-    rotated[..., 0] += x
-    rotated[..., 1] += y
-    return rotated
+    # The geometry downstream compares coordinates against GEOMETRY_TOLERANCE and the sorting
+    # kernel only accepts float32, so half precision boxes are upcast and autocast is kept
+    # from demoting the rotation matmul. Gradients reach the original tensor through the cast.
+    box = box.float()
+    with torch.autocast(device_type=box.device.type, enabled=False):
+        batch_size, num_boxes = box.size()[0], box.size()[1]
+        x, y, length, width, yaw = box.split([1, 1, 1, 1, 1], dim=-1)
+        x4 = box.new_tensor([0.5, -0.5, -0.5, 0.5])
+        x4 = x4 * length  # (B, N, 4)
+        y4 = box.new_tensor([0.5, 0.5, -0.5, -0.5])
+        y4 = y4 * width  # (B, N, 4)
+        corners = torch.stack([x4, y4], dim=-1)  # (B, N, 4, 2)
+        sin = torch.sin(yaw)
+        cos = torch.cos(yaw)
+        row1 = torch.cat([cos, sin], dim=-1)
+        row2 = torch.cat([-sin, cos], dim=-1)  # (B, N, 2)
+        rot_t = torch.stack([row1, row2], dim=-2)  # (B, N, 2, 2)
+        rotated = torch.bmm(corners.view([-1, 4, 2]), rot_t.view([-1, 2, 2]))
+        rotated = rotated.view([batch_size, num_boxes, 4, 2])  # (B * N, 4, 2) -> (B, N, 4, 2)
+        rotated[..., 0] += x
+        rotated[..., 1] += y
+        return rotated
 
 
 def diff_iou_rotated_2d(
@@ -521,20 +566,24 @@ def diff_iou_rotated_2d(
     """Calculate differentiable iou of rotated 2d boxes.
 
     Args:
-        box1: ``(B, N, 5)`` First box as (x, y, w, h, alpha).
-        box2: ``(B, N, 5)`` Second box as (x, y, w, h, alpha).
+        box1: ``(B, N, 5)`` First box as (x, y, length, width, yaw).
+        box2: ``(B, N, 5)`` Second box as (x, y, length, width, yaw).
 
     Returns:
-        ``(B, N)`` IoU.
+        ``(B, N)`` IoU, float32 whatever the input dtype.
     """
-    corners1 = box2corners(box1)
-    corners2 = box2corners(box2)
-    intersection, _ = oriented_box_intersection_2d(corners1, corners2)  # (B, N)
-    area1 = box1[:, :, 2] * box1[:, :, 3]
-    area2 = box2[:, :, 2] * box2[:, :, 3]
-    union = area1 + area2 - intersection
-    iou = intersection / union
-    return iou
+    box1, box2 = box1.float(), box2.float()
+    with torch.autocast(device_type=box1.device.type, enabled=False):
+        corners1 = box2corners(box1)
+        corners2 = box2corners(box2)
+        intersection, _ = oriented_box_intersection_2d(corners1, corners2)  # (B, N)
+        area1 = box1[:, :, 2] * box1[:, :, 3]
+        area2 = box2[:, :, 2] * box2[:, :, 3]
+        # A zero-size box with no overlap has a zero union; the clamp turns 0 / 0 into an IoU of 0
+        # with a finite gradient instead of NaN. Callers must still provide non-negative sizes.
+        union = (area1 + area2 - intersection).clamp(min=EPSILON)
+        iou = intersection / union
+        return iou
 
 
 def diff_iou_rotated_3d(
@@ -544,24 +593,34 @@ def diff_iou_rotated_3d(
     """Calculate differentiable iou of rotated 3d boxes.
 
     Args:
-        box3d1: ``(B, N, 3+3+1)`` First box as (x, y, z, w, h, l, alpha).
-        box3d2: ``(B, N, 3+3+1)`` Second box as (x, y, z, w, h, l, alpha).
+        box3d1: ``(B, N, 7)`` First box as (x, y, z, length, width, height, yaw), the
+            :class:`~autoware_ml.types.geometry.Box3DFieldIndex` layout.
+        box3d2: ``(B, N, 7)`` Second box in the same layout.
 
     Returns:
-        ``(B, N)`` IoU.
+        ``(B, N)`` IoU, float32 whatever the input dtype.
     """
-    box1 = box3d1[..., [0, 1, 3, 4, 6]]  # 2d box
-    box2 = box3d2[..., [0, 1, 3, 4, 6]]
-    corners1 = box2corners(box1)
-    corners2 = box2corners(box2)
-    intersection, _ = oriented_box_intersection_2d(corners1, corners2)
-    zmax1 = box3d1[..., 2] + box3d1[..., 5] * 0.5
-    zmin1 = box3d1[..., 2] - box3d1[..., 5] * 0.5
-    zmax2 = box3d2[..., 2] + box3d2[..., 5] * 0.5
-    zmin2 = box3d2[..., 2] - box3d2[..., 5] * 0.5
-    z_overlap = (torch.min(zmax1, zmax2) - torch.max(zmin1, zmin2)).clamp_(min=0.0)
-    intersection_3d = intersection * z_overlap
-    volume1 = box3d1[..., 3] * box3d1[..., 4] * box3d1[..., 5]
-    volume2 = box3d2[..., 3] * box3d2[..., 4] * box3d2[..., 5]
-    union_3d = volume1 + volume2 - intersection_3d
-    return intersection_3d / union_3d
+    box3d1, box3d2 = box3d1.float(), box3d2.float()
+    with torch.autocast(device_type=box3d1.device.type, enabled=False):
+        bev_fields = [
+            Box3DFieldIndex.X,
+            Box3DFieldIndex.Y,
+            Box3DFieldIndex.LENGTH,
+            Box3DFieldIndex.WIDTH,
+            Box3DFieldIndex.YAW,
+        ]
+        corners1 = box2corners(box3d1[..., bev_fields])
+        corners2 = box2corners(box3d2[..., bev_fields])
+        intersection, _ = oriented_box_intersection_2d(corners1, corners2)
+        z1, height1 = box3d1[..., Box3DFieldIndex.Z], box3d1[..., Box3DFieldIndex.HEIGHT]
+        z2, height2 = box3d2[..., Box3DFieldIndex.Z], box3d2[..., Box3DFieldIndex.HEIGHT]
+        z_overlap = (
+            torch.min(z1 + height1 * 0.5, z2 + height2 * 0.5)
+            - torch.max(z1 - height1 * 0.5, z2 - height2 * 0.5)
+        ).clamp_(min=0.0)
+        intersection_3d = intersection * z_overlap
+        volume1 = box3d1[..., Box3DFieldIndex.LENGTH] * box3d1[..., Box3DFieldIndex.WIDTH] * height1
+        volume2 = box3d2[..., Box3DFieldIndex.LENGTH] * box3d2[..., Box3DFieldIndex.WIDTH] * height2
+        # Same guard as in :func:`diff_iou_rotated_2d`: a zero-volume box with no overlap.
+        union_3d = (volume1 + volume2 - intersection_3d).clamp(min=EPSILON)
+        return intersection_3d / union_3d
