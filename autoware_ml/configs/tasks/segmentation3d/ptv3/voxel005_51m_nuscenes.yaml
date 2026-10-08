@@ -29,7 +29,7 @@ datamodule:
     batch_size: ${batch_size}
     num_workers: ${num_workers}
   train_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
+    _target_: autoware_ml.transforms.legacy_base.TransformsCompose
     pipeline:
       - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
         load_dim: 5
@@ -75,7 +75,7 @@ datamodule:
         keys: [coord, strength]
         output_key: feat
   val_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
+    _target_: autoware_ml.transforms.legacy_base.TransformsCompose
     pipeline:
       - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
         load_dim: 5
@@ -101,7 +101,7 @@ datamodule:
         output_key: feat
   test_transforms: ${datamodule.val_transforms}
   predict_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
+    _target_: autoware_ml.transforms.legacy_base.TransformsCompose
     pipeline:
       - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
         load_dim: 5

@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.legacy_base import BaseTransform
 from autoware_ml.transforms.camera.utils import as_hwc_image_list, restore_image_container
 
 

@@ -25,7 +25,6 @@ import os
 import pickle
 from typing import Any
 
-import numpy as np
 from autoware_ml.datamodule.base import DataModule, Dataset
 from autoware_ml.datamodule.common.detection3d import (
     build_label_to_category,
@@ -33,7 +32,7 @@ from autoware_ml.datamodule.common.detection3d import (
 )
 from autoware_ml.datamodule.common.serialization import SerializedSampleList
 from autoware_ml.datamodule.nuscenes.common import lidar_to_map, resolve_lidar_path
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.legacy_base import TransformsCompose
 
 
 class NuscenesDetection3DDataset(Dataset):

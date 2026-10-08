@@ -19,7 +19,7 @@ datamodule:
   _target_: autoware_ml.datamodule.t4dataset.detection3d.T4Detection3DDataModule
   filter_attributes: ${dataset.detection3d.filter_attributes}
   train_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
+    _target_: autoware_ml.transforms.legacy_base.TransformsCompose
     pipeline:
       - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
         merge_objects: ${dataset.detection3d.merge_objects}
@@ -76,7 +76,7 @@ datamodule:
         keys: [coord, strength]
         output_key: feat
   val_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
+    _target_: autoware_ml.transforms.legacy_base.TransformsCompose
     pipeline:
       - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
         merge_objects: ${dataset.detection3d.merge_objects}
@@ -113,7 +113,7 @@ datamodule:
         output_key: feat
   test_transforms: ${datamodule.val_transforms}
   predict_transforms:
-    _target_: autoware_ml.transforms.base.TransformsCompose
+    _target_: autoware_ml.transforms.legacy_base.TransformsCompose
     pipeline:
       - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
         sweeps_num: ${val_sweeps_num}

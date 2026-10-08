@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import numpy.typing as npt
 
-from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.legacy_base import BaseTransform
 from autoware_ml.utils.calibration import CalibrationData
 
 

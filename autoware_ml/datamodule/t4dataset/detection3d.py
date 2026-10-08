@@ -39,7 +39,7 @@ from autoware_ml.datamodule.common.detection3d import (
 )
 from autoware_ml.datamodule.t4dataset.frame_meta import scene_dir_fragment
 from autoware_ml.datamodule.common.serialization import SerializedSampleList
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.legacy_base import TransformsCompose
 from autoware_ml.transforms.boxes3d.annotations import (
     box_is_physical,
     normalize_filter_attributes,

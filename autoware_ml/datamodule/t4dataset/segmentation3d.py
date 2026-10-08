@@ -30,7 +30,7 @@ import numpy as np
 from autoware_ml.datamodule.base import DataModule, Dataset
 from autoware_ml.datamodule.t4dataset.frame_meta import scene_dir_fragment
 from autoware_ml.datamodule.common.serialization import SerializedSampleList
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.legacy_base import TransformsCompose
 
 logger = logging.getLogger(__name__)
 

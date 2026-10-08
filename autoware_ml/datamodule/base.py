@@ -32,7 +32,7 @@ from torch.utils.data import Dataset as TorchDataset
 
 from autoware_ml.datamodule.collation import CollationStrategy
 from autoware_ml.datamodule.pipeline_context import PipelineContext
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.legacy_base import TransformsCompose
 
 logger = logging.getLogger(__name__)
 

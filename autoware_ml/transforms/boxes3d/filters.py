@@ -23,7 +23,7 @@ import numpy as np
 
 from autoware_ml.geometry.utils import points_in_rotated_box
 
-from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.legacy_base import BaseTransform
 
 _BOX_KEYS = ("gt_boxes", "gt_names", "gt_labels", "gt_num_points")
 

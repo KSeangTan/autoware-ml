@@ -11,7 +11,7 @@ import torch
 
 from autoware_ml.datamodule.nuscenes.segmentation3d import NuscenesSegmentation3DDataset
 from autoware_ml.datamodule.t4dataset.segmentation3d import T4Segmentation3DDataset
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.legacy_base import TransformsCompose
 from autoware_ml.transforms.point_cloud.loading import LoadPointsFromFile
 from autoware_ml.transforms.segmentation3d.loading import LoadSegAnnotations3D
 
@@ -111,7 +111,10 @@ def test_nuscenes_segmentation_dataset_accepts_pre_prefixed_lidar_path(tmp_path:
                 "data_list": [
                     {
                         "token": "sample-token",
-                        "lidar_points": {"lidar_path": "samples/LIDAR_TOP/sample.bin", "lidar2ego": np.eye(4)},
+                        "lidar_points": {
+                            "lidar_path": "samples/LIDAR_TOP/sample.bin",
+                            "lidar2ego": np.eye(4),
+                        },
                         "pts_semantic_mask_path": "sample_lidarseg.bin",
                         "ego2global": np.eye(4),
                         "scene_token": "scene-1",
@@ -140,7 +143,11 @@ def test_t4_segmentation_dataset_warns_for_empty_source(caplog, tmp_path: Path) 
             {
                 "data_list": [
                     {
-                        "lidar_points": {"lidar_path": "db/uuid/0/sample.bin", "num_pts_feats": 5, "lidar2ego": np.eye(4)},
+                        "lidar_points": {
+                            "lidar_path": "db/uuid/0/sample.bin",
+                            "num_pts_feats": 5,
+                            "lidar2ego": np.eye(4),
+                        },
                         "lidar_sources": {
                             "LIDAR_FRONT_UPPER": {
                                 "sensor_token": "sensor-1",
@@ -191,7 +198,11 @@ def test_t4_segmentation_dataset_without_lidar_sources(tmp_path: Path) -> None:
                 "data_list": [
                     {
                         "token": "tok-abc",
-                        "lidar_points": {"lidar_path": "db/uuid/0/sample.bin", "num_pts_feats": 4, "lidar2ego": np.eye(4)},
+                        "lidar_points": {
+                            "lidar_path": "db/uuid/0/sample.bin",
+                            "num_pts_feats": 4,
+                            "lidar2ego": np.eye(4),
+                        },
                         "pts_semantic_mask_categories": {"car": 0},
                         "pts_semantic_mask_path": "labels.bin",
                         "ego2global": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
@@ -199,7 +210,11 @@ def test_t4_segmentation_dataset_without_lidar_sources(tmp_path: Path) -> None:
                     },
                     {
                         "token": "tok-def",
-                        "lidar_points": {"lidar_path": "db/uuid/0/sample2.bin", "num_pts_feats": 4, "lidar2ego": np.eye(4)},
+                        "lidar_points": {
+                            "lidar_path": "db/uuid/0/sample2.bin",
+                            "num_pts_feats": 4,
+                            "lidar2ego": np.eye(4),
+                        },
                         "pts_semantic_mask_categories": {"car": 0},
                         "pts_semantic_mask_path": "labels2.bin",
                         "ego2global": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],

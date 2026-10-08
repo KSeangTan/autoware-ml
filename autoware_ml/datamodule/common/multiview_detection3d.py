@@ -38,7 +38,7 @@ from autoware_ml.datamodule.common.detection3d import (
 )
 from autoware_ml.datamodule.common.serialization import SerializedSampleList
 from autoware_ml.datamodule.samplers import GroupStreamingSampler
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.legacy_base import TransformsCompose
 
 logger = logging.getLogger(__name__)
 

@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 import torch
 
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.legacy_base import TransformsCompose
 from autoware_ml.transforms.common.copying import Copy
 from autoware_ml.transforms.common.packing import BuildPointFeatures
 from autoware_ml.transforms.common.tensor import PermuteAxes

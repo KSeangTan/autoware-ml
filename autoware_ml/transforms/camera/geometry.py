@@ -30,7 +30,7 @@ from typing import Any
 import numpy as np
 
 from autoware_ml.transforms import geometry3d as g3d
-from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.legacy_base import BaseTransform
 
 
 class RandomFlip3D(BaseTransform):
