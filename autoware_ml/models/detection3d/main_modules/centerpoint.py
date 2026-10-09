@@ -36,7 +36,7 @@ from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
 from autoware_ml.metrics.base import MetricSuite
-from autoware_ml.metrics.detection3d.eval_output import multi_task_eval_output
+from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.models.detection3d.encoders.pillars.pillar_feature_net import PillarFeatureNet
 from autoware_ml.models.detection3d.encoders.pillars.point_pillar_scatter import PointPillarsScatter
@@ -72,13 +72,13 @@ class _CenterPointBackboneNeckHeadExportWrapper(nn.Module):
     # expects. Deriving `output_names` and the returned tuple from one table keeps
     # them from drifting apart. Do not reorder.
     _OUTPUT_FIELDS: tuple[tuple[str, str], ...] = (
-        ("heatmap", "heatmaps"),
-        ("reg", "centers"),
-        ("height", "heights"),
-        ("dim", "dims"),
-        ("rot", "rots"),
+        ("heatmap", "heatmap"),
+        ("reg", "reg"),
+        ("height", "height"),
+        ("dim", "dim"),
+        ("rot", "rot"),
     )
-    _VELOCITY_FIELD: tuple[str, str] = ("vel", "vels")
+    _VELOCITY_FIELD: tuple[str, str] = ("vel", "vel")
 
     def __init__(self, backbone: nn.Module, neck: nn.Module, bbox_head: CenterHead) -> None:
         """Initialize the backbone-neck-head export wrapper.
@@ -177,9 +177,9 @@ class CenterPointDetectionModel(ModuleBaseModel):
                 "ModelOutputs must contain detection3d_head_outputs for CenterPoint build_eval_output pass."
             )
 
-        return multi_task_eval_output(
-            multi_task_predictions=self.bbox_head.decode_outputs(outputs.detection3d_head_outputs),
-            multi_task_batch_inputs=batch,
+        return detection_eval_output(
+            predictions=self.bbox_head.decode_outputs(outputs.detection3d_head_outputs),
+            batch_inputs=batch,
         )
 
     def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
@@ -240,7 +240,9 @@ class CenterPointDetectionModel(ModuleBaseModel):
             gt_valid_bboxes=gt_valid_bboxes,
         )
 
-    def decode_outputs(self, outputs: ModelOutputs) -> ModelPredictions:
+    def decode_outputs(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    ) -> ModelPredictions:
         """Decode predictions for inference."""
         if outputs.detection3d_head_outputs is None:
             raise ValueError(

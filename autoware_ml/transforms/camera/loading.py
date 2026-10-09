@@ -1,171 +1,146 @@
-"""Camera loading transforms."""
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Camera loading transforms to support ModelGTSample."""
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 import torch
 from torchvision.io import decode_image
 
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+from autoware_ml.dataclasses.geometry.images import ImageSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.base import BaseTransform
-from autoware_ml.dataclasses.geometry.images import ImageSample
-from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.types.geometry import ImageChannel
 
 
-class LoadImageFromFile(BaseTransform):
-    """Load one RGB image from a metadata path."""
+class LoadImagesFromFile(BaseTransform):
+    """Load the images of every camera of the sample together with their calibration.
+
+    The cameras are stacked along the leading dimension in the order of ``camera_order`` when
+    given, otherwise in the order of the image samples. The pixel values are served in unit
+    range by default, which is the range the models and the camera-lidar fusion read.
+
+    Required keys:
+        - image_samples: one record per camera, with the image path and the calibration.
+
+    Generated keys:
+        - camera_image_data: BaseImages holding the stacked images and their calibration.
+    """
 
     _required_keys = ["image_samples"]
 
-    def __init__(self, color_type: ImageChannel, normalize_to_unit: bool) -> None:
-        """Initialize the LoadImageFromFile transform.
+    def __init__(
+        self,
+        color_type: ImageChannel = ImageChannel.RGB,
+        normalize_to_unit: bool = True,
+        camera_order: Sequence[str] | None = None,
+    ) -> None:
+        """Initialize the LoadImagesFromFile transform.
 
         Args:
             color_type: Output color format, only rgb is supported now.
             normalize_to_unit: Whether to divide pixel values by ``255``.
+            camera_order: Names of the cameras to load, in loading order. ``None`` loads every
+                camera of the sample in the order of its image samples.
         """
         super().__init__(probability=None)
         self.color_type = color_type
         self.normalize_to_unit = normalize_to_unit
+        self.camera_order = list(camera_order) if camera_order is not None else None
 
-    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Load only the first image data from the current sample.
+    def select_image_samples(self, image_samples: Sequence[ImageSample]) -> list[ImageSample]:
+        """Pick the image samples of the configured cameras, in loading order.
 
         Args:
-            multi_task_gt_sample: ModelGTSample instance containing `image_samples`.
+            image_samples: Image samples of the ModelGTSample.
 
         Returns:
-            Updated ModelGTSample instance with a loaded `camera_image_data`.
+            The image samples to load, in loading order.
+
+        Raises:
+            ValueError: If a camera of ``camera_order`` is missing from the sample.
         """
-        assert multi_task_gt_sample.image_samples is not None
-        image_sample = multi_task_gt_sample.image_samples[0]
-        decoded_image = decode_image(
-            image_sample.image_path,
-            mode=self.color_type.value,  # type: ignore
-        )
+        if self.camera_order is None:
+            return list(image_samples)
+        image_samples_by_camera_name = {
+            image_sample.camera_name: image_sample for image_sample in image_samples
+        }
+        selected = []
+        for camera_name in self.camera_order:
+            if camera_name not in image_samples_by_camera_name:
+                raise ValueError(
+                    f"Missing camera_name: {camera_name} from the sample: {list(image_samples)}"
+                )
+            selected.append(image_samples_by_camera_name[camera_name])
+        return selected
+
+    def load_image(self, image_path: str) -> torch.Tensor:
+        """Read one image from disk as a float32 (num_channels, height, width) tensor.
+
+        Args:
+            image_path: Path of the image file.
+
+        Returns:
+            torch.Tensor: The image in channel first layout, in unit range when
+              ``normalize_to_unit`` is set and in ``[0, 255]`` otherwise.
+        """
+        decoded_image = decode_image(image_path, mode=self.color_type.value).to(torch.float32)  # type: ignore[arg-type]
         if self.normalize_to_unit:
             decoded_image = decoded_image / 255.0
-        # (num_cameras, num_channels, height, width)
-        decoded_image = decoded_image.view(
-            1, decoded_image.shape[0], decoded_image.shape[1], decoded_image.shape[2]
-        ).to(torch.float32)
-        # (num_cameras)
-        timestamp = torch.tensor([image_sample.timestamp], dtype=torch.float32)
+        return decoded_image
 
-        # The leading num_cameras dimension is kept so every field stays indexable
-        # per camera by the downstream transforms.
-        camera_intrinsics = image_sample.camera_intrinsic.unsqueeze(0)
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Load the images of the sample and their calibration.
 
+        Args:
+            model_gt_sample: ModelGTSample instance containing `image_samples`.
+
+        Returns:
+            Updated ModelGTSample instance with loaded `camera_image_data`.
+
+        Raises:
+            ValueError: If the sample holds no image sample.
+        """
+        # This is checked in the _validate_required_keys()
+        image_samples = model_gt_sample.image_samples  # type: ignore[reportOptionalIterable]
+        if not image_samples:
+            raise ValueError("No image samples found in the ModelGTSample.")
+        image_samples = self.select_image_samples(image_samples)
+
+        camera_intrinsics = torch.stack([sample.camera_intrinsic for sample in image_samples])
         camera_image_data = BaseImages(
-            images=decoded_image,
+            images=torch.stack([self.load_image(sample.image_path) for sample in image_samples]),
             depth_maps=None,  # No depth is loaded from an image file
-            timestamps=timestamp,
+            timestamps=torch.tensor(
+                [sample.timestamp for sample in image_samples], dtype=torch.float64
+            ),
             camera_intrinsics=camera_intrinsics,
-            lidar2images=image_sample.lidar2image.unsqueeze(0),
-            lidar2cams=image_sample.lidar2cam.unsqueeze(0),
-            camera_names=[image_sample.camera_name],
-            distortion_models=[image_sample.distortion_model],
-            distortion_coefficients=[image_sample.distortion_coefficients],
+            camera_names=[sample.camera_name for sample in image_samples],
+            lidar2images=torch.stack([sample.lidar2image for sample in image_samples]),
+            lidar2cams=torch.stack([sample.lidar2cam for sample in image_samples]),
+            distortion_models=[sample.distortion_model for sample in image_samples],
+            distortion_coefficients=[sample.distortion_coefficients for sample in image_samples],
             # No image-space transform ran yet, so the augmented intrinsics are the raw
             # ones and the composed augmentation affine is the identity.
             augmented_camera_intrinsics=camera_intrinsics.clone(),
             image_augmentation_matrices=BaseImages.identity_image_augmentation_matrices(
                 camera_intrinsics
             ),
-            noises=None,  # Initially, set to None
+            noises=None,  # Set once the misalignment augmentation has run
         )
-        return multi_task_gt_sample._replace(camera_image_data=camera_image_data)
-
-
-class LoadMultiViewImagesFromFiles(BaseTransform):
-    """Load synchronized multiview images and camera matrices."""
-
-    _required_keys = ["image_samples"]
-
-    def __init__(
-        self, normalize_to_unit: bool, color_type: ImageChannel, camera_order: Sequence[str]
-    ) -> None:
-        """Initialize the LoadMultiViewImagesFromFiles transform.
-
-        Args:
-            normalize_to_unit: Whether to divide pixel values by ``255``.
-            color_type: Output color format, only rgb is supported now.
-            camera_order: Loading order for each camera.
-        """
-        super().__init__(probability=None)
-        self.normalize_to_unit = normalize_to_unit
-        self.color_type = color_type
-        self.camera_order = camera_order
-
-    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Load only the first image data from the current sample.
-
-        Args:
-            multi_task_gt_sample: ModelGTSample instance containing `image_samples`.
-
-        Returns:
-            Updated ModelGTSample instance with a loaded `camera_image_data`.
-        """
-        assert multi_task_gt_sample.image_samples is not None
-        # Reorder image_samples based on camera_order.
-        image_samples_by_camera_name = {
-            image_sample.camera_name: image_sample
-            for image_sample in multi_task_gt_sample.image_samples
-        }
-        image_samples: Sequence[ImageSample] = []
-        for camera_name in self.camera_order:
-            if camera_name not in image_samples_by_camera_name:
-                raise ValueError(
-                    f"Missing camera_name: {camera_name} from the "
-                    f"sample: {multi_task_gt_sample.image_samples}"
-                )
-            image_samples.append(image_samples_by_camera_name[camera_name])
-
-        images = []
-        camera_intrinsics = []
-        lidar2cams = []
-        lidar2images = []
-        timestamps = []
-        distortion_models = []
-        distortion_coefficients = []
-        for image_sample in image_samples:
-            decoded_image = decode_image(
-                image_sample.image_path,
-                mode=self.color_type.value,  # type: ignore
-            )
-
-            decoded_image = decoded_image.to(torch.float32)
-            if self.normalize_to_unit:
-                decoded_image = decoded_image / 255.0
-
-            images.append(decoded_image)
-            camera_intrinsics.append(image_sample.camera_intrinsic)
-            lidar2cams.append(image_sample.lidar2cam)
-            lidar2images.append(image_sample.lidar2image)
-            timestamps.append(image_sample.timestamp)
-            distortion_models.append(image_sample.distortion_model)
-            distortion_coefficients.append(image_sample.distortion_coefficients)
-
-        stacked_camera_intrinsics = torch.stack(camera_intrinsics, dim=0)
-
-        camera_image_data = BaseImages(
-            images=torch.stack(images, dim=0),
-            depth_maps=None,  # No depth is loaded from an image file
-            camera_intrinsics=stacked_camera_intrinsics,
-            lidar2images=torch.stack(lidar2images, dim=0),
-            lidar2cams=torch.stack(lidar2cams, dim=0),
-            timestamps=torch.tensor(timestamps, dtype=torch.float32),
-            camera_names=self.camera_order,
-            distortion_models=distortion_models,
-            distortion_coefficients=distortion_coefficients,
-            # No image-space transform ran yet, so the augmented intrinsics are the raw
-            # ones and the composed augmentation affine is the identity.
-            augmented_camera_intrinsics=stacked_camera_intrinsics.clone(),
-            image_augmentation_matrices=BaseImages.identity_image_augmentation_matrices(
-                stacked_camera_intrinsics
-            ),
-            noises=None,  # Initially set to Empty
-        )
-        return multi_task_gt_sample._replace(camera_image_data=camera_image_data)
+        return model_gt_sample._replace(camera_image_data=camera_image_data)

@@ -49,7 +49,7 @@ class _StubVoxelEncoder(nn.Module):
 class _StubMiddleEncoder(nn.Module):
     """Scatter voxel features onto a dense ``(B, C, H, W)`` canvas at their ``(y, x)`` cells.
 
-    Coordinates arrive in the ``(batch, x, y, z)`` layout the main model builds. The stub exposes
+    Coordinates arrive in the ``(batch, z, y, x)`` layout the main model builds. The stub exposes
     the ``bev_output_shape`` and ``prepare_for_export`` interface of the sparse encoder.
     """
 
@@ -70,7 +70,7 @@ class _StubMiddleEncoder(nn.Module):
     ) -> Float32[torch.Tensor, "batch_size channels height width"]:
         height, width = self._bev_shape
         canvas = voxel_features.new_zeros(batch_size, voxel_features.shape[1], height, width)
-        batch_indices, x, y = coords[:, 0].long(), coords[:, 1].long(), coords[:, 2].long()
+        batch_indices, y, x = coords[:, 0].long(), coords[:, 2].long(), coords[:, 3].long()
         canvas[batch_indices, :, y, x] = voxel_features
         return canvas
 
@@ -195,14 +195,14 @@ class TestBEVFusionLidar(_BEVFusionLidarTestCase):
         self.num_points = torch.randint(
             1, max_points + 1, (num_voxels,), dtype=torch.int32, device=self.device
         )
-        # (batch, x, y, z) coordinates with distinct cells per sample.
+        # (batch, z, y, x) coordinates with distinct cells per sample.
         cells = self._distinct_cells(num_voxels_per_sample, height * width)
         self.coords = torch.stack(
             [
                 self._batch_indices(num_voxels_per_sample),
-                cells % width,
-                cells // width,
                 torch.zeros(num_voxels, dtype=torch.int64, device=self.device),
+                cells // width,
+                cells % width,
             ],
             dim=1,
         ).int()
@@ -353,14 +353,14 @@ class TestBEVFusionLidarWithSparseEncoder(_BEVFusionLidarTestCase):
         num_voxels_per_sample, max_points = 64, 10
         num_voxels = self.batch_size * num_voxels_per_sample
         height, width, depth = self.sparse_shape
-        # (batch, x, y, z) coordinates with distinct cells per sample.
+        # (batch, z, y, x) coordinates with distinct cells per sample.
         cells = self._distinct_cells(num_voxels_per_sample, height * width * depth)
         self.coords = torch.stack(
             [
                 self._batch_indices(num_voxels_per_sample),
-                (cells // depth) % width,
-                cells // (depth * width),
                 cells % depth,
+                cells // (depth * width),
+                (cells // depth) % width,
             ],
             dim=1,
         ).int()

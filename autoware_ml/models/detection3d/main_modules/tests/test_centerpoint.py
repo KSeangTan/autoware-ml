@@ -57,7 +57,6 @@ class TestCenterPointDetectionModel(unittest.TestCase):
                     max_num_points=16,
                     max_voxels=16,
                     eval_max_voxels=16,
-                    voxelization_z_order_first=False,
                 )
             ]
         )
@@ -163,6 +162,8 @@ class TestCenterPointDetectionModel(unittest.TestCase):
                 dtype=torch.int32,
                 device=self.device,
             ),
+            point_voxel_indices=torch.zeros((0,), dtype=torch.int64),
+            num_dropped_voxels=torch.zeros((), dtype=torch.int64),
         )
         # (batch_size, max_num_bboxes, num_Box3DFieldIndex)
         gt_bboxes_3d = torch.tensor(
@@ -186,9 +187,11 @@ class TestCenterPointDetectionModel(unittest.TestCase):
                 point_cloud_gt_batch=None,
                 detection3d_gt_batch=detection3d_gt_batch,
                 image_gt_batch=None,
+                segmentation3d_gt_batch=None,
             ),
             voxels_data=voxels_data,
             image_data=None,
+            range_view_data=None,
         )
 
     def test_centerpoint_forward_compute_metrics_and_decode_run(self) -> None:
@@ -200,7 +203,7 @@ class TestCenterPointDetectionModel(unittest.TestCase):
 
         multi_task_outputs = self.centerpoint(multi_task_batch_inputs)
         metrics = self.centerpoint.compute_metrics(multi_task_batch_inputs, multi_task_outputs)
-        multi_task_predictions = self.centerpoint.decode_outputs(multi_task_outputs)
+        multi_task_predictions = self.centerpoint.decode_outputs(multi_task_batch_inputs, multi_task_outputs)
 
         self.assertIsNotNone(multi_task_outputs.detection3d_head_outputs)
         assert multi_task_outputs.detection3d_head_outputs is not None
@@ -208,7 +211,7 @@ class TestCenterPointDetectionModel(unittest.TestCase):
         assert center_head_outputs is not None
         # The 16x16 canvas is downsampled by the backbone and fused back to 8x8 by the neck
         self.assertEqual(
-            center_head_outputs.heatmaps.shape,
+            center_head_outputs.heatmap.shape,
             (self.batch_size, self.num_classes, 8, 8),
         )
 
@@ -295,6 +298,7 @@ class TestCenterPointDetectionModel(unittest.TestCase):
             multi_task_gt_batch=multi_task_batch_inputs.multi_task_gt_batch,
             voxels_data=None,
             image_data=None,
+            range_view_data=None,
         )
 
         with self.assertRaisesRegex(ValueError, "voxels_data"):

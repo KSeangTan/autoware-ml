@@ -82,7 +82,8 @@ class BEVFusionLidar(nn.Module):
         Args:
             voxels: Lidar voxel features.
             num_points: Number of points in each voxel.
-            voxel_coords: Voxel coordinates in ``(batch, x, y, z)`` order.
+            coords: Voxel coordinates in ``(batch, z, y, x)`` order, as the sparse middle
+                encoder consumes them.
             batch_size: Explicit batch size.
             other_bev_features: Optional bev features from other modalities.
 

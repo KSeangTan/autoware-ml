@@ -25,6 +25,7 @@ from omegaconf import OmegaConf
 
 from autoware_ml.databases.box3d_pipelines.box3d_merger import Box3DExtendLongerMerger
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel
+from autoware_ml.databases.taxonomy import LabelTaxonomy, LabelVocabulary
 from autoware_ml.types.geometry import Box3DFieldIndex
 
 
@@ -33,6 +34,13 @@ class TestBox3DExtendLongerMerger(unittest.TestCase):
 
     def setUp(self) -> None:
         self.label_names = ("car", "truck", "trailer")
+        self.taxonomy = LabelTaxonomy(
+            vocabulary=LabelVocabulary({name: name for name in self.label_names}),
+            class_names=self.label_names,
+            class_mapping={name: name for name in self.label_names},
+            ignore_index=-1,
+            class_groups={"vehicle": list(self.label_names)},
+        )
         self.target_labels = MappingProxyType({"truck": ["truck", "trailer"]})
         # Maximum front/back face-center distance in meters for two boxes to count as one object.
         self.proximity_distance_threshold = 2.0
@@ -71,11 +79,11 @@ class TestBox3DExtendLongerMerger(unittest.TestCase):
     def _build_merger(
         self, target_labels: MappingProxyType[str, Sequence[str]] | None = None
     ) -> Box3DExtendLongerMerger:
-        """Build a merger folding trucks and trailers into trucks against the test label names."""
+        """Build a merger folding trucks and trailers into trucks against the test taxonomy."""
         return Box3DExtendLongerMerger(
             target_labels=self.target_labels if target_labels is None else target_labels,
             proximity_distance_threshold=self.proximity_distance_threshold,
-            label_names=list(self.label_names),
+            taxonomy=self.taxonomy,
         )
 
     def test_extend_longer_geometry_matches_reference(self) -> None:
@@ -172,7 +180,7 @@ class TestBox3DExtendLongerMerger(unittest.TestCase):
         merger = Box3DExtendLongerMerger(
             target_labels=OmegaConf.create({"truck": ["truck", "trailer"]}),
             proximity_distance_threshold=self.proximity_distance_threshold,
-            label_names=list(self.label_names),
+            taxonomy=self.taxonomy,
         )
 
         merged = merger(

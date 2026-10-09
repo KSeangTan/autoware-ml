@@ -49,26 +49,26 @@ def export_detection_outputs(
         raise ValueError("BEVFusion export requires separate head outputs.")
 
     separate_head_outputs = outputs.separate_head_outputs
-    if separate_head_outputs.vels is None:
+    if separate_head_outputs.vel is None:
         raise ValueError("BEVFusion export requires a velocity branch in the detection head.")
 
     # The per-proposal class heatmap of the prediction heads, not the dense BEV heatmap. An
     # auxiliary head concatenates every decoder layer along the proposal axis, so only the trailing
     # ``num_proposals`` columns belonging to the last layer are exported.
     query_labels = outputs.query_labels
-    heatmap = separate_head_outputs.heatmaps[..., -num_proposals:].sigmoid()
+    heatmap = separate_head_outputs.heatmap[..., -num_proposals:].sigmoid()
     one_hot = (
         F.one_hot(query_labels, num_classes=head.num_classes).permute(0, 2, 1).to(heatmap.dtype)
     )
-    score = (heatmap * outputs.query_heatmap_scores * one_hot)[0].max(dim=0).values
+    score = (heatmap * outputs.query_heatmap_score * one_hot)[0].max(dim=0).values
 
     bbox_pred = torch.cat(
         [
-            separate_head_outputs.centers[0, :, -num_proposals:],
-            separate_head_outputs.heights[0, :, -num_proposals:],
-            separate_head_outputs.dims[0, :, -num_proposals:],
-            separate_head_outputs.rots[0, :, -num_proposals:],
-            separate_head_outputs.vels[0, :, -num_proposals:],
+            separate_head_outputs.center[0, :, -num_proposals:],
+            separate_head_outputs.height[0, :, -num_proposals:],
+            separate_head_outputs.dim[0, :, -num_proposals:],
+            separate_head_outputs.rot[0, :, -num_proposals:],
+            separate_head_outputs.vel[0, :, -num_proposals:],
         ],
         dim=0,
     )

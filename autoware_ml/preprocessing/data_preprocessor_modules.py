@@ -24,6 +24,7 @@ class DataPreprocessorModule(ABC):
     def __call__(
         self,
         multi_task_batch_inputs: ModelBatchInputs,
+        *,
         is_training: bool,
     ) -> ModelBatchInputs:
         """

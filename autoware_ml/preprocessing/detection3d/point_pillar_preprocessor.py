@@ -43,11 +43,6 @@ class PointPillarPreprocessor(DataPreprocessorModule):
         eval_max_voxels: Maximum number of pillars retained per sample during
             evaluation and inference. Required before the preprocessor runs in
             evaluation mode.
-        voxelization_z_order_first: If ``True``, this preprocessor will transpose [x, y, z]
-            coordinates to [z, y, x] in coords from voxelization.
-            This is used for backward-compatible, and will be removed very soon.
-        default_point_channels: Default number of point channels to be used when no points
-            are provided in the batch. Default is 4, which corresponds to (x, y, z, intensity).
     """
 
     def __init__(
@@ -57,8 +52,6 @@ class PointPillarPreprocessor(DataPreprocessorModule):
         max_num_points: int,
         max_voxels: int,
         eval_max_voxels: int,
-        voxelization_z_order_first: bool = False,
-        default_point_channels: int = 4,
     ) -> None:
         super().__init__()
         self.voxel_size = voxel_size
@@ -66,8 +59,6 @@ class PointPillarPreprocessor(DataPreprocessorModule):
         self.max_num_points = max_num_points
         self.max_voxels = max_voxels
         self.eval_max_voxels = eval_max_voxels
-        self.voxelization_z_order_first = voxelization_z_order_first
-        self._default_point_channels = default_point_channels
 
     def __call__(
         self,
@@ -86,24 +77,11 @@ class PointPillarPreprocessor(DataPreprocessorModule):
             ModelBatchInputs: The processed input features for downstream tasks
             generating voxelization with VoxelData.
         """
-
         multi_task_gt_batch = multi_task_batch_inputs.multi_task_gt_batch
         if multi_task_gt_batch.point_cloud_gt_batch is None:
             raise ValueError("ModelGTBatch must contain point cloud data for voxelization.")
 
         points = multi_task_gt_batch.point_cloud_gt_batch.points
-        if not len(points):
-            voxels_data = VoxelsData(
-                voxels=torch.zeros(
-                    (0, self.max_num_points, self._default_point_channels),
-                ),
-                num_points=torch.zeros((0,), dtype=torch.int32),
-                coords=torch.zeros((0, 3), dtype=torch.int32),
-                batch_indices=torch.zeros((0,), dtype=torch.int32),
-            )
-            # Return early if no points are available, but still return a valid VoxelsData object
-            return multi_task_batch_inputs.model_copy(update={"voxels_data": voxels_data})
-
         device = points.device
         voxel_size = torch.tensor(self.voxel_size, device=device)
         point_cloud_range = torch.tensor(self.point_cloud_range, device=device)
@@ -118,29 +96,6 @@ class PointPillarPreprocessor(DataPreprocessorModule):
             max_voxels=self.max_voxels if is_training else self.eval_max_voxels,
         )
 
-        # Handle the case where no voxels are generated
-        if not len(voxels_data.voxels):
-            voxels_data = VoxelsData(
-                voxels=torch.zeros(
-                    (0, self.max_num_points, points.shape[1]),
-                    device=device,
-                ),
-                num_points=torch.zeros((0,), device=device, dtype=torch.int32),
-                coords=torch.zeros((0, 3), device=device, dtype=torch.int32),
-                batch_indices=torch.zeros((0,), device=device, dtype=torch.int32),
-            )
-            # Return since no voxels are available
-            return multi_task_batch_inputs.model_copy(update={"voxels_data": voxels_data})
-
-        # TODO (KokSeang): Remove this backward compatibility code in the future
-        if self.voxelization_z_order_first:
-            coords = voxels_data.coords[:, [2, 1, 0]].contiguous()
-            # Re-create the VoxelsData with the updated coords
-            voxels_data = VoxelsData(
-                voxels=voxels_data.voxels,
-                num_points=voxels_data.num_points,
-                coords=coords,
-                batch_indices=voxels_data.batch_indices,
-            )
-
-        return multi_task_batch_inputs.model_copy(update={"voxels_data": voxels_data})
+        return multi_task_batch_inputs.replace(
+            voxels_data=voxels_data
+        )

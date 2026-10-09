@@ -37,7 +37,7 @@ from autoware_ml.utils.calibration import CalibrationStatus
 
 HEIGHT, WIDTH = 8, 12
 FOCAL, CENTER_X, CENTER_Y = 10.0, 6.0, 4.0
-RGB_VALUE = 100.0
+RGB_VALUE = 100.0 / 255.0  # Images arrive in unit range from the loader
 
 
 def _intrinsics(num_cameras: int) -> torch.Tensor:
@@ -70,7 +70,7 @@ def _build_sample(
     coefficients = torch.zeros(0) if distortion_coefficients is None else distortion_coefficients
     camera_image_data = BaseImages(
         images=images,
-        timestamps=torch.zeros(num_cameras, dtype=torch.float32),
+        timestamps=torch.zeros(num_cameras, dtype=torch.float64),
         camera_intrinsics=intrinsics,
         camera_names=[f"camera{index}" for index in range(num_cameras)],
         lidar2images=_homogeneous(intrinsics) @ lidar2cams,
@@ -126,89 +126,90 @@ class TestLidarCameraFusion(unittest.TestCase):
         self.fusion = LidarCameraFusion(max_depth=128.0, dilation_size=0)
 
     def test_output_layout_and_rgb_passthrough(self) -> None:
-        sample = _build_sample(torch.tensor([[0.0, 0.0, 5.0, 51.0]]), num_cameras=2)
+        sample = _build_sample(torch.tensor([[0.0, 0.0, 5.0, 0.2]]), num_cameras=2)
 
         output = self.fusion(sample).camera_image_data
 
-        self.assertEqual(tuple(output.images.shape), (2, 5, HEIGHT, WIDTH))
-        self.assertEqual(output.images.dtype, torch.float32)
-        torch.testing.assert_close(output.images[:, :3], sample.camera_image_data.images)
-        # Only the images change.
+        assert output.depth_maps is not None
+        self.assertEqual(tuple(output.depth_maps.shape), (2, 2, HEIGHT, WIDTH))
+        self.assertEqual(output.depth_maps.dtype, torch.float32)
+        # Only the depth maps change.
+        torch.testing.assert_close(output.images, sample.camera_image_data.images)
         torch.testing.assert_close(output.lidar2images, sample.camera_image_data.lidar2images)
 
     def test_points_land_on_expected_pixels_with_scaled_depth_and_intensity(self) -> None:
-        points = torch.tensor([[0.0, 0.0, 5.0, 51.0], [1.0, 0.0, 5.0, 255.0]])
+        points = torch.tensor([[0.0, 0.0, 5.0, 0.2], [1.0, 0.0, 5.0, 1.0]])
         sample = _build_sample(points)
 
         output = self.fusion(sample).camera_image_data
 
-        depth = output.images[0, 3]
-        intensity = output.images[0, 4]
+        depth = output.depth_maps[0, 0]
+        intensity = output.depth_maps[0, 1]
         center = (int(CENTER_Y), int(CENTER_X))
         right = (int(CENTER_Y), _pixel_of(1.0, 5.0))
-        self.assertAlmostEqual(float(depth[center]), 255.0 * 5.0 / 128.0, places=5)
-        self.assertAlmostEqual(float(depth[right]), 255.0 * 5.0 / 128.0, places=5)
-        self.assertAlmostEqual(float(intensity[center]), 51.0, places=5)
-        self.assertAlmostEqual(float(intensity[right]), 255.0, places=5)
+        self.assertAlmostEqual(float(depth[center]), 5.0 / 128.0, places=5)
+        self.assertAlmostEqual(float(depth[right]), 5.0 / 128.0, places=5)
+        self.assertAlmostEqual(float(intensity[center]), 0.2, places=5)
+        self.assertAlmostEqual(float(intensity[right]), 1.0, places=5)
         self.assertEqual(int((depth > 0).sum()), 2)
         self.assertEqual(int((intensity > 0).sum()), 2)
 
-    def test_channels_follow_image_max_value(self) -> None:
-        fusion = LidarCameraFusion(max_depth=10.0, dilation_size=0, image_max_value=1.0)
+    def test_depth_follows_max_depth_and_intensity_is_clipped_to_unit_range(self) -> None:
+        fusion = LidarCameraFusion(max_depth=10.0, dilation_size=0)
         sample = _build_sample(torch.tensor([[0.0, 0.0, 5.0, 127.5]]))
 
         output = fusion(sample).camera_image_data
 
-        center = (0, 3, int(CENTER_Y), int(CENTER_X))
-        self.assertAlmostEqual(float(output.images[center]), 0.5, places=5)
-        self.assertAlmostEqual(float(output.images[0, 4, center[2], center[3]]), 0.5, places=5)
+        center = (int(CENTER_Y), int(CENTER_X))
+        self.assertAlmostEqual(float(output.depth_maps[0, 0][center]), 0.5, places=5)
+        self.assertAlmostEqual(float(output.depth_maps[0, 1][center]), 1.0, places=5)
 
     def test_points_behind_camera_beyond_max_depth_or_off_image_are_dropped(self) -> None:
         points = torch.tensor(
             [
-                [0.0, 0.0, -5.0, 255.0],  # behind the camera
-                [0.0, 0.0, 200.0, 255.0],  # beyond max_depth
-                [50.0, 0.0, 5.0, 255.0],  # projects outside the image
+                [0.0, 0.0, -5.0, 1.0],  # behind the camera
+                [0.0, 0.0, 200.0, 1.0],  # beyond max_depth
+                [50.0, 0.0, 5.0, 1.0],  # projects outside the image
             ]
         )
         sample = _build_sample(points)
 
         output = self.fusion(sample).camera_image_data
 
-        self.assertEqual(float(output.images[0, 3:].abs().sum()), 0.0)
+        self.assertEqual(float(output.depth_maps.abs().sum()), 0.0)
 
     def test_empty_point_cloud_gives_zero_channels(self) -> None:
         sample = _build_sample(torch.zeros((0, 4)))
 
         output = self.fusion(sample).camera_image_data
 
-        self.assertEqual(tuple(output.images.shape), (1, 5, HEIGHT, WIDTH))
-        self.assertEqual(float(output.images[0, 3:].abs().sum()), 0.0)
+        self.assertEqual(tuple(output.depth_maps.shape), (1, 2, HEIGHT, WIDTH))
+        self.assertEqual(float(output.depth_maps.abs().sum()), 0.0)
 
     def test_dilation_paints_square_patch(self) -> None:
         fusion = LidarCameraFusion(dilation_size=1)
-        sample = _build_sample(torch.tensor([[0.0, 0.0, 5.0, 255.0]]))
+        sample = _build_sample(torch.tensor([[0.0, 0.0, 5.0, 1.0]]))
 
         output = fusion(sample).camera_image_data
 
-        hit = output.images[0, 3] > 0
+        hit = output.depth_maps[0, 0] > 0
         self.assertEqual(int(hit.sum()), 9)
         rows, cols = torch.nonzero(hit, as_tuple=True)
         self.assertEqual((rows.min().item(), rows.max().item()), (CENTER_Y - 1, CENTER_Y + 1))
         self.assertEqual((cols.min().item(), cols.max().item()), (CENTER_X - 1, CENTER_X + 1))
 
     def test_closest_point_wins_on_shared_pixel(self) -> None:
-        points = torch.tensor([[0.0, 0.0, 20.0, 10.0], [0.0, 0.0, 5.0, 200.0]])
+        points = torch.tensor([[0.0, 0.0, 20.0, 0.1], [0.0, 0.0, 5.0, 0.8]])
         sample = _build_sample(points)
 
         output = self.fusion(sample).camera_image_data
 
         center = (int(CENTER_Y), int(CENTER_X))
-        self.assertAlmostEqual(float(output.images[0, 3][center]), 255.0 * 5.0 / 128.0, places=5)
-        self.assertAlmostEqual(float(output.images[0, 4][center]), 200.0, places=5)
+        self.assertAlmostEqual(float(output.depth_maps[0, 0][center]), 5.0 / 128.0, places=5)
+        self.assertAlmostEqual(float(output.depth_maps[0, 1][center]), 0.8, places=5)
 
     def test_projection_uses_augmented_intrinsics(self) -> None:
-        sample = _build_sample(torch.tensor([[0.0, 0.0, 5.0, 255.0]]))
+        sample = _build_sample(torch.tensor([[0.0, 0.0, 5.0, 1.0]]))
         # Emulate an image-space shift of two pixels to the left, as CropAndScale would leave it.
         shifted = sample.camera_image_data.augmented_camera_intrinsics.clone()
         shifted[:, 0, 2] -= 2.0
@@ -224,36 +225,36 @@ class TestLidarCameraFusion(unittest.TestCase):
 
         output = self.fusion(sample).camera_image_data
 
-        hit = torch.nonzero(output.images[0, 3] > 0)
+        hit = torch.nonzero(output.depth_maps[0, 0] > 0)
         self.assertEqual(hit.tolist(), [[int(CENTER_Y), int(CENTER_X) - 2]])
 
     def test_zero_distortion_coefficients_match_pinhole(self) -> None:
-        points = torch.tensor([[1.0, 0.5, 5.0, 255.0], [-1.0, -0.5, 8.0, 100.0]])
-        pinhole = self.fusion(_build_sample(points)).camera_image_data.images
+        points = torch.tensor([[1.0, 0.5, 5.0, 1.0], [-1.0, -0.5, 8.0, 0.4]])
+        pinhole = self.fusion(_build_sample(points)).camera_image_data.depth_maps
         with_zeros = self.fusion(
             _build_sample(points, distortion_coefficients=torch.zeros(5))
-        ).camera_image_data.images
+        ).camera_image_data.depth_maps
 
         torch.testing.assert_close(pinhole, with_zeros)
 
     def test_ego_box_drops_occluded_points(self) -> None:
         fusion = LidarCameraFusion(dilation_size=0, ego_box=[-0.2, -0.2, 1.0, 0.2, 0.2, 2.0])
         # The first ray passes through the box, the second passes beside it.
-        points = torch.tensor([[0.0, 0.0, 5.0, 255.0], [2.0, 0.0, 5.0, 255.0]])
+        points = torch.tensor([[0.0, 0.0, 5.0, 1.0], [2.0, 0.0, 5.0, 1.0]])
         sample = _build_sample(points)
 
         output = fusion(sample).camera_image_data
 
-        hit = torch.nonzero(output.images[0, 3] > 0)
+        hit = torch.nonzero(output.depth_maps[0, 0] > 0)
         self.assertEqual(hit.tolist(), [[int(CENTER_Y), _pixel_of(2.0, 5.0)]])
 
     def test_camera_inside_ego_box_keeps_forward_points(self) -> None:
         fusion = LidarCameraFusion(dilation_size=0, ego_box=[-1.0, -1.0, -1.0, 1.0, 1.0, 1.0])
-        sample = _build_sample(torch.tensor([[0.0, 0.0, 5.0, 255.0]]))
+        sample = _build_sample(torch.tensor([[0.0, 0.0, 5.0, 1.0]]))
 
         output = fusion(sample).camera_image_data
 
-        self.assertEqual(int((output.images[0, 3] > 0).sum()), 1)
+        self.assertEqual(int((output.depth_maps[0, 0] > 0).sum()), 1)
 
     def test_camera_center_undoes_misalignment_noise(self) -> None:
         true_lidar2cam = np.eye(4)
@@ -275,16 +276,16 @@ class TestLidarCameraFusion(unittest.TestCase):
         noise[0, 0, 3] = -0.6
         lidar2cams = noise @ torch.eye(4).unsqueeze(0)
         sample = _build_sample(
-            torch.tensor([[0.0, 0.0, 5.0, 255.0]]), lidar2cams=lidar2cams, noises=noise
+            torch.tensor([[0.0, 0.0, 5.0, 1.0]]), lidar2cams=lidar2cams, noises=noise
         )
 
         output = fusion(sample).camera_image_data
 
         # Occluded from the true camera position, so nothing is painted.
-        self.assertEqual(float(output.images[0, 3].abs().sum()), 0.0)
+        self.assertEqual(float(output.depth_maps[0, 0].abs().sum()), 0.0)
 
     def test_missing_keys(self) -> None:
-        sample = _build_sample(torch.tensor([[0.0, 0.0, 5.0, 255.0]]))
+        sample = _build_sample(torch.tensor([[0.0, 0.0, 5.0, 1.0]]))
 
         with self.assertRaisesRegex(KeyError, "Missing required key 'point_cloud_data'"):
             self.fusion(sample._replace(point_cloud_data=None))
@@ -292,7 +293,7 @@ class TestLidarCameraFusion(unittest.TestCase):
             self.fusion(sample._replace(camera_image_data=None))
 
     def test_missing_intensity_feature(self) -> None:
-        sample = _build_sample(torch.tensor([[0.0, 0.0, 5.0, 255.0]]))
+        sample = _build_sample(torch.tensor([[0.0, 0.0, 5.0, 1.0]]))
         xyz_only = LiDARPoints(
             points=sample.point_cloud_data.points[:, :3],
             point_feature_names=[PointFeatureName.X, PointFeatureName.Y, PointFeatureName.Z],
@@ -311,13 +312,13 @@ class TestLidarCameraFusion(unittest.TestCase):
             LidarCameraFusion(dilation_size=-1)
 
     def test_input_sample_is_not_mutated(self) -> None:
-        sample = _build_sample(torch.tensor([[0.0, 0.0, 5.0, 255.0]]))
+        sample = _build_sample(torch.tensor([[0.0, 0.0, 5.0, 1.0]]))
         original_images = sample.camera_image_data.images.clone()
 
         self.fusion(sample)
 
         torch.testing.assert_close(sample.camera_image_data.images, original_images)
-        self.assertEqual(sample.camera_image_data.images.shape[1], 3)
+        self.assertIsNone(sample.camera_image_data.depth_maps)
 
 
 class TestAffine(unittest.TestCase):
@@ -325,10 +326,10 @@ class TestAffine(unittest.TestCase):
 
     def setUp(self) -> None:
         np.random.seed(0)
-        gradient = torch.linspace(0.0, 255.0, WIDTH).repeat(HEIGHT, 1)
+        gradient = torch.linspace(0.0, 1.0, WIDTH).repeat(HEIGHT, 1)
         images = torch.stack([gradient, gradient.flip(1), gradient * 0.5]).unsqueeze(0)
         self.sample = _build_sample(
-            torch.tensor([[0.0, 0.0, 5.0, 255.0]]), num_cameras=2, images=images.repeat(2, 1, 1, 1)
+            torch.tensor([[0.0, 0.0, 5.0, 1.0]]), num_cameras=2, images=images.repeat(2, 1, 1, 1)
         )
 
     def test_probability_zero_leaves_sample_unchanged(self) -> None:
@@ -382,17 +383,17 @@ class TestAffine(unittest.TestCase):
             self.assertTrue(np.all(source_corners[:, 1] <= HEIGHT + 1e-6))
 
     def test_constant_image_has_no_border_artifacts(self) -> None:
-        sample = _build_sample(torch.tensor([[0.0, 0.0, 5.0, 255.0]]), num_cameras=1)
+        sample = _build_sample(torch.tensor([[0.0, 0.0, 5.0, 1.0]]), num_cameras=1)
 
         output = Affine(probability=1.0, max_distortion=0.2)(sample).camera_image_data
 
         torch.testing.assert_close(
-            output.images, torch.full_like(output.images, RGB_VALUE), atol=1e-3, rtol=0.0
+            output.images, torch.full_like(output.images, RGB_VALUE), atol=1e-5, rtol=0.0
         )
 
     def test_fusion_after_affine_follows_the_warped_pixels(self) -> None:
         # The projection of a lidar point must move with the pixels it was drawn on.
-        point = torch.tensor([[1.0, 0.5, 5.0, 255.0]])
+        point = torch.tensor([[1.0, 0.5, 5.0, 1.0]])
         sample = _build_sample(point)
         fusion = LidarCameraFusion(dilation_size=0)
 
@@ -402,7 +403,7 @@ class TestAffine(unittest.TestCase):
         affine = warped.camera_image_data.image_augmentation_pixel_affines()[0]
         raw_pixel = torch.tensor([_pixel_of(1.0, 5.0) + 0.0, CENTER_Y + FOCAL * 0.5 / 5.0, 1.0])
         expected = (affine @ raw_pixel)[:2]
-        hit = torch.nonzero(fused.images[0, 3] > 0)
+        hit = torch.nonzero(fused.depth_maps[0, 0] > 0)
         self.assertEqual(hit.tolist(), [[int(expected[1]), int(expected[0])]])
 
     def test_missing_camera_image_data(self) -> None:
@@ -411,12 +412,12 @@ class TestAffine(unittest.TestCase):
 
 
 class TestSaveFusionPreview(unittest.TestCase):
-    """Preview images of the fused RGBDI images."""
+    """Preview images of the projected points."""
 
     def setUp(self) -> None:
         self.tmp_dir = tempfile.TemporaryDirectory()
         self.out_dir = Path(self.tmp_dir.name) / "previews"
-        points = torch.tensor([[0.0, 0.0, 5.0, 51.0], [1.0, 0.0, 5.0, 255.0]])
+        points = torch.tensor([[0.0, 0.0, 5.0, 0.2], [1.0, 0.0, 5.0, 1.0]])
         self.fused_sample = LidarCameraFusion(dilation_size=0)(_build_sample(points, num_cameras=2))
 
     def tearDown(self) -> None:
@@ -430,7 +431,7 @@ class TestSaveFusionPreview(unittest.TestCase):
         )
         return self.fused_sample._replace(camera_image_data=camera_image_data)
 
-    def test_writes_two_previews_per_camera_named_after_image_path(self) -> None:
+    def test_writes_two_previews_per_camera_named_after_camera_and_timestamp(self) -> None:
         transform = SaveFusionPreview(probability=1.0, out_dir=self.out_dir)
 
         output = transform(self.fused_sample)
@@ -439,10 +440,10 @@ class TestSaveFusionPreview(unittest.TestCase):
         self.assertEqual(
             sorted(path.name for path in self.out_dir.iterdir()),
             [
-                "frame_0_depth.png",
-                "frame_0_intensity.png",
-                "frame_1_depth.png",
-                "frame_1_intensity.png",
+                "camera0_0.000000_depth.png",
+                "camera0_0.000000_intensity.png",
+                "camera1_0.000000_depth.png",
+                "camera1_0.000000_intensity.png",
             ],
         )
 
@@ -453,8 +454,8 @@ class TestSaveFusionPreview(unittest.TestCase):
         SaveFusionPreview(probability=1.0, out_dir=self.out_dir)(self._with_statuses(statuses))
 
         names = sorted(path.name for path in self.out_dir.iterdir())
-        self.assertIn("frame_0_calibrated_depth.png", names)
-        self.assertIn("frame_1_miscalibrated_intensity.png", names)
+        self.assertIn("camera0_0.000000_calibrated_depth.png", names)
+        self.assertIn("camera1_0.000000_miscalibrated_intensity.png", names)
 
     def test_probability_zero_writes_nothing(self) -> None:
         SaveFusionPreview(probability=0.0, out_dir=self.out_dir)(self.fused_sample)
@@ -463,15 +464,17 @@ class TestSaveFusionPreview(unittest.TestCase):
 
     def test_recover_channels_inverts_fusion_scaling(self) -> None:
         transform = SaveFusionPreview(out_dir=self.out_dir, max_depth=128.0)
-        fused = self.fused_sample.camera_image_data.images[0].numpy()
+        camera_image_data = self.fused_sample.camera_image_data
 
-        rgb, depth, intensity = transform.recover_channels(fused)
+        rgb, depth, intensity = transform.recover_channels(
+            camera_image_data.images[0].numpy(), camera_image_data.depth_maps[0].numpy()
+        )
 
         self.assertEqual(rgb.shape, (HEIGHT, WIDTH, 3))
         self.assertEqual(rgb.dtype, np.uint8)
-        self.assertTrue(np.all(rgb == int(RGB_VALUE)))
+        self.assertTrue(np.all(rgb == 100))
         self.assertAlmostEqual(float(depth[int(CENTER_Y), int(CENTER_X)]), 5.0, places=4)
-        self.assertAlmostEqual(float(intensity[int(CENTER_Y), int(CENTER_X)]), 51.0, places=4)
+        self.assertAlmostEqual(float(intensity[int(CENTER_Y), int(CENTER_X)]), 0.2, places=4)
 
     def test_overlay_only_touches_pixels_with_points(self) -> None:
         transform = SaveFusionPreview(out_dir=self.out_dir, alpha=1.0)
@@ -486,20 +489,17 @@ class TestSaveFusionPreview(unittest.TestCase):
         self.assertTrue(np.all(overlay[untouched] == 7))
         self.assertFalse(np.all(overlay[2, 3] == 7))
 
-    def test_rejects_images_without_lidar_channels(self) -> None:
-        sample = _build_sample(torch.tensor([[0.0, 0.0, 5.0, 255.0]]))
+    def test_rejects_images_without_depth_maps(self) -> None:
+        sample = _build_sample(torch.tensor([[0.0, 0.0, 5.0, 1.0]]))
 
-        with self.assertRaisesRegex(ValueError, "five-channel"):
+        with self.assertRaisesRegex(ValueError, "no depth maps"):
             SaveFusionPreview(out_dir=self.out_dir)(sample)
 
-    def test_rejects_missing_image_samples_for_cameras(self) -> None:
-        sample = self.fused_sample._replace(image_samples=self.fused_sample.image_samples[:1])
-
-        with self.assertRaisesRegex(ValueError, "image samples"):
-            SaveFusionPreview(out_dir=self.out_dir)(sample)
-
-        with self.assertRaisesRegex(KeyError, "Missing required key 'image_samples'"):
-            SaveFusionPreview(out_dir=self.out_dir)(self.fused_sample._replace(image_samples=None))
+    def test_missing_camera_image_data(self) -> None:
+        with self.assertRaisesRegex(KeyError, "Missing required key 'camera_image_data'"):
+            SaveFusionPreview(out_dir=self.out_dir)(
+                self.fused_sample._replace(camera_image_data=None)
+            )
 
 
 if __name__ == "__main__":

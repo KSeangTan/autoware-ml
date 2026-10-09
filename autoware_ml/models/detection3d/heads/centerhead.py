@@ -153,7 +153,7 @@ class CenterHead(nn.Module):
         )  # (Batch_size, 2, height, width) or None
 
         return CenterHeadOutputs(
-            heatmaps=heatmaps, centers=centers, heights=heights, dims=dims, rots=rots, vels=vels
+            heatmap=heatmaps, reg=centers, height=heights, dim=dims, rot=rots, vel=vels
         )
 
     def get_targets(
@@ -304,7 +304,7 @@ class CenterHead(nn.Module):
                 "CenterHeadOutputs must be provided in Detection3DOutputs for loss computation."
             )
 
-        output_heatmaps = outputs.center_head_outputs.heatmaps
+        output_heatmaps = outputs.center_head_outputs.heatmap
         heatmap_size = (int(output_heatmaps.shape[-2]), int(output_heatmaps.shape[-1]))
         targets = self.get_targets(
             gt_bboxes_3d=gt_bboxes_3d,
@@ -316,13 +316,13 @@ class CenterHead(nn.Module):
         loss_heatmap = self.loss_heatmap(output_heatmaps, targets.heatmaps)
 
         bbox_predictions = [
-            outputs.center_head_outputs.centers,
-            outputs.center_head_outputs.heights,
-            outputs.center_head_outputs.dims,
-            outputs.center_head_outputs.rots,
+            outputs.center_head_outputs.reg,
+            outputs.center_head_outputs.height,
+            outputs.center_head_outputs.dim,
+            outputs.center_head_outputs.rot,
         ]
-        if self.use_velocity and outputs.center_head_outputs.vels is not None:
-            bbox_predictions.append(outputs.center_head_outputs.vels)
+        if self.use_velocity and outputs.center_head_outputs.vel is not None:
+            bbox_predictions.append(outputs.center_head_outputs.vel)
 
         bbox_predictions = torch.cat(bbox_predictions, dim=1)
 
@@ -390,16 +390,16 @@ class CenterHead(nn.Module):
         # flatten_indices holds positions along the flattened feature map, so each map has to
         # be gathered along its height*width axis per sample.
         # (batch_size, 2, height, width) -> (batch_size, num_classes*max_num_bboxes, 2)
-        centers = _transpose_and_gather_feat(center_head_outputs.centers, flatten_indices)
+        centers = _transpose_and_gather_feat(center_head_outputs.reg, flatten_indices)
         # (batch_size, num_classes*max_num_bboxes, 1)
-        heights = _transpose_and_gather_feat(center_head_outputs.heights, flatten_indices)
+        heights = _transpose_and_gather_feat(center_head_outputs.height, flatten_indices)
         # (batch_size, num_classes*max_num_bboxes, 3)
-        dims = _transpose_and_gather_feat(center_head_outputs.dims, flatten_indices)
+        dims = _transpose_and_gather_feat(center_head_outputs.dim, flatten_indices)
         # Convert log-dimensions back to actual dimensions
         dims = dims.exp()
         # (batch_size, num_classes*max_num_bboxes, 2)
-        rots = _transpose_and_gather_feat(center_head_outputs.rots, flatten_indices)
-        vels = center_head_outputs.vels if self.use_velocity else None
+        rots = _transpose_and_gather_feat(center_head_outputs.rot, flatten_indices)
+        vels = center_head_outputs.vel if self.use_velocity else None
         if vels is not None:
             # (batch_size, num_classes*max_num_bboxes, 2)
             vels = _transpose_and_gather_feat(vels, flatten_indices)
@@ -501,7 +501,7 @@ class CenterHead(nn.Module):
         Returns:
             heatmaps: Decoded heatmaps after applying sigmoid and NMS.
         """
-        heatmaps = center_head_outputs.heatmaps.sigmoid()
+        heatmaps = center_head_outputs.heatmap.sigmoid()
         pooled = F.max_pool2d(heatmaps, kernel_size=3, stride=1, padding=1)
         heatmaps = heatmaps * (pooled == heatmaps)
         return heatmaps

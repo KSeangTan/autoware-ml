@@ -79,7 +79,7 @@ class _StubVoxelEncoder(nn.Module):
 class _StubMiddleEncoder(nn.Module):
     """Scatter voxel features onto a dense ``(B, C, H, W)`` canvas at their ``(y, x)`` cells.
 
-    Coordinates arrive in the ``(batch, x, y, z)`` layout the model builds. The stub exposes the
+    Coordinates arrive in the ``(batch, z, y, x)`` layout the model builds. The stub exposes the
     ``prepare_for_export`` interface of the sparse encoder so the model can export on the CPU.
     """
 
@@ -96,7 +96,7 @@ class _StubMiddleEncoder(nn.Module):
     ) -> Float32[torch.Tensor, "batch_size channels height width"]:
         height, width = self._bev_shape
         canvas = voxel_features.new_zeros(batch_size, voxel_features.shape[1], height, width)
-        batch_indices, x, y = coords[:, 0].long(), coords[:, 1].long(), coords[:, 2].long()
+        batch_indices, y, x = coords[:, 0].long(), coords[:, 2].long(), coords[:, 3].long()
         canvas[batch_indices, :, y, x] = voxel_features
         return canvas
 
@@ -236,6 +236,8 @@ class _TransFusionDetectionModelTestCase(unittest.TestCase):
             batch_indices=torch.arange(
                 self.batch_size, dtype=torch.int32, device=self.device
             ).repeat_interleave(num_voxels_per_sample),
+            point_voxel_indices=torch.zeros((0,), dtype=torch.int64),
+            num_dropped_voxels=torch.zeros((), dtype=torch.int64),
         )
 
     def _build_detection3d_gt_batch(self) -> Detection3DGTBatch:
@@ -268,9 +270,11 @@ class _TransFusionDetectionModelTestCase(unittest.TestCase):
                 point_cloud_gt_batch=None,
                 detection3d_gt_batch=self._build_detection3d_gt_batch(),
                 image_gt_batch=None,
+                segmentation3d_gt_batch=None,
             ),
             voxels_data=voxels_data,
             image_data=None,
+            range_view_data=None,
         )
 
     def _assert_forward_compute_metrics_and_decode_run(
@@ -282,21 +286,21 @@ class _TransFusionDetectionModelTestCase(unittest.TestCase):
         """
         multi_task_outputs = model(batch_inputs)
         metrics = model.compute_metrics(batch_inputs, multi_task_outputs)
-        multi_task_predictions = model.decode_outputs(multi_task_outputs)
+        multi_task_predictions = model.decode_outputs(batch_inputs, multi_task_outputs)
 
         assert multi_task_outputs.detection3d_head_outputs is not None
         head_outputs = multi_task_outputs.detection3d_head_outputs.transfusion_head_outputs
         assert head_outputs is not None
         self.assertIsNone(multi_task_outputs.detection3d_head_outputs.center_head_outputs)
         self.assertEqual(
-            head_outputs.dense_heatmaps.shape, (self.batch_size, self.num_classes, *self.bev_shape)
+            head_outputs.dense_heatmap.shape, (self.batch_size, self.num_classes, *self.bev_shape)
         )
         self.assertEqual(head_outputs.query_labels.shape, (self.batch_size, self.num_proposals))
         self.assertEqual(
-            head_outputs.query_heatmap_scores.shape,
+            head_outputs.query_heatmap_score.shape,
             (self.batch_size, self.num_classes, self.num_proposals),
         )
-        self.assertTrue(torch.isfinite(head_outputs.dense_heatmaps).all())
+        self.assertTrue(torch.isfinite(head_outputs.dense_heatmap).all())
 
         self.assertIn("loss", metrics)
         self.assertIn("loss_heatmap", metrics)
@@ -339,7 +343,7 @@ class _TransFusionDetectionModelTestCase(unittest.TestCase):
         voxels, num_points, coors = spec.args
         torch.testing.assert_close(voxels, voxels_data.voxels)
         torch.testing.assert_close(num_points, voxels_data.num_points)
-        torch.testing.assert_close(coors, voxels_data.concat_batch_indices_coords())
+        torch.testing.assert_close(coors, voxels_data.batch_zyx_coords())
 
         with torch.no_grad():
             cls_score0, bbox_pred0, dir_cls_pred0 = spec.module(*spec.args)
@@ -428,7 +432,7 @@ class TestTransFusionDetectionModel(_TransFusionDetectionModelTestCase):
         with self.assertRaises(ValueError):
             self.model.compute_metrics(self.batch_inputs, empty_outputs)
         with self.assertRaises(ValueError):
-            self.model.decode_outputs(empty_outputs)
+            self.model.decode_outputs(self.batch_inputs, empty_outputs)
         with self.assertRaises(ValueError):
             self.model.build_eval_output(self.batch_inputs, empty_outputs)
 
@@ -478,15 +482,15 @@ class TestTransFusionDetectionModel(_TransFusionDetectionModelTestCase):
 
         torch.testing.assert_close(
             cls_score0,
-            separate.heatmaps[..., -self.num_proposals :].sigmoid()
-            * head_outputs.query_heatmap_scores,
+            separate.heatmap[..., -self.num_proposals :].sigmoid()
+            * head_outputs.query_heatmap_score,
         )
-        torch.testing.assert_close(bbox_pred0[:, :2], separate.centers[..., -self.num_proposals :])
-        torch.testing.assert_close(bbox_pred0[:, 2:3], separate.heights[..., -self.num_proposals :])
-        torch.testing.assert_close(bbox_pred0[:, 3:6], separate.dims[..., -self.num_proposals :])
-        assert separate.vels is not None
-        torch.testing.assert_close(bbox_pred0[:, 6:8], separate.vels[..., -self.num_proposals :])
-        torch.testing.assert_close(dir_cls_pred0, separate.rots[..., -self.num_proposals :])
+        torch.testing.assert_close(bbox_pred0[:, :2], separate.center[..., -self.num_proposals :])
+        torch.testing.assert_close(bbox_pred0[:, 2:3], separate.height[..., -self.num_proposals :])
+        torch.testing.assert_close(bbox_pred0[:, 3:6], separate.dim[..., -self.num_proposals :])
+        assert separate.vel is not None
+        torch.testing.assert_close(bbox_pred0[:, 6:8], separate.vel[..., -self.num_proposals :])
+        torch.testing.assert_close(dir_cls_pred0, separate.rot[..., -self.num_proposals :])
 
     def test_format_export_outputs_requires_velocity_branch(self) -> None:
         """Test that a head without a velocity branch cannot be packed for deployment."""
@@ -498,7 +502,7 @@ class TestTransFusionDetectionModel(_TransFusionDetectionModelTestCase):
         without_velocity = head_outputs.model_copy(
             update={
                 "separate_head_outputs": head_outputs.separate_head_outputs.model_copy(
-                    update={"vels": None}
+                    update={"vel": None}
                 )
             }
         )

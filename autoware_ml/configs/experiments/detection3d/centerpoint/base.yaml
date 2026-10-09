@@ -25,7 +25,6 @@ data_preprocessor:
       max_num_points: ${max_num_points}
       max_voxels: ${max_voxels}
       eval_max_voxels: ${eval_max_voxels}
-      voxelization_z_order_first: false
 
 trainer:
   max_epochs: ???

@@ -38,7 +38,7 @@ from autoware_ml.builders.model_builder import (
     build_weight_checkpoint_paths,
 )
 from autoware_ml.builders.logger_builder import build_trainer_logger
-from autoware_ml.datamodule.base_data_module import BaseDataModule
+from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.utils.mlflow_helpers import resolve_lineage_context
 from autoware_ml.utils.runtime import (
@@ -60,7 +60,7 @@ def test(
     trainer: L.Trainer,
     cfg: DictConfig,
     model: ModuleBaseModel,
-    datamodule: BaseDataModule,
+    datamodule: DataModule,
     weight_paths: Sequence[str | Path],
 ) -> list[dict[str, Any]]:
     """

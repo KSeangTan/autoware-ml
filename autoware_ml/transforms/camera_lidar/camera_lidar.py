@@ -14,8 +14,8 @@
 
 """Camera-LiDAR fusion transforms.
 
-This module contains calibration-status augmentations and preview utilities
-for camera-LiDAR fusion inputs.
+This module contains the calibration-misalignment augmentation, the projection of the lidar
+points onto the images and preview utilities for camera-LiDAR fusion inputs.
 """
 
 from __future__ import annotations
@@ -215,39 +215,39 @@ class CalibrationMisalignment(BaseTransform):
         self.yaw = yaw
         self.translation = translation
 
-    def on_skip(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
+    def on_skip(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Mark every camera as calibrated when the augmentation is skipped.
 
         Args:
-            multi_task_gt_sample: Sample whose ``camera_image_data`` receives the statuses.
+            model_gt_sample: Sample whose ``camera_image_data`` receives the statuses.
 
         Returns:
             Updated ModelGTSample with all cameras flagged ``CalibrationStatus.CALIBRATED``.
         """
-        assert multi_task_gt_sample.camera_image_data is not None
-        camera_image_data = multi_task_gt_sample.camera_image_data
+        assert model_gt_sample.camera_image_data is not None
+        camera_image_data = model_gt_sample.camera_image_data
         num_cameras = camera_image_data.lidar2cams.shape[0]
         calibration_statuses = torch.full(
             (num_cameras,), CalibrationStatus.CALIBRATED.value, dtype=torch.int64
         )
-        return multi_task_gt_sample._replace(
+        return model_gt_sample._replace(
             camera_image_data=BaseImages.model_validate(
                 camera_image_data.model_copy(update={"calibration_statuses": calibration_statuses})
             )
         )
 
-    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Perturb the lidar-to-camera extrinsics of every camera.
 
         Args:
-            multi_task_gt_sample: Sample holding ``camera_image_data``.
+            model_gt_sample: Sample holding ``camera_image_data``.
 
         Returns:
             Updated ModelGTSample with perturbed ``lidar2cams`` and ``lidar2images``, the
             per-camera noise transforms and all cameras flagged ``MISCALIBRATED``.
         """
-        assert multi_task_gt_sample.camera_image_data is not None
-        camera_image_data = multi_task_gt_sample.camera_image_data
+        assert model_gt_sample.camera_image_data is not None
+        camera_image_data = model_gt_sample.camera_image_data
         lidar2cams = camera_image_data.lidar2cams
         num_cameras = lidar2cams.shape[0]
 
@@ -257,7 +257,7 @@ class CalibrationMisalignment(BaseTransform):
         calibration_statuses = torch.full(
             (num_cameras,), CalibrationStatus.MISCALIBRATED.value, dtype=torch.int64
         )
-        return multi_task_gt_sample._replace(
+        return model_gt_sample._replace(
             camera_image_data=self._apply_noises(camera_image_data, noises, calibration_statuses)
         )
 
@@ -437,20 +437,21 @@ class CalibrationMisalignment(BaseTransform):
 
 
 class LidarCameraFusion(BaseTransform):
-    """Fuse the lidar points into every camera image as depth and intensity channels.
+    """Project the lidar points onto every camera image as depth and intensity channels.
 
-    Projects the lidar points onto each camera and appends a depth and an intensity channel
-    to the RGB image, producing five-channel RGBDI images. The projection uses the
+    Projects the lidar points onto each camera and writes a depth and an intensity channel
+    next to the RGB image, in ``camera_image_data.depth_maps``. The batch stacks them onto the
+    images, so the models read five-channel RGBDI images. The projection uses the
     ``augmented_camera_intrinsics`` and the distortion coefficients of every camera, so it
     follows the undistortion and the image-space augmentations (crop, scale, affine) that ran
     earlier in the pipeline. This transform must therefore run after every transform that
     changes the image geometry, and before the consumers of the fused images.
 
-    The depth channel holds ``image_max_value * depth / max_depth`` and the intensity channel
-    ``image_max_value * intensity / 255``, so all five channels share the pixel range of the
-    images. Points behind the camera or beyond ``max_depth`` are dropped, and when
-    ``ego_box`` is given, points whose ray from the camera crosses the ego vehicle box are
-    dropped as occluded.
+    The depth channel holds ``depth / max_depth`` and the intensity channel the intensity of
+    the point, which the point cloud loader serves in unit range, so both channels share the
+    unit pixel range of the images. Points behind the camera or beyond ``max_depth`` are
+    dropped, and when ``ego_box`` is given, points whose ray from the camera crosses the ego
+    vehicle box are dropped as occluded.
 
     Required keys:
         - camera_image_data: RGB images with their calibration, ``noises`` when the
@@ -458,7 +459,8 @@ class LidarCameraFusion(BaseTransform):
         - point_cloud_data: points with XYZ and intensity features.
 
     Generated keys:
-        - camera_image_data.images: (num_cameras, 5, height, width) float32 RGBDI images.
+        - camera_image_data.depth_maps: (num_cameras, 2, height, width) float32 depth and
+          intensity channels.
     """
 
     _required_keys = ["camera_image_data", "point_cloud_data"]
@@ -470,7 +472,6 @@ class LidarCameraFusion(BaseTransform):
         dilation_size: int = 1,
         ego_box: Sequence[float] | None = None,
         occlusion_adjust_margin: float = 0.01,
-        image_max_value: float = 255.0,
     ) -> None:
         """Initialize the LidarCameraFusion transform.
 
@@ -481,9 +482,6 @@ class LidarCameraFusion(BaseTransform):
                 frame used to drop occluded points, ``None`` to keep every point.
             occlusion_adjust_margin: Distance in meters kept between a camera lying inside the
                 ego box and the box wall moved behind it.
-            image_max_value: Upper bound of the pixel range of the images, ``255`` for raw
-                images and ``1`` for images normalized to unit range. The depth and intensity
-                channels are scaled to the same range.
 
         Raises:
             ValueError: If ``ego_box`` does not hold six values or a bound is not positive.
@@ -493,8 +491,6 @@ class LidarCameraFusion(BaseTransform):
             raise ValueError(f"ego_box must hold six values, got {len(ego_box)}")
         if max_depth <= 0.0:
             raise ValueError(f"max_depth must be positive, got {max_depth}")
-        if image_max_value <= 0.0:
-            raise ValueError(f"image_max_value must be positive, got {image_max_value}")
         if dilation_size < 0:
             raise ValueError(f"dilation_size must be >= 0, got {dilation_size}")
 
@@ -502,25 +498,24 @@ class LidarCameraFusion(BaseTransform):
         self.dilation_size = dilation_size
         self.ego_box = None if ego_box is None else tuple(float(value) for value in ego_box)
         self.occlusion_adjust_margin = occlusion_adjust_margin
-        self.image_max_value = image_max_value
 
-    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Append the projected depth and intensity channels to every camera image.
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Write the projected depth and intensity channels of every camera image.
 
         Args:
-            multi_task_gt_sample: Sample holding ``camera_image_data`` and ``point_cloud_data``.
+            model_gt_sample: Sample holding ``camera_image_data`` and ``point_cloud_data``.
 
         Returns:
-            Updated ModelGTSample whose ``camera_image_data.images`` are five-channel RGBDI
-            images.
+            Updated ModelGTSample whose ``camera_image_data.depth_maps`` hold the depth and
+            intensity channels of every camera.
 
         Raises:
             ValueError: If the points carry no intensity feature.
         """
-        assert multi_task_gt_sample.camera_image_data is not None
-        assert multi_task_gt_sample.point_cloud_data is not None
-        camera_image_data = multi_task_gt_sample.camera_image_data
-        point_cloud_data = multi_task_gt_sample.point_cloud_data
+        assert model_gt_sample.camera_image_data is not None
+        assert model_gt_sample.point_cloud_data is not None
+        camera_image_data = model_gt_sample.camera_image_data
+        point_cloud_data = model_gt_sample.point_cloud_data
 
         feature_names = list(point_cloud_data.point_feature_names)
         if PointFeatureName.INTENSITY not in feature_names:
@@ -543,7 +538,7 @@ class LidarCameraFusion(BaseTransform):
             else camera_image_data.noises.cpu().numpy().astype(np.float64)
         )
 
-        fused_images = []
+        depth_maps = []
         for index in range(num_cameras):
             distortion_coefficients = camera_image_data.distortion_coefficients[index]
             depth_channel, intensity_channel = self.render_lidar_channels(
@@ -555,21 +550,14 @@ class LidarCameraFusion(BaseTransform):
                 distortion_coefficients=distortion_coefficients.cpu().numpy().astype(np.float64),
                 image_size=(int(height), int(width)),
             )
-            fused_images.append(
-                torch.cat(
-                    [
-                        images[index],
-                        torch.from_numpy(depth_channel).to(images).unsqueeze(0),
-                        torch.from_numpy(intensity_channel).to(images).unsqueeze(0),
-                    ],
-                    dim=0,
-                )
+            depth_maps.append(
+                torch.from_numpy(np.stack([depth_channel, intensity_channel])).to(images)
             )
 
         # model_copy does not validate what it is given, so the copy is validated explicitly.
-        return multi_task_gt_sample._replace(
+        return model_gt_sample._replace(
             camera_image_data=BaseImages.model_validate(
-                camera_image_data.model_copy(update={"images": torch.stack(fused_images, dim=0)})
+                camera_image_data.model_copy(update={"depth_maps": torch.stack(depth_maps, dim=0)})
             )
         )
 
@@ -587,7 +575,7 @@ class LidarCameraFusion(BaseTransform):
 
         Args:
             xyz: Point coordinates in the lidar frame, shape ``(num_points, 3)``.
-            intensities: Point intensities in ``[0, 255]``, shape ``(num_points,)``.
+            intensities: Point intensities in unit range, shape ``(num_points,)``.
             lidar2cam: 4x4 lidar-to-camera transform, including the misalignment noise when
                 the augmentation ran.
             noise: 4x4 misalignment noise composed into ``lidar2cam``, ``None`` when none ran.
@@ -597,8 +585,8 @@ class LidarCameraFusion(BaseTransform):
             image_size: Height and width of the channels.
 
         Returns:
-            Depth and intensity channels of shape ``(height, width)``, scaled to
-            ``[0, image_max_value]``. Pixels without a point are zero.
+            Depth and intensity channels of shape ``(height, width)`` in unit range. Pixels
+            without a point are zero.
         """
         if self.ego_box is not None:
             camera_center = self.camera_center_in_lidar(lidar2cam, noise)
@@ -731,12 +719,12 @@ class LidarCameraFusion(BaseTransform):
         Args:
             pixels: Pixel coordinates ``(u, v)`` of the points, shape ``(num_points, 2)``.
             depths: Depth of the points along the optical axis, shape ``(num_points,)``.
-            intensities: Intensities of the points in ``[0, 255]``, shape ``(num_points,)``.
+            intensities: Intensities of the points in unit range, shape ``(num_points,)``.
             image_size: Height and width of the channels.
 
         Returns:
-            Depth and intensity channels of shape ``(height, width)`` scaled to
-            ``[0, image_max_value]``.
+            Depth channel scaled by ``max_depth`` and intensity channel clipped to unit range,
+            both of shape ``(height, width)``.
         """
         height, width = image_size
         depth_channel = np.zeros((height, width), dtype=np.float32)
@@ -774,11 +762,9 @@ class LidarCameraFusion(BaseTransform):
 
         # Paint far to near so the closest point ends up on top.
         order = np.argsort(patch_depths)[::-1]
-        depth_channel[patch_rows[order], patch_cols[order]] = (
-            self.image_max_value * patch_depths[order] / self.max_depth
-        )
-        intensity_channel[patch_rows[order], patch_cols[order]] = (
-            self.image_max_value * patch_intensities[order] / 255.0
+        depth_channel[patch_rows[order], patch_cols[order]] = patch_depths[order] / self.max_depth
+        intensity_channel[patch_rows[order], patch_cols[order]] = np.clip(
+            patch_intensities[order], 0.0, 1.0
         )
         return depth_channel, intensity_channel
 
@@ -814,17 +800,17 @@ class Affine(ImageSpaceTransform):
         super().__init__(probability=probability)
         self.max_distortion = max_distortion
 
-    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Warp every camera image with its own random affine.
 
         Args:
-            multi_task_gt_sample: Sample holding ``camera_image_data``.
+            model_gt_sample: Sample holding ``camera_image_data``.
 
         Returns:
             Updated ModelGTSample with the warped images and the composed calibration.
         """
-        assert multi_task_gt_sample.camera_image_data is not None
-        camera_image_data = multi_task_gt_sample.camera_image_data
+        assert model_gt_sample.camera_image_data is not None
+        camera_image_data = model_gt_sample.camera_image_data
         images = camera_image_data.images
         num_cameras, _, height, width = images.shape
 
@@ -842,7 +828,7 @@ class Affine(ImageSpaceTransform):
             ).reshape(int(height), int(width), -1)
             warped_images.append(torch.from_numpy(warped_hwc).permute(2, 0, 1))
 
-        return multi_task_gt_sample._replace(
+        return model_gt_sample._replace(
             camera_image_data=self.apply_image_space_transform(
                 camera_image_data,
                 torch.stack(warped_images, dim=0).to(images),
@@ -890,23 +876,23 @@ class Affine(ImageSpaceTransform):
 
 
 class SaveFusionPreview(BaseTransform):
-    """Save preview images of the fused RGBDI camera images.
+    """Save preview images of the projected points over the camera images.
 
     Writes two overlays per camera: the RGB image with the depth points and with the
-    intensity points, each colorized with a colormap. The files are named after the stem of
-    the camera's image path, suffixed with the calibration status when the misalignment
+    intensity points, each colorized with a colormap. The files are named after the camera
+    and its timestamp, suffixed with the calibration status when the misalignment
     augmentation ran.
 
     Required keys:
-        - camera_image_data: (num_cameras, 5, H, W) RGBDI images from ``LidarCameraFusion``,
-          ``calibration_statuses`` when the misalignment augmentation ran.
-        - image_samples: one record per camera, used for the output filenames.
+        - camera_image_data: images in unit range with the ``depth_maps`` written by
+          ``LidarCameraFusion``, ``calibration_statuses`` when the misalignment augmentation
+          ran.
 
     Generated keys:
         - None (pass-through transform, only writes files to disk).
     """
 
-    _required_keys = ["camera_image_data", "image_samples"]
+    _required_keys = ["camera_image_data"]
 
     def __init__(
         self,
@@ -917,7 +903,6 @@ class SaveFusionPreview(BaseTransform):
         alpha: float = 0.5,
         depth_colormap: str = "turbo",
         intensity_colormap: str = "jet",
-        image_max_value: float = 255.0,
     ) -> None:
         """Initialize the SaveFusionPreview transform.
 
@@ -929,8 +914,6 @@ class SaveFusionPreview(BaseTransform):
             alpha: Blending factor of the overlay (0.0 = RGB only, 1.0 = points only).
             depth_colormap: Matplotlib colormap of the depth overlay.
             intensity_colormap: Matplotlib colormap of the intensity overlay.
-            image_max_value: ``image_max_value`` used by ``LidarCameraFusion``, i.e. the
-                upper bound of the pixel range of the fused images.
         """
         super().__init__(probability=probability)
         self.out_dir = Path(out_dir)
@@ -938,66 +921,57 @@ class SaveFusionPreview(BaseTransform):
         self.alpha = alpha
         self.depth_cmap = plt.get_cmap(depth_colormap)
         self.intensity_cmap = plt.get_cmap(intensity_colormap)
-        self.image_max_value = image_max_value
 
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
-    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Save the depth and intensity previews of every camera.
 
         Args:
-            multi_task_gt_sample: Sample holding the fused ``camera_image_data`` and the
-                ``image_samples``.
+            model_gt_sample: Sample holding the ``camera_image_data`` with its depth maps.
 
         Returns:
             The unmodified ModelGTSample.
 
         Raises:
-            ValueError: If the images do not hold five channels or a camera has no image
-                sample.
+            ValueError: If the images carry no depth maps.
         """
-        assert multi_task_gt_sample.camera_image_data is not None
-        assert multi_task_gt_sample.image_samples is not None
-        camera_image_data = multi_task_gt_sample.camera_image_data
-        image_samples = multi_task_gt_sample.image_samples
-        images = camera_image_data.images
-        num_cameras = images.shape[0]
-
-        if images.shape[1] != 5:
+        assert model_gt_sample.camera_image_data is not None
+        camera_image_data = model_gt_sample.camera_image_data
+        if camera_image_data.depth_maps is None:
             raise ValueError(
-                f"{self.__class__.__name__}: expected five-channel RGBDI images from "
-                f"LidarCameraFusion, got {images.shape[1]} channels"
-            )
-        if len(image_samples) < num_cameras:
-            raise ValueError(
-                f"{self.__class__.__name__}: {num_cameras} cameras but only "
-                f"{len(image_samples)} image samples to name the previews after"
+                f"{self.__class__.__name__} runs after LidarCameraFusion, the images carry "
+                "no depth maps"
             )
 
         statuses = camera_image_data.calibration_statuses
-        for index in range(num_cameras):
+        for index, camera_name in enumerate(camera_image_data.camera_names):
+            timestamp = float(camera_image_data.timestamps[index])
             self.save_preview(
-                fused_image=images[index].detach().cpu().numpy(),
-                base_name=Path(image_samples[index].image_path).stem,
+                image=camera_image_data.images[index].detach().cpu().numpy(),
+                depth_map=camera_image_data.depth_maps[index].detach().cpu().numpy(),
+                base_name=f"{camera_name}_{timestamp:.6f}",
                 calibration_status=None if statuses is None else int(statuses[index].item()),
             )
-        return multi_task_gt_sample
+        return model_gt_sample
 
     def save_preview(
         self,
-        fused_image: npt.NDArray[np.float32],
+        image: npt.NDArray[np.float32],
+        depth_map: npt.NDArray[np.float32],
         base_name: str,
         calibration_status: int | None,
     ) -> None:
         """Write the depth and intensity overlays of one camera.
 
         Args:
-            fused_image: RGBDI image of shape ``(5, height, width)``.
+            image: RGB image of shape ``(3, height, width)`` in unit range.
+            depth_map: Depth and intensity channels of shape ``(2, height, width)``.
             base_name: Filename stem of the previews.
             calibration_status: ``CalibrationStatus`` value appended to the filename, ``None``
                 for no suffix.
         """
-        rgb, depth, intensity = self.recover_channels(fused_image)
+        rgb, depth, intensity = self.recover_channels(image, depth_map)
 
         if calibration_status is None:
             status_suffix = ""
@@ -1016,21 +990,22 @@ class SaveFusionPreview(BaseTransform):
         cv2.imwrite(str(intensity_path), cv2.cvtColor(intensity_overlay, cv2.COLOR_RGB2BGR))
 
     def recover_channels(
-        self, fused_image: npt.NDArray[np.float32]
+        self, image: npt.NDArray[np.float32], depth_map: npt.NDArray[np.float32]
     ) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.float32], npt.NDArray[np.float32]]:
-        """Split a fused image back into RGB, depth and intensity.
+        """Recover the RGB image, the depth in meters and the intensity.
 
         Args:
-            fused_image: RGBDI image of shape ``(5, height, width)`` in ``[0, image_max_value]``.
+            image: RGB image of shape ``(3, height, width)`` in unit range.
+            depth_map: Depth and intensity channels of shape ``(2, height, width)`` as
+                written by ``LidarCameraFusion``.
 
         Returns:
             RGB image ``(height, width, 3)`` uint8, depth ``(height, width)`` in meters and
-            intensity ``(height, width)`` in ``[0, 255]``.
+            intensity ``(height, width)`` in unit range.
         """
-        scale = 255.0 / self.image_max_value
-        rgb = np.clip(fused_image[:3] * scale, 0, 255).astype(np.uint8).transpose(1, 2, 0)
-        depth = (fused_image[3] * self.max_depth / self.image_max_value).astype(np.float32)
-        intensity = (fused_image[4] * scale).astype(np.float32)
+        rgb = np.clip(image[:3] * 255.0, 0, 255).astype(np.uint8).transpose(1, 2, 0)
+        depth = (depth_map[0] * self.max_depth).astype(np.float32)
+        intensity = depth_map[1].astype(np.float32)
         return np.ascontiguousarray(rgb), depth, intensity
 
     @staticmethod

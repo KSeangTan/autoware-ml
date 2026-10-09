@@ -12,39 +12,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Image-specific transforms.
-
-This module contains reusable image-domain augmentations and preprocessing
-transforms used by detection and fusion models.
-"""
+"""Photometric image transforms to support ModelGTSample."""
 
 from __future__ import annotations
 
 import cv2
 import numpy as np
+import numpy.typing as npt
 import torch
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.base import BaseTransform
 
+# Hue is measured in degrees and the other channels in the unit range by the float HSV conversion
+HUE_PERIOD_DEGREES = 360.0
+CONTRAST_PIVOT = 0.5
+
 
 class PhotometricDistortion(BaseTransform):
-    """Apply random brightness, contrast, saturation, and hue to RGB channels.
+    """Apply random brightness, contrast, saturation and hue to every image.
 
-    Operates on the camera images (num_cameras, 3, H, W). Assumes float32 [0, 255] input in
-    RGB format, as produced by the loading transforms. The images are handed to OpenCV as
-    uint8 (H, W, 3) arrays and converted back to a float32 tensor at the end. One set of
-    distortions is sampled per call and applied to every camera.
+    Operates on the camera images (num_cameras, 3, H, W) in unit range, as served by the
+    loading transform. Every camera of the sample draws its own distortion.
 
     Required keys:
-        - camera_image_data: (num_cameras, 3, H, W) float32 RGB images in [0, 255].
-
-    Optional keys:
-        - None
+        - camera_image_data: (num_cameras, 3, H, W) float32 RGB images in [0, 1].
 
     Generated keys:
-        - camera_image_data: With the photometrically distorted images (when applied).
+        - camera_image_data.images: the photometrically distorted images (when applied).
     """
 
     _required_keys = ["camera_image_data"]
@@ -61,10 +57,10 @@ class PhotometricDistortion(BaseTransform):
 
         Args:
             probability: Probability of applying the transform, None to always run.
-            brightness: Max brightness deviation [0, 1].
-            contrast: Max contrast deviation [0, 1].
-            saturation: Max saturation deviation [0, 1].
-            hue: Max hue deviation [0, 0.5].
+            brightness: Max brightness deviation in [0, 1].
+            contrast: Max contrast deviation in [0, 1].
+            saturation: Max saturation deviation in [0, 1].
+            hue: Max hue deviation in [0, 0.5], as a fraction of the hue circle.
         """
         super().__init__(probability=probability)
         self.brightness = brightness
@@ -72,83 +68,56 @@ class PhotometricDistortion(BaseTransform):
         self.saturation = saturation
         self.hue = hue
 
-    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Apply photometric distortion to the RGB channels of every camera image.
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Distort the colors of every image of the sample.
 
         Args:
-            multi_task_gt_sample: ModelGTSample instance containing `camera_image_data`.
+            model_gt_sample: ModelGTSample instance holding loaded images.
 
         Returns:
-            Updated ModelGTSample instance with distorted `camera_image_data`.
+            Updated ModelGTSample instance with distorted images.
         """
-        assert multi_task_gt_sample.camera_image_data is not None
-        camera_image_data = multi_task_gt_sample.camera_image_data
-        images = camera_image_data.images
-
-        # TODO(Kok Seang): Consider to implement torch version to make it faster
-        # Convert from torch (num_cameras, 3, H, W) float32 to cv2 (num_cameras, H, W, 3) uint8
-        opencv_images = (
-            images.round()
-            .clamp(0, 255)
-            .to(torch.uint8)
-            .permute(0, 2, 3, 1)
-            .contiguous()
-            .cpu()
-            .numpy()
+        # This is checked in the _validate_required_keys()
+        camera_image_data: BaseImages = (
+            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
         )
 
-        # Sample the distortions once so every camera of the sample is distorted the same way
-        brightness_factor = (
-            np.random.uniform(1 - self.brightness, 1 + self.brightness)
-            if self.brightness > 0
-            else 1.0
+        distorted = torch.stack(
+            [
+                torch.from_numpy(
+                    np.transpose(
+                        self.distort(np.transpose(image.numpy(), (1, 2, 0))), (2, 0, 1)
+                    ).copy()
+                )
+                for image in camera_image_data.images
+            ]
         )
-        saturation_factor = (
-            np.random.uniform(1 - self.saturation, 1 + self.saturation)
-            if self.saturation > 0
-            else 1.0
-        )
-        contrast_factor = (
-            np.random.uniform(1 - self.contrast, 1 + self.contrast) if self.contrast > 0 else 1.0
-        )
-        hue_shift = np.random.uniform(-self.hue, self.hue) * 179.0 if self.hue > 0 else 0.0
-
-        augmented_images = []
-        for img in opencv_images:
-            # img is (H, W, 3) uint8
-            # Convert to HSV
-            hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV).astype(np.float32)
-
-            # Apply distortions
-            if self.brightness > 0:
-                hsv[..., 2] *= brightness_factor
-
-            if self.saturation > 0:
-                hsv[..., 1] *= saturation_factor
-
-            if self.contrast > 0:
-                # Simple contrast: scale V around 127.5
-                hsv[..., 2] = (hsv[..., 2] - 127.5) * contrast_factor + 127.5
-
-            if self.hue > 0:
-                hsv[..., 0] += hue_shift
-                hsv[..., 0] = np.mod(hsv[..., 0], 180.0)
-
-            # Clip and convert back
-            hsv = np.clip(hsv, 0, 255).astype(np.uint8)
-            augmented_images.append(cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB))
-
-        # Convert from cv2 (num_cameras, H, W, 3) uint8 back to torch (num_cameras, 3, H, W) float32
-        distorted_images = (
-            torch.from_numpy(np.stack(augmented_images, axis=0))
-            .to(images.device)
-            .permute(0, 3, 1, 2)
-            .to(torch.float32)
+        return model_gt_sample._replace(
+            camera_image_data=BaseImages.model_validate(
+                camera_image_data.model_copy(update={"images": distorted})
+            )
         )
 
-        # Only the pixel values change, every other field is carried over unchanged.
-        # model_copy does not validate what it is given, so the copy is validated explicitly.
-        distorted_camera_image_data = BaseImages.model_validate(
-            camera_image_data.model_copy(update={"images": distorted_images})
-        )
-        return multi_task_gt_sample._replace(camera_image_data=distorted_camera_image_data)
+    def distort(self, image: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
+        """Distort one RGB image in the unit range.
+
+        Args:
+            image: Image in (height, width, 3) layout with values in [0, 1].
+
+        Returns:
+            npt.NDArray[np.float32]: The distorted image.
+        """
+        hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+        if self.brightness > 0:
+            hsv[..., 2] *= np.random.uniform(1 - self.brightness, 1 + self.brightness)
+        if self.saturation > 0:
+            hsv[..., 1] *= np.random.uniform(1 - self.saturation, 1 + self.saturation)
+        if self.contrast > 0:
+            factor = np.random.uniform(1 - self.contrast, 1 + self.contrast)
+            hsv[..., 2] = (hsv[..., 2] - CONTRAST_PIVOT) * factor + CONTRAST_PIVOT
+        if self.hue > 0:
+            hsv[..., 0] += np.random.uniform(-self.hue, self.hue) * HUE_PERIOD_DEGREES
+            hsv[..., 0] = np.mod(hsv[..., 0], HUE_PERIOD_DEGREES)
+
+        hsv[..., 1:] = np.clip(hsv[..., 1:], 0.0, 1.0)
+        return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)

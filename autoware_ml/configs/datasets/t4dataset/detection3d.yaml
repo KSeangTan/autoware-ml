@@ -4,6 +4,7 @@ defaults:
   - /datasets/t4dataset/base
   - _self_
 
+<<<<<<< HEAD
 class_names:
   - car
   - truck
@@ -101,6 +102,20 @@ eval_class_range:
   debris: 121.0
   bicycle_rack: 121.0
   vehicle_extension: 121.0
+=======
+class_names: ${database.taxonomy.detection3d.class_names}
+num_classes: ${class_count:${database.taxonomy.detection3d.class_names}}
+ignore_index: ${database.taxonomy.detection3d.ignore_index}
+filter_attributes:
+  - [bicycle, vehicle_state.parked]
+  - [bicycle, two_wheel_vehicle_state.without_rider]
+  - [bicycle, cycle_state.without_rider]
+  - [motorcycle, vehicle_state.parked]
+  - [motorcycle, two_wheel_vehicle_state.without_rider]
+  - [motorcycle, cycle_state.without_rider]
+  - [motorcycle, motorcycle_state.without_rider]
+eval_class_range: ${database.taxonomy.detection3d.eval_range}
+>>>>>>> refactor/unified-data-interface-clean15
 metric_ranges:
   - { _target_: autoware_ml.metrics.base.MetricRange, name: 0-50m, min_distance: 0.0, max_distance: 50.0 }
   - { _target_: autoware_ml.metrics.base.MetricRange, name: 50-90m, min_distance: 50.0, max_distance: 90.0 }
@@ -135,18 +150,14 @@ collision_filter:
 collision:
   _target_: autoware_ml.metrics.detection3d.collision.CollisionTTC
   class_names: ${t4dataset.detection3d.class_names}
+  kinds: ${database.taxonomy.detection3d.collision_kinds}
+  living_speeds: ${database.taxonomy.detection3d.living_speeds}
   map_provider: ${t4dataset.detection3d.map_provider}
   vehicle: ${t4dataset.vehicle}
   region: ${t4dataset.drivable_region}
   max_speed_mps: ${t4dataset.max_speed_mps}
   params: ${t4dataset.reachability}
-class_groups:
-  grouped_vehicle: [car, truck, bus, train, vehicle_extension]
-  grouped_two_wheeler: [motorcycle, bicycle]
-  grouped_pedestrian_animal: [pedestrian, animal]
-  grouped_static_obstacle: [barrier, traffic_cone]
-  grouped_debris: [debris]
-  grouped_structure: [bicycle_rack]
+class_groups: ${database.taxonomy.detection3d.class_groups}
 detection_components:
   # Whole-scene.
   - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [val, test] }
@@ -161,6 +172,7 @@ detection_components:
   - { _target_: autoware_ml.metrics.detection3d.confusion_matrix.ConfusionMatrix, stages: [test] }
   - { _target_: autoware_ml.metrics.detection3d.critical_fp_fn.CriticalFPFN, stages: [test] }
   - { _target_: autoware_ml.metrics.detection3d.collision_weighted_map.CollisionWeightedMeanAP, stages: [test] }
+  - { _target_: autoware_ml.metrics.detection3d.box_counts.BoxCounts, stages: [test] }
   # Road slice (lanelet road + road_shoulder + crosswalk).
   - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [test], filter: '${t4dataset.detection3d.region_filters.road}' }
   - { _target_: autoware_ml.metrics.detection3d.heading_ap.HeadingAP, stages: [test], filter: '${t4dataset.detection3d.region_filters.road}' }

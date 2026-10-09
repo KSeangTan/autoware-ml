@@ -185,8 +185,15 @@ class SeparateHead1D(nn.Module):
         Returns:
             TransFusionSeparateHeadOutputs: Dataclass to save for each prediction branch.
         """
-        outputs = MappingProxyType({name: head(query_feats) for name, head in self.heads.items()})
-        return TransFusionSeparateHeadOutputs.from_dict(outputs)
+        branches = {name: head(query_feats) for name, head in self.heads.items()}
+        return TransFusionSeparateHeadOutputs(
+            heatmap=branches["heatmaps"],
+            center=branches["centers"],
+            height=branches["heights"],
+            dim=branches["dims"],
+            rot=branches["rots"],
+            vel=branches.get("vels"),
+        )
 
 
 class TransFusionHead(nn.Module):
@@ -635,8 +642,8 @@ class TransFusionHead(nn.Module):
                 query=query_feats, key=flatten_bev_features, query_pos=query_pos, key_pos=bev_pos
             )
             prediction: TransFusionSeparateHeadOutputs = prediction_head(query_feat)
-            centers = prediction.centers + query_pos.permute(0, 2, 1)
-            prediction = prediction.model_copy(update={"centers": centers})
+            centers = prediction.center + query_pos.permute(0, 2, 1)
+            prediction = prediction.model_copy(update={"center": centers})
             predictions.append(prediction)
             query_pos = centers.detach().permute(0, 2, 1)
 
@@ -663,20 +670,18 @@ class TransFusionHead(nn.Module):
             TransFusionHeadOutputs: Dataclass containing all outputs.
         """
         if self.auxiliary:
-            outputs = {}
-            ordered_keys = predictions[0].ordered_keys
-            outputs = {key: [] for key in ordered_keys}
-            for prediction in predictions:
-                model_dump = prediction.model_dump()
-                for key in ordered_keys:
-                    outputs[key].append(model_dump[key])
-
-            concat_outputs = {}
-            for key in outputs.keys():
-                concat_outputs[key] = torch.cat(outputs[key], dim=-1)
-
-            separate_head_outputs = TransFusionSeparateHeadOutputs.from_dict(
-                MappingProxyType(concat_outputs)
+            # Every decoder layer contributes its proposals along the last axis
+            separate_head_outputs = TransFusionSeparateHeadOutputs(
+                heatmap=torch.cat([prediction.heatmap for prediction in predictions], dim=-1),
+                center=torch.cat([prediction.center for prediction in predictions], dim=-1),
+                height=torch.cat([prediction.height for prediction in predictions], dim=-1),
+                dim=torch.cat([prediction.dim for prediction in predictions], dim=-1),
+                rot=torch.cat([prediction.rot for prediction in predictions], dim=-1),
+                vel=(
+                    torch.cat([prediction.vel for prediction in predictions], dim=-1)
+                    if predictions[0].vel is not None
+                    else None
+                ),
             )
         else:
             separate_head_outputs = predictions[-1]
@@ -685,8 +690,8 @@ class TransFusionHead(nn.Module):
             2, top_positions[:, None, :].expand(-1, flatten_dense_heatmaps.shape[1], -1)
         )
         return TransFusionHeadOutputs(
-            dense_heatmaps=dense_heatmaps,
-            query_heatmap_scores=query_heatmap_scores,
+            dense_heatmap=dense_heatmaps,
+            query_heatmap_score=query_heatmap_scores,
             query_labels=top_classes,
             separate_head_outputs=separate_head_outputs,
         )
@@ -887,7 +892,7 @@ class TransFusionHead(nn.Module):
 
         transfusion_head_outputs = outputs.transfusion_head_outputs
         separate_head_outputs = transfusion_head_outputs.separate_head_outputs
-        batch_scores = separate_head_outputs.heatmaps[..., -self.num_proposals :].sigmoid()
+        batch_scores = separate_head_outputs.heatmap[..., -self.num_proposals :].sigmoid()
         one_hot = (
             F.one_hot(transfusion_head_outputs.query_labels, num_classes=self.num_classes)
             .permute(
@@ -897,12 +902,12 @@ class TransFusionHead(nn.Module):
         )
         # Use proposals from the dense heatmap to calibrate the final scores, where they are only
         # valid when both of them align
-        batch_scores = batch_scores * transfusion_head_outputs.query_heatmap_scores * one_hot
-        batch_centers = separate_head_outputs.centers[..., -self.num_proposals :]
-        batch_heights = separate_head_outputs.heights[..., -self.num_proposals :]
-        batch_dims = separate_head_outputs.dims[..., -self.num_proposals :]
-        batch_rots = separate_head_outputs.rots[..., -self.num_proposals :]
-        batch_vels = separate_head_outputs.vels
+        batch_scores = batch_scores * transfusion_head_outputs.query_heatmap_score * one_hot
+        batch_centers = separate_head_outputs.center[..., -self.num_proposals :]
+        batch_heights = separate_head_outputs.height[..., -self.num_proposals :]
+        batch_dims = separate_head_outputs.dim[..., -self.num_proposals :]
+        batch_rots = separate_head_outputs.rot[..., -self.num_proposals :]
+        batch_vels = separate_head_outputs.vel
         if batch_vels is not None:
             batch_vels = batch_vels[..., -self.num_proposals :]
 
@@ -1069,7 +1074,7 @@ class TransFusionHead(nn.Module):
             Structured training targets for classification, boxes, and heatmaps.
         """
         batch_size = len(gt_valid_bboxes)
-        device = outputs.dense_heatmaps.device
+        device = outputs.dense_heatmap.device
         gt_labels_3d = gt_labels_3d.to(device=device, dtype=torch.long)
         gt_valid_bboxes = gt_valid_bboxes.to(device=device)
         class_weights = self._build_class_weights(
@@ -1094,13 +1099,13 @@ class TransFusionHead(nn.Module):
         ) < gt_valid_bboxes.unsqueeze(1)
 
         separate_head_outputs = outputs.separate_head_outputs
-        num_layers = separate_head_outputs.centers.shape[-1] // self.num_proposals
-        scores = separate_head_outputs.heatmaps.detach()
-        centers = separate_head_outputs.centers.detach()
-        heights = separate_head_outputs.heights.detach()
-        dims = separate_head_outputs.dims.detach()
-        rots = separate_head_outputs.rots.detach()
-        vels = separate_head_outputs.vels
+        num_layers = separate_head_outputs.center.shape[-1] // self.num_proposals
+        scores = separate_head_outputs.heatmap.detach()
+        centers = separate_head_outputs.center.detach()
+        heights = separate_head_outputs.height.detach()
+        dims = separate_head_outputs.dim.detach()
+        rots = separate_head_outputs.rot.detach()
+        vels = separate_head_outputs.vel
         if vels is not None:
             vels = vels.detach()
 
@@ -1314,7 +1319,7 @@ class TransFusionHead(nn.Module):
             raise ValueError(
                 "TransFusionHead: transfusion_head_outputs must exist from the forward outputs!"
             )
-        feature_map_size = transfusion_head_outputs.dense_heatmaps.shape[-2:]
+        feature_map_size = transfusion_head_outputs.dense_heatmap.shape[-2:]
         targets = self.get_targets(
             gt_bboxes_3d=gt_bboxes_3d,
             gt_labels_3d=gt_labels_3d,
@@ -1325,14 +1330,14 @@ class TransFusionHead(nn.Module):
         )
 
         loss_heatmap = self.loss_heatmap(
-            transfusion_head_outputs.dense_heatmaps,
+            transfusion_head_outputs.dense_heatmap,
             targets.dense_heatmaps,
             # (batch_size, num_classes) -> (batch_size, num_classes, 1, 1), broadcast over the grid.
             weights=targets.class_weights[:, :, None, None],
         )
         loss_dict["loss_heatmap"] = self.loss_heatmap_weight * loss_heatmap
         separate_head_outputs = transfusion_head_outputs.separate_head_outputs
-        num_layers = separate_head_outputs.centers.shape[-1] // self.num_proposals
+        num_layers = separate_head_outputs.center.shape[-1] // self.num_proposals
 
         for layer_index in range(num_layers):
             # The last layer keeps the "layer_-1" prefix the original TransFusion logs use.
@@ -1348,7 +1353,7 @@ class TransFusionHead(nn.Module):
             if layer_losses.loss_iou is not None:
                 loss_dict[f"{prefix}_loss_iou"] = layer_losses.loss_iou
 
-        loss_dict["matched_ious"] = transfusion_head_outputs.dense_heatmaps.new_tensor(
+        loss_dict["matched_ious"] = transfusion_head_outputs.dense_heatmap.new_tensor(
             targets.matched_iou
         )
         loss_dict["loss"] = sum(value for key, value in loss_dict.items() if "loss" in key)
@@ -1382,7 +1387,7 @@ class TransFusionHead(nn.Module):
         # (batch_size, num_classes, num_proposals) -> (batch_size, num_proposals, num_classes)
         # -> (batch_size * num_proposals, num_classes)
         layer_logits = (
-            separate_head_outputs.heatmaps[..., start:end]
+            separate_head_outputs.heatmap[..., start:end]
             .permute(0, 2, 1)
             .reshape(-1, self.num_classes)
         )
@@ -1400,20 +1405,20 @@ class TransFusionHead(nn.Module):
         )
 
         # A head without velocity channels contributes no columns to the regression vector.
-        if separate_head_outputs.vels is not None:
-            vels = separate_head_outputs.vels[..., start:end]
+        if separate_head_outputs.vel is not None:
+            vels = separate_head_outputs.vel[..., start:end]
         else:
-            vels = separate_head_outputs.centers.new_zeros(
-                separate_head_outputs.centers.shape[0], 0, self.num_proposals
+            vels = separate_head_outputs.center.new_zeros(
+                separate_head_outputs.center.shape[0], 0, self.num_proposals
             )
 
         # (batch_size, code_size, num_proposals) -> (batch_size, num_proposals, code_size)
         preds = torch.cat(
             [
-                separate_head_outputs.centers[..., start:end],
-                separate_head_outputs.heights[..., start:end],
-                separate_head_outputs.dims[..., start:end],
-                separate_head_outputs.rots[..., start:end],
+                separate_head_outputs.center[..., start:end],
+                separate_head_outputs.height[..., start:end],
+                separate_head_outputs.dim[..., start:end],
+                separate_head_outputs.rot[..., start:end],
                 vels,
             ],
             dim=1,

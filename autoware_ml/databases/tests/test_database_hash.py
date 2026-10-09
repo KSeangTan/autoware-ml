@@ -22,16 +22,47 @@ import unittest
 
 import yaml
 
-from autoware_ml.databases.database_task_config import DatabaseTaskConfig
 from autoware_ml.databases.scenarios import DatasetParams
 from autoware_ml.databases.t4dataset.t4dataset import T4Dataset
 from autoware_ml.databases.t4dataset.t4scenarios import T4Scenarios
-from autoware_ml.types.tasks import TaskType
+from autoware_ml.databases.taxonomy import (
+    DatabaseTaxonomy,
+    DetectionTaxonomy,
+    LabelVocabulary,
+    SegmentationTaxonomy,
+)
+from autoware_ml.types.metrics import AgentKind
 
 _SCENARIOS = {
     "train": ["db_scenario_a/0/tokyo/j6gen2/none", "db_scenario_b/1/tokyo/j6gen2/none"],
     "val": ["db_scenario_c/0/tokyo/j6gen2/none"],
 }
+
+
+def _build_taxonomy(class_names: tuple[str, ...]) -> DatabaseTaxonomy:
+    """Build a taxonomy over the class names, with buses folded into cars."""
+    vocabulary = LabelVocabulary({name: name for name in class_names + ("bus",)})
+    class_mapping = {name: name for name in class_names} | {"bus": "car"}
+    class_groups = {"all": list(class_names)}
+    return DatabaseTaxonomy(
+        detection3d=DetectionTaxonomy(
+            vocabulary=vocabulary,
+            class_names=class_names,
+            class_mapping=class_mapping,
+            ignore_index=-1,
+            class_groups=class_groups,
+            eval_range={name: 50.0 for name in class_names},
+            collision_kinds={name: AgentKind.WHEELED for name in class_names},
+            living_speeds={},
+        ),
+        segmentation3d=SegmentationTaxonomy(
+            vocabulary=vocabulary,
+            class_names=class_names,
+            class_mapping=class_mapping,
+            ignore_index=-1,
+            class_groups=class_groups,
+        ),
+    )
 
 
 class TestDatabaseHash(unittest.TestCase):
@@ -52,8 +83,10 @@ class TestDatabaseHash(unittest.TestCase):
         root_path: str = "/data/t4dataset",
         cache_path: str | None = None,
         version: str = "T4Dataset-test-v1.0.0",
-        label_names: tuple[str, ...] = ("car", "pedestrian"),
+        class_names: tuple[str, ...] = ("car", "pedestrian"),
+        lidar_channel: str = "LIDAR_CONCAT",
         lidar_pointcloud_num_features: int = 5,
+        box_annotation_dir: str = "annotation",
     ) -> T4Dataset:
         """Build a T4Dataset whose location and content settings can be varied independently."""
         scenarios = T4Scenarios(
@@ -69,16 +102,12 @@ class TestDatabaseHash(unittest.TestCase):
             cache_path=cache_path or str(Path(self._tmp_dir.name) / "cache"),
             cache_file_prefix_name="database",
             num_workers=1,
-            database_task_configs={
-                TaskType.DETECTION3D: DatabaseTaskConfig(
-                    task_type=TaskType.DETECTION3D,
-                    label_names=list(label_names),
-                    ignore_label_index=-1,
-                    label_remapper={"bus": "car"},
-                )
-            },
+            taxonomy=_build_taxonomy(class_names),
+            lidar_channel=lidar_channel,
             lidar_pointcloud_num_features=lidar_pointcloud_num_features,
             box3d_pipelines=[],
+            lidar_intensity_scale=255.0,
+            box_annotation_dir=box_annotation_dir,
         )
 
     def test_hash_ignores_filesystem_locations(self) -> None:
@@ -114,9 +143,15 @@ class TestDatabaseHash(unittest.TestCase):
         self.assertNotEqual(
             reference, self._build_database(version="T4Dataset-test-v2.0.0").database_hash
         )
-        self.assertNotEqual(reference, self._build_database(label_names=("car",)).database_hash)
+        self.assertNotEqual(reference, self._build_database(class_names=("car",)).database_hash)
+        self.assertNotEqual(
+            reference, self._build_database(lidar_channel="LIDAR_TOP").database_hash
+        )
         self.assertNotEqual(
             reference, self._build_database(lidar_pointcloud_num_features=4).database_hash
+        )
+        self.assertNotEqual(
+            reference, self._build_database(box_annotation_dir="annotation_v2").database_hash
         )
 
     def test_hash_tracks_scenario_selection(self) -> None:

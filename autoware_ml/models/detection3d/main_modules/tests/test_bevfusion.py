@@ -89,7 +89,7 @@ class _StubVoxelEncoder(nn.Module):
 class _StubMiddleEncoder(nn.Module):
     """Scatter voxel features onto a dense ``(B, C, H, W)`` canvas at their ``(y, x)`` cells.
 
-    Coordinates arrive in the ``(batch, x, y, z)`` layout the model builds. The stub exposes the
+    Coordinates arrive in the ``(batch, z, y, x)`` layout the model builds. The stub exposes the
     ``bev_output_shape`` and ``prepare_for_export`` interface of the sparse encoder so the model
     can run and export on the CPU.
     """
@@ -111,7 +111,7 @@ class _StubMiddleEncoder(nn.Module):
     ) -> Float32[torch.Tensor, "batch_size channels height width"]:
         height, width = self._bev_shape
         canvas = voxel_features.new_zeros(batch_size, voxel_features.shape[1], height, width)
-        batch_indices, x, y = coords[:, 0].long(), coords[:, 1].long(), coords[:, 2].long()
+        batch_indices, y, x = coords[:, 0].long(), coords[:, 2].long(), coords[:, 3].long()
         canvas[batch_indices, :, y, x] = voxel_features
         return canvas
 
@@ -311,6 +311,8 @@ class _BEVFusionDetectionModelTestCase(unittest.TestCase):
             batch_indices=torch.arange(
                 self.batch_size, dtype=torch.int32, device=self.device
             ).repeat_interleave(num_voxels_per_sample),
+            point_voxel_indices=torch.zeros((0,), dtype=torch.int64),
+            num_dropped_voxels=torch.zeros((), dtype=torch.int64),
         )
 
     def _build_detection3d_gt_batch(self) -> Detection3DGTBatch:
@@ -379,6 +381,7 @@ class _BEVFusionDetectionModelTestCase(unittest.TestCase):
             image_augmentation_matrices=identity.contiguous(),
             lidar2images=identity.contiguous(),
             lidar2cams=torch.inverse(camera2lidar).contiguous(),
+            calibration_statuses=None,
         )
 
     def _build_batch_inputs(
@@ -392,9 +395,11 @@ class _BEVFusionDetectionModelTestCase(unittest.TestCase):
                 point_cloud_gt_batch=None,
                 detection3d_gt_batch=self._build_detection3d_gt_batch(),
                 image_gt_batch=image_data,
+                segmentation3d_gt_batch=None,
             ),
             voxels_data=voxels_data,
             image_data=image_data,
+            range_view_data=None,
         )
 
 
@@ -416,14 +421,14 @@ class TestBEVFusionDetectionModelLidarOnly(_BEVFusionDetectionModelTestCase):
         """
         multi_task_outputs = self.model(self.batch_inputs)
         metrics = self.model.compute_metrics(self.batch_inputs, multi_task_outputs)
-        multi_task_predictions = self.model.decode_outputs(multi_task_outputs)
+        multi_task_predictions = self.model.decode_outputs(self.batch_inputs, multi_task_outputs)
 
         assert multi_task_outputs.detection3d_head_outputs is not None
         head_outputs = multi_task_outputs.detection3d_head_outputs.transfusion_head_outputs
         assert head_outputs is not None
         self.assertIsNone(multi_task_outputs.detection3d_head_outputs.center_head_outputs)
         self.assertEqual(
-            head_outputs.dense_heatmaps.shape, (self.batch_size, self.num_classes, *self.bev_shape)
+            head_outputs.dense_heatmap.shape, (self.batch_size, self.num_classes, *self.bev_shape)
         )
         self.assertEqual(head_outputs.query_labels.shape, (self.batch_size, self.num_proposals))
 
@@ -495,7 +500,7 @@ class TestBEVFusionDetectionModelLidarOnly(_BEVFusionDetectionModelTestCase):
         with self.assertRaises(ValueError):
             self.model.compute_metrics(self.batch_inputs, empty_outputs)
         with self.assertRaises(ValueError):
-            self.model.decode_outputs(empty_outputs)
+            self.model.decode_outputs(self.batch_inputs, empty_outputs)
         with self.assertRaises(ValueError):
             self.model.build_eval_output(self.batch_inputs, empty_outputs)
 
@@ -512,7 +517,7 @@ class TestBEVFusionDetectionModelLidarOnly(_BEVFusionDetectionModelTestCase):
         torch.testing.assert_close(voxels, voxels_data.voxels[first_sample])
         self.assertEqual(coors.dtype, torch.int32)
         self.assertTrue(coors.is_contiguous())
-        torch.testing.assert_close(coors, voxels_data.coords[first_sample])
+        torch.testing.assert_close(coors, voxels_data.coords[first_sample][:, [2, 1, 0]])
         self.assertEqual(num_points_per_voxel.dtype, torch.int32)
         torch.testing.assert_close(num_points_per_voxel, voxels_data.num_points[first_sample])
 
@@ -746,15 +751,15 @@ class TestBEVFusionDetectionModelCameraLidarForward(_BEVFusionDetectionModelTest
         """
         multi_task_outputs = self.model(self.batch_inputs)
         metrics = self.model.compute_metrics(self.batch_inputs, multi_task_outputs)
-        multi_task_predictions = self.model.decode_outputs(multi_task_outputs)
+        multi_task_predictions = self.model.decode_outputs(self.batch_inputs, multi_task_outputs)
 
         assert multi_task_outputs.detection3d_head_outputs is not None
         head_outputs = multi_task_outputs.detection3d_head_outputs.transfusion_head_outputs
         assert head_outputs is not None
         self.assertEqual(
-            head_outputs.dense_heatmaps.shape, (self.batch_size, self.num_classes, *self.bev_shape)
+            head_outputs.dense_heatmap.shape, (self.batch_size, self.num_classes, *self.bev_shape)
         )
-        self.assertTrue(torch.isfinite(head_outputs.dense_heatmaps).all())
+        self.assertTrue(torch.isfinite(head_outputs.dense_heatmap).all())
 
         self.assertIn("loss", metrics)
         self.assertTrue(torch.isfinite(metrics["loss"]).all())
@@ -784,8 +789,8 @@ class TestBEVFusionDetectionModelCameraLidarForward(_BEVFusionDetectionModelTest
         assert other_outputs is not None and other_outputs.transfusion_head_outputs is not None
         self.assertFalse(
             torch.allclose(
-                outputs.transfusion_head_outputs.dense_heatmaps,
-                other_outputs.transfusion_head_outputs.dense_heatmaps,
+                outputs.transfusion_head_outputs.dense_heatmap,
+                other_outputs.transfusion_head_outputs.dense_heatmap,
             )
         )
 

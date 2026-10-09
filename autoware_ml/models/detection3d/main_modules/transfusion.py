@@ -37,7 +37,7 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.base import MetricSuite
-from autoware_ml.metrics.detection3d.eval_output import multi_task_eval_output
+from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import TransFusionHead
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
@@ -94,7 +94,7 @@ class _TransFusionExportWrapper(nn.Module):
         Args:
             voxels: Voxel features.
             num_points: Number of points in each voxel.
-            coors: Batched voxel coordinates in ``(batch, x, y, z)`` order.
+            coors: Batched voxel coordinates in ``(batch, z, y, x)`` order.
 
         Returns:
             ``cls_score0``, ``bbox_pred0``, and ``dir_cls_pred0`` tensors.
@@ -134,24 +134,24 @@ def _format_transfusion_export_outputs(
             match the deployment contract.
     """
     separate_head_outputs = outputs.separate_head_outputs
-    if separate_head_outputs.vels is None:
+    if separate_head_outputs.vel is None:
         raise ValueError("TransFusion export requires a velocity branch in the detection head.")
 
-    num_proposals = outputs.query_heatmap_scores.shape[-1]
+    num_proposals = outputs.query_heatmap_score.shape[-1]
     cls_score0 = (
-        separate_head_outputs.heatmaps[..., -num_proposals:].sigmoid()
-        * outputs.query_heatmap_scores
+        separate_head_outputs.heatmap[..., -num_proposals:].sigmoid()
+        * outputs.query_heatmap_score
     )
     bbox_pred0 = torch.cat(
         (
-            separate_head_outputs.centers[..., -num_proposals:],
-            separate_head_outputs.heights[..., -num_proposals:],
-            separate_head_outputs.dims[..., -num_proposals:],
-            separate_head_outputs.vels[..., -num_proposals:],
+            separate_head_outputs.center[..., -num_proposals:],
+            separate_head_outputs.height[..., -num_proposals:],
+            separate_head_outputs.dim[..., -num_proposals:],
+            separate_head_outputs.vel[..., -num_proposals:],
         ),
         dim=1,
     )
-    dir_cls_pred0 = separate_head_outputs.rots[..., -num_proposals:]
+    dir_cls_pred0 = separate_head_outputs.rot[..., -num_proposals:]
 
     if bbox_pred0.shape[1] != 8:
         raise ValueError(
@@ -227,9 +227,9 @@ class TransFusionDetectionModel(ModuleBaseModel):
                 "ModelOutputs must contain detection3d_head_outputs for TransFusion build_eval_output pass."
             )
 
-        return multi_task_eval_output(
-            multi_task_predictions=self.bbox_head.decode_outputs(outputs.detection3d_head_outputs),
-            multi_task_batch_inputs=batch,
+        return detection_eval_output(
+            predictions=self.bbox_head.decode_outputs(outputs.detection3d_head_outputs),
+            batch_inputs=batch,
         )
 
     def _forward_with_batch_size(
@@ -260,7 +260,7 @@ class TransFusionDetectionModel(ModuleBaseModel):
             batch_size = multi_task_batch_inputs.multi_task_gt_batch.infer_batch_size()
         assert batch_size is not None, "Batch size must be provided for lidar forward pass."
 
-        batch_coords = voxels_data.concat_batch_indices_coords()
+        batch_coords = voxels_data.batch_zyx_coords()
         voxel_features = self.pts_voxel_encoder(
             voxels=voxels_data.voxels,
             num_points=voxels_data.num_points,
@@ -314,7 +314,9 @@ class TransFusionDetectionModel(ModuleBaseModel):
             ),
         )  # type: ignore[return-value]
 
-    def decode_outputs(self, outputs: ModelOutputs) -> ModelPredictions:
+    def decode_outputs(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    ) -> ModelPredictions:
         """Decode predictions for inference."""
         if outputs.detection3d_head_outputs is None:
             raise ValueError(
@@ -366,7 +368,7 @@ class TransFusionDetectionModel(ModuleBaseModel):
             args=(
                 voxels_data.voxels,
                 voxels_data.num_points,
-                voxels_data.concat_batch_indices_coords(),
+                voxels_data.batch_zyx_coords(),
             ),
             input_param_names=["voxels", "num_points", "coors"],
             output_names=["cls_score0", "bbox_pred0", "dir_cls_pred0"],

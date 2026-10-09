@@ -68,7 +68,7 @@ class CameraImageDataTestCase(unittest.TestCase):
             images=torch.rand(
                 (self.num_cameras, 3, self.image_height, self.image_width), dtype=torch.float32
             ),
-            timestamps=torch.zeros(self.num_cameras, dtype=torch.float32),
+            timestamps=torch.zeros(self.num_cameras, dtype=torch.float64),
             camera_intrinsics=self.camera_intrinsic.repeat(self.num_cameras, 1, 1),
             camera_names=[f"camera{index}" for index in range(self.num_cameras)],
             lidar2images=(homogeneous_intrinsic @ self.lidar2cam).repeat(self.num_cameras, 1, 1),

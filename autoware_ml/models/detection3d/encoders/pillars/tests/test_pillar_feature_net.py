@@ -45,6 +45,8 @@ class TestPillarFeatureNet(unittest.TestCase):
             num_points=torch.tensor([1], dtype=torch.int32, device=self.device),
             coords=torch.tensor([[2, 1, 0]], dtype=torch.int32, device=self.device),  # (x, y, z)
             batch_indices=torch.tensor([0], dtype=torch.int32, device=self.device),
+            point_voxel_indices=torch.zeros((0,), dtype=torch.int64),
+            num_dropped_voxels=torch.zeros((), dtype=torch.int64),
         )
         features = self.pts_voxel_encoder.encode(
             voxels_data=voxels_data,
@@ -79,6 +81,8 @@ class TestPillarFeatureNet(unittest.TestCase):
                 [[2, 1, 0], [2, 1, 0]], dtype=torch.int32, device=self.device
             ),  # (x, y, z)
             batch_indices=torch.tensor([0, 0], dtype=torch.int32, device=self.device),
+            point_voxel_indices=torch.zeros((0,), dtype=torch.int64),
+            num_dropped_voxels=torch.zeros((), dtype=torch.int64),
         )
         features = self.pts_voxel_encoder(voxels_data)
         self.assertEqual(features.shape, (2, 8))  # (num_voxels, feat_channels)

@@ -37,7 +37,7 @@ from autoware_ml.builders.model_builder import (
     build_weight_checkpoint_paths,
 )
 from autoware_ml.builders.logger_builder import build_trainer_logger
-from autoware_ml.datamodule.base_data_module import BaseDataModule
+from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.deployment.deployment_export import DeploymentExport
 from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.utils.mlflow_helpers import resolve_deploy_lineage, log_config_params
@@ -61,7 +61,7 @@ CONFIG_NAME_PREFIX = "experiments/"
 def deploy(
     deploy_cfg: DictConfig,
     output_dir: Path,
-    datamodule: BaseDataModule,
+    datamodule: DataModule,
     model: ModuleBaseModel,
     config_name: str,
     release: str | None,

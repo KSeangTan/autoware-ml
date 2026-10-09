@@ -6,7 +6,7 @@ from types import MappingProxyType
 from pydantic import BaseModel, ConfigDict
 from omegaconf import DictConfig, OmegaConf
 
-from autoware_ml.datamodule.base_data_module import BaseDataModule
+from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.utils.deploy import (
     resolve_export_specs,
@@ -46,7 +46,7 @@ class DeploymentExport:
         self,
         deploy_cfg: DictConfig,
         output_dir: Path,
-        datamodule: BaseDataModule,
+        datamodule: DataModule,
         model: ModuleBaseModel,
         config_name: str,
         release: str | None,

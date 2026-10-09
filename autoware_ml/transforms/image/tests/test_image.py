@@ -33,7 +33,7 @@ def solid_color_images(
     """Build images filled with one RGB color.
 
     Args:
-        rgb: The color of every pixel, in [0, 255].
+        rgb: The color of every pixel, in [0, 1].
         num_cameras: Number of cameras.
         height: Image height.
         width: Image width.
@@ -68,7 +68,7 @@ class TestPhotometricDistortion(unittest.TestCase):
         num_cameras = images.shape[0]
         camera_image_data = BaseImages(
             images=images,
-            timestamps=torch.zeros(num_cameras, dtype=torch.float32),
+            timestamps=torch.zeros(num_cameras, dtype=torch.float64),
             camera_intrinsics=torch.eye(3).repeat(num_cameras, 1, 1),
             camera_names=[f"camera{index}" for index in range(num_cameras)],
             lidar2images=torch.eye(4).repeat(num_cameras, 1, 1),
@@ -88,15 +88,15 @@ class TestPhotometricDistortion(unittest.TestCase):
         )
 
     def build_random_images(self, num_cameras: int = 2) -> Float32[Tensor, "num_cameras 3 4 5"]:
-        """Build random RGB images with whole pixel values in [0, 255].
+        """Build random RGB images with pixel values in [0, 1].
 
         Args:
             num_cameras: Number of cameras.
 
         Returns:
-            Random images that survive the uint8 round trip exactly.
+            Random images in the unit range the loader serves.
         """
-        return torch.randint(0, 256, (num_cameras, 3, 4, 5)).to(torch.float32)
+        return torch.rand((num_cameras, 3, 4, 5), dtype=torch.float32)
 
     def distort(
         self,
@@ -136,102 +136,88 @@ class TestPhotometricDistortion(unittest.TestCase):
         self.assertIsNot(output.camera_image_data, sample.camera_image_data)
         self.assertTrue(torch.equal(sample.camera_image_data.images, images))
 
-    def test_output_stays_in_uint8_range(self) -> None:
-        """Test that strong distortions never push the pixels outside [0, 255]."""
+    def test_output_stays_in_unit_range(self) -> None:
+        """Test that strong distortions never push the pixels outside [0, 1]."""
         images = self.build_random_images()
         transform = PhotometricDistortion(probability=None, brightness=1.0, contrast=1.0)
 
         distorted_images = self.distort(images, transform)
 
         self.assertGreaterEqual(float(distorted_images.min()), 0.0)
-        self.assertLessEqual(float(distorted_images.max()), 255.0)
-        # Values come back from uint8, hence are whole numbers.
-        self.assertTrue(torch.equal(distorted_images, distorted_images.round()))
+        self.assertLessEqual(float(distorted_images.max()), 1.0 + 1e-6)
 
     def test_no_distortion_keeps_the_images(self) -> None:
-        """Test that a transform with every deviation at zero only round-trips through OpenCV."""
+        """Test that a transform with every deviation at zero only round-trips through HSV."""
         images = self.build_random_images()
 
         distorted_images = self.distort(images, PhotometricDistortion(probability=None))
 
-        # OpenCV quantizes the hue to [0, 180) and the saturation to uint8, so saturated colors
-        # move by a few levels on the way back. Gray levels, which carry no hue, are exact.
-        self.assertTrue(torch.allclose(distorted_images, images, atol=6.0))
-        gray_images = solid_color_images((100.0, 100.0, 100.0))
-        self.assertTrue(
-            torch.equal(
-                self.distort(gray_images, PhotometricDistortion(probability=None)), gray_images
-            )
-        )
-
-    def test_fractional_pixels_are_rounded_and_clamped(self) -> None:
-        """Test that non-integer pixel values are rounded to the nearest uint8 and clamped."""
-        transform = PhotometricDistortion(probability=None)
-        cases = {10.4: 10.0, 10.6: 11.0, 300.0: 255.0, -5.0: 0.0}
-
-        for value, expected_value in cases.items():
-            with self.subTest(value=value):
-                gray_images = solid_color_images((value, value, value))
-                distorted_images = self.distort(gray_images, transform)
-                self.assertTrue(
-                    torch.equal(
-                        distorted_images,
-                        solid_color_images((expected_value, expected_value, expected_value)),
-                    )
-                )
+        self.assertTrue(torch.allclose(distorted_images, images, atol=1e-5))
 
     def test_brightness_scales_the_pixels(self) -> None:
         """Test that the brightness factor scales every channel of a color."""
-        images = solid_color_images((200.0, 100.0, 50.0))
+        images = solid_color_images((0.8, 0.4, 0.2))
         transform = PhotometricDistortion(probability=None, brightness=0.5)
 
         with mock.patch("autoware_ml.transforms.image.image.np.random.uniform", return_value=0.5):
             distorted_images = self.distort(images, transform)
 
-        self.assertTrue(torch.allclose(distorted_images, images * 0.5, atol=1.0))
+        self.assertTrue(torch.allclose(distorted_images, images * 0.5, atol=1e-5))
 
     def test_contrast_stretches_around_mid_gray(self) -> None:
         """Test that the contrast factor moves gray levels away from mid-gray."""
-        # (191 - 127.5) * 2 + 127.5 = 254.5, which rounds up to the maximum.
-        images = solid_color_images((191.0, 191.0, 191.0))
+        # (0.75 - 0.5) * 2 + 0.5 = 1.0, the maximum.
+        images = solid_color_images((0.75, 0.75, 0.75))
         transform = PhotometricDistortion(probability=None, contrast=1.0)
 
         with mock.patch("autoware_ml.transforms.image.image.np.random.uniform", return_value=2.0):
             distorted_images = self.distort(images, transform)
 
-        self.assertTrue(torch.allclose(distorted_images, torch.full_like(images, 255.0), atol=1.0))
+        self.assertTrue(torch.allclose(distorted_images, torch.full_like(images, 1.0), atol=1e-5))
+
+    def test_contrast_clips_at_the_unit_range(self) -> None:
+        """Test that a contrast stretch past the range saturates at one."""
+        images = solid_color_images((0.9, 0.9, 0.9))
+        transform = PhotometricDistortion(probability=None, contrast=1.0)
+
+        with mock.patch("autoware_ml.transforms.image.image.np.random.uniform", return_value=2.0):
+            distorted_images = self.distort(images, transform)
+
+        self.assertTrue(torch.allclose(distorted_images, torch.full_like(images, 1.0), atol=1e-5))
 
     def test_saturation_leaves_gray_untouched_and_desaturates_colors(self) -> None:
         """Test that the saturation factor has no effect on gray and pulls colors towards it."""
         transform = PhotometricDistortion(probability=None, saturation=1.0)
-        gray_images = solid_color_images((100.0, 100.0, 100.0))
-        red_images = solid_color_images((255.0, 0.0, 0.0))
+        gray_images = solid_color_images((0.4, 0.4, 0.4))
+        red_images = solid_color_images((1.0, 0.0, 0.0))
 
         with mock.patch("autoware_ml.transforms.image.image.np.random.uniform", return_value=0.0):
             distorted_gray_images = self.distort(gray_images, transform)
             distorted_red_images = self.distort(red_images, transform)
 
-        self.assertTrue(torch.equal(distorted_gray_images, gray_images))
+        self.assertTrue(torch.allclose(distorted_gray_images, gray_images, atol=1e-5))
         # A fully desaturated red keeps its value, hence becomes white.
-        self.assertTrue(torch.equal(distorted_red_images, torch.full_like(red_images, 255.0)))
+        self.assertTrue(
+            torch.allclose(distorted_red_images, torch.full_like(red_images, 1.0), atol=1e-5)
+        )
 
     def test_hue_shift_rotates_the_colors(self) -> None:
         """Test that a third-of-a-turn hue shift maps red onto green in RGB order."""
-        red_images = solid_color_images((255.0, 0.0, 0.0))
+        red_images = solid_color_images((1.0, 0.0, 0.0))
         transform = PhotometricDistortion(probability=None, hue=0.5)
 
-        # The sampled deviation is scaled by 179, so 60 / 179 lands on OpenCV's green hue of 60.
+        # The sampled deviation is a fraction of the hue circle, a third lands on green.
         with mock.patch(
-            "autoware_ml.transforms.image.image.np.random.uniform", return_value=60.0 / 179.0
+            "autoware_ml.transforms.image.image.np.random.uniform", return_value=1.0 / 3.0
         ):
             distorted_images = self.distort(red_images, transform)
 
         self.assertTrue(
-            torch.allclose(distorted_images, solid_color_images((0.0, 255.0, 0.0)), atol=1.0)
+            torch.allclose(distorted_images, solid_color_images((0.0, 1.0, 0.0)), atol=1e-5)
         )
 
-    def test_same_distortion_for_every_camera(self) -> None:
-        """Test that identical camera images are distorted identically."""
+    def test_every_camera_draws_its_own_distortion(self) -> None:
+        """Test that identical camera images are distorted independently."""
         images = self.build_random_images(num_cameras=1).repeat(3, 1, 1, 1)
         transform = PhotometricDistortion(
             probability=None, brightness=0.5, contrast=0.5, saturation=0.5, hue=0.2
@@ -239,8 +225,8 @@ class TestPhotometricDistortion(unittest.TestCase):
 
         distorted_images = self.distort(images, transform)
 
-        self.assertTrue(torch.equal(distorted_images[1], distorted_images[0]))
-        self.assertTrue(torch.equal(distorted_images[2], distorted_images[0]))
+        self.assertFalse(torch.equal(distorted_images[1], distorted_images[0]))
+        self.assertFalse(torch.equal(distorted_images[2], distorted_images[0]))
 
     def test_geometry_preserved(self) -> None:
         """Test that every non-pixel field of the camera data is carried over unchanged."""

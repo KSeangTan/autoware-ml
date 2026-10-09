@@ -1,4 +1,4 @@
-from abc import ABC
+from abc import ABC, abstractmethod
 from pathlib import Path
 
 import polars as pl
@@ -12,29 +12,25 @@ class BaseDatasetTask(ABC):
     implemented when retrieving data.
     """
 
-    def __init__(
-        self, database_root_path: str, dataset_records_dataframe: pl.DataFrame | None
-    ) -> None:
+    def __init__(self, database_root_path: str, dataset_records_dataframe: pl.DataFrame) -> None:
         """
         Initialize the dataset task.
         """
         self.database_root_path = Path(database_root_path)
-        self.dataset_records_dataframe = self.pre_filter_dataset_records(dataset_records_dataframe)
+        self.dataset_records_dataframe = self.select_columns(dataset_records_dataframe)
 
-    def pre_filter_dataset_records(
-        self, dataset_records_dataframe: pl.DataFrame | None
-    ) -> pl.DataFrame | None:
+    @abstractmethod
+    def select_columns(self, dataset_records_dataframe: pl.DataFrame) -> pl.DataFrame:
         """
-        Pre-filter the dataset records dataframe for the specific task.
-          For example, if the task is 3D detection, the dataset records dataframe can be
-          filtered to only include columns related to 3D bounding boxes.
+        Keep the columns of the records the task reads.
 
         Args:
-          dataset_records_dataframe: Polars DataFrame of dataset records to be filtered.
+          dataset_records_dataframe: Records of the corpus.
+
+        Returns:
+          pl.DataFrame: The records with the columns of the task.
         """
-        if dataset_records_dataframe is None:
-            return None
-        return dataset_records_dataframe
+        raise NotImplementedError
 
     def __str__(self) -> str:
         """

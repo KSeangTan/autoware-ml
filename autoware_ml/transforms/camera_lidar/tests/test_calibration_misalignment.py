@@ -49,7 +49,7 @@ def _build_sample(num_cameras: int) -> ModelGTSample:
 
     camera_image_data = BaseImages(
         images=torch.ones((num_cameras, 3, 8, 12), dtype=torch.float32),
-        timestamps=torch.zeros(num_cameras, dtype=torch.float32),
+        timestamps=torch.zeros(num_cameras, dtype=torch.float64),
         camera_intrinsics=camera_intrinsics,
         camera_names=[f"camera{index}" for index in range(num_cameras)],
         lidar2images=homogeneous_intrinsics @ lidar2cams,

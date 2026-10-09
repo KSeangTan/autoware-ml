@@ -23,11 +23,9 @@ from types import MappingProxyType
 import polars as pl
 
 from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
-from autoware_ml.databases.database_task_config import DatabaseTaskConfig
 from autoware_ml.databases.scenarios import Scenarios, ScenarioData
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord, DatasetTableSchema
-from autoware_ml.types.tasks import TaskType
-
+from autoware_ml.databases.taxonomy import DatabaseTaxonomy
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +40,10 @@ class BaseDatabase:
         cache_path: str,
         cache_file_prefix_name: str,
         num_workers: int,
-        database_task_configs: MappingProxyType[TaskType | str, DatabaseTaskConfig],
+        taxonomy: DatabaseTaxonomy,
         box3d_pipelines: Sequence[Box3DPipeline],
+        lidar_intensity_scale: float,
+        lidar_pointcloud_num_features: int,
     ) -> None:
         """
         Initialize BaseDatabase.
@@ -54,26 +54,32 @@ class BaseDatabase:
           cache_path: Path to cache the database records.
           cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<database_hash>.parquet
           num_workers: Number of workers to use for processing the database.
-          database_task_configs: Task configuration for every task the database serves, mapped by
-            task type. Hydra composes the keys as strings (the TaskType values), so string keys
-            are converted to TaskType here.
+          taxonomy: Taxonomies the database labels are built with.
           box3d_pipelines: List of box 3D pipelines to process the box 3D annotations.
+          lidar_intensity_scale: Intensity value of the strongest return in the stored point
+            clouds. Loaded intensity is divided by it, so every model reads it in [0, 1].
+          lidar_pointcloud_num_features: Number of float32 values per point in the stored point
+            clouds. The first three are x, y and z.
         """
 
+        if lidar_intensity_scale <= 0.0:
+            raise ValueError(
+                f"lidar_intensity_scale must be positive, got {lidar_intensity_scale}."
+            )
+        if lidar_pointcloud_num_features < 3:
+            raise ValueError(
+                "lidar_pointcloud_num_features must be at least 3, got "
+                f"{lidar_pointcloud_num_features}."
+            )
         self._version = version
         self._root_path = Path(root_path)
         self._cache_path = Path(cache_path)
         self._cache_file_prefix_name = cache_file_prefix_name
         self._num_workers = num_workers
-        self._database_task_configs: MappingProxyType[TaskType, DatabaseTaskConfig] = (
-            MappingProxyType(
-                {
-                    TaskType(key) if isinstance(key, str) else key: value
-                    for key, value in database_task_configs.items()
-                }
-            )
-        )
+        self._taxonomy = taxonomy
         self._box3d_pipelines = box3d_pipelines
+        self._lidar_intensity_scale = lidar_intensity_scale
+        self._lidar_pointcloud_num_features = lidar_pointcloud_num_features
 
         # Create cache output path if it doesn't exist
         self._cache_path.mkdir(parents=True, exist_ok=True)
@@ -82,7 +88,7 @@ class BaseDatabase:
             f"root path: {self._root_path}, "
             f"cache path: {self._cache_path}, "
             f"cache file prefix name: {self._cache_file_prefix_name}, "
-            f"database task config: {self._database_task_configs}, "
+            f"taxonomy: {self._taxonomy}, "
             f"box3d pipelines: [{', '.join([str(pipeline) for pipeline in self._box3d_pipelines])}]"
         )
 
@@ -119,6 +125,17 @@ class BaseDatabase:
         return hash(str(self))
 
     @property
+    def taxonomy(self) -> DatabaseTaxonomy:
+        """
+        Get the taxonomies the database labels are built with.
+
+        Returns:
+          DatabaseTaxonomy: Taxonomies of the database.
+        """
+
+        return self._taxonomy
+
+    @property
     def scenarios_string_repr(self) -> str:
         """
         Get string representation of the scenarios.
@@ -134,14 +151,15 @@ class BaseDatabase:
         return string
 
     @property
-    def database_task_configs(self) -> MappingProxyType[TaskType, DatabaseTaskConfig]:
+    def root_path(self) -> Path:
         """
-        Get the database task configuration.
+        Get the root path the annotation files of the database live under.
 
         Returns:
-          MappingProxyType[TaskType, DatabaseTaskConfig]: Database task configuration.
+          Path: Root path of the database.
         """
-        return self._database_task_configs
+
+        return self._root_path
 
     @property
     def version(self) -> str:
@@ -190,18 +208,25 @@ class BaseDatabase:
             f"{scenario_group}: {scenarios.hash_repr}"
             for scenario_group, scenarios in self.scenarios.items()
         )
-        database_task_configs_repr = ", ".join(
-            f"{task_type.value}: {task_config.hash_repr}"
-            for task_type, task_config in self._database_task_configs.items()
-        )
         return (
             f"{type(self).__name__}("
             f"version={self._version}, "
-            f"database_task_configs={database_task_configs_repr}, "
+            f"taxonomy={self._taxonomy}, "
             f"box3d_pipelines=[{box3d_pipelines}], "
             f"scenarios=({scenarios})"
             f")"
         )
+
+    @property
+    def lidar_intensity_scale(self) -> float:
+        """
+        Get the intensity value of the strongest return in the stored point clouds.
+
+        Returns:
+          float: Full scale intensity of the database.
+        """
+
+        return self._lidar_intensity_scale
 
     @property
     def database_hash(self) -> str:

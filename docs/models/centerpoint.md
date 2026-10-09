@@ -87,17 +87,19 @@ Exports land in `mlruns/<config_name>/<run_id>/artifacts/exports/` of a dedicate
 
 ## Implementation
 
-| Path                                                                      | Description                |
-| ------------------------------------------------------------------------- | -------------------------- |
-| `autoware_ml/models/detection3d/main_modules/centerpoint.py`              | CenterPoint model wrapper  |
-| `autoware_ml/models/detection3d/encoders/pillars/pillar_feature_net.py`   | Pillar feature encoder     |
-| `autoware_ml/models/detection3d/encoders/pillars/point_pillar_scatter.py` | Pillar-to-BEV scatter      |
-| `autoware_ml/models/detection3d/backbones/second.py`                      | SECOND backbone            |
-| `autoware_ml/models/detection3d/necks/second_fpn.py`                      | SECONDFPN neck             |
-| `autoware_ml/models/detection3d/heads/centerhead.py`                      | CenterPoint detection head |
-| `autoware_ml/preprocessing/detection3d/point_pillar_preprocessor.py`      | Pillar voxelization        |
-| `autoware_ml/datamodule/t4dataset/detection3d.py`                         | T4Dataset detection task   |
-| `autoware_ml/configs/experiments/detection3d/centerpoint/`                | Experiment configurations  |
+| Path                                                    | Description                                      |
+| ------------------------------------------------------- | ------------------------------------------------ |
+| `autoware_ml/models/detection3d/centerpoint.py`         | CenterPoint model wrapper                        |
+| `autoware_ml/models/detection3d/encoders/pillar.py`     | Pillar encoder and scatter                       |
+| `autoware_ml/models/detection3d/backbones/second.py`    | SECOND backbone                                  |
+| `autoware_ml/models/detection3d/necks/second_fpn.py`    | SECONDFPN neck                                   |
+| `autoware_ml/models/detection3d/heads/centerpoint.py`   | CenterPoint detection head                       |
+| `autoware_ml/preprocessing/detection3d/point_pillar.py` | Pillar preprocessing                             |
+| `autoware_ml/datamodule/t4dataset/dataset.py`           | T4Dataset records as a dataset                   |
+| `autoware_ml/datamodule/nuscenes/dataset.py`            | nuScenes dataset                                 |
+| `autoware_ml/datamodule/detection3d.py`                 | 3D boxes of a record                             |
+| `autoware_ml/configs/datamodule/`                       | Datamodule, dataset and transform configurations |
+| `autoware_ml/configs/tasks/detection3d/centerpoint/`    | Task configurations                              |
 
 ## Acknowledgment
 

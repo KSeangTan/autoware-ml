@@ -41,7 +41,7 @@ from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.metrics.base import MetricSuite
-from autoware_ml.metrics.detection3d.eval_output import multi_task_eval_output
+from autoware_ml.metrics.detection3d.eval_output import detection_eval_output
 from autoware_ml.models.detection3d.main_modules.bevfusions.bevfusion_lidar import (
     BEVFusionLidar,
 )
@@ -99,20 +99,25 @@ class _BEVFusionExportWrapperBase(nn.Module):
         """
         voxels_data = VoxelsData(
             voxels=voxels,
-            coords=coors,
+            # ``VoxelsData`` stores ``(x, y, z)``, the runtime hands ``(z, y, x)``
+            coords=coors[:, [2, 1, 0]],
             num_points=num_points_per_voxel,
             batch_indices=torch.zeros(coors.shape[0], dtype=torch.int32, device=coors.device),
+            point_voxel_indices=torch.zeros((0,), dtype=torch.int64, device=coors.device),
+            num_dropped_voxels=torch.zeros((), dtype=torch.int64, device=coors.device),
         )
         multi_task_gt_batch = ModelGTBatch(
             point_cloud_gt_batch=None,
             detection3d_gt_batch=None,
             image_gt_batch=None,
             io_processing_time=0.0,
+            segmentation3d_gt_batch=None,
         )
         return ModelBatchInputs(
             multi_task_gt_batch=multi_task_gt_batch,
             voxels_data=voxels_data,
             image_data=None,
+            range_view_data=None,
         )
 
 
@@ -294,9 +299,9 @@ class BEVFusionDetectionModel(ModuleBaseModel):
                 "ModelOutputs must contain detection3d_head_outputs for CenterPoint build_eval_output pass."
             )
 
-        return multi_task_eval_output(
-            multi_task_predictions=self.bbox_head.decode_outputs(outputs.detection3d_head_outputs),
-            multi_task_batch_inputs=batch,
+        return detection_eval_output(
+            predictions=self.bbox_head.decode_outputs(outputs.detection3d_head_outputs),
+            batch_inputs=batch,
         )
 
     def _forward_export(
@@ -397,7 +402,8 @@ class BEVFusionDetectionModel(ModuleBaseModel):
                 )
 
             assert batch_size is not None, "Batch size must be provided for lidar forward pass."
-            batch_coords = voxels_data.concat_batch_indices_coords()
+            # The sparse middle encoder consumes ``(batch, z, y, x)`` coordinates
+            batch_coords = voxels_data.batch_zyx_coords()
             other_bev_features = [image_bev] if image_bev is not None else None
             lidar_bev = self.lidar_network(
                 voxels=voxels_data.voxels,
@@ -458,7 +464,9 @@ class BEVFusionDetectionModel(ModuleBaseModel):
             ),
         )  # type: ignore[return-value]
 
-    def decode_outputs(self, outputs: ModelOutputs) -> ModelPredictions:
+    def decode_outputs(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    ) -> ModelPredictions:
         """Decode predictions for inference."""
         if outputs.detection3d_head_outputs is None:
             raise ValueError(
@@ -611,6 +619,7 @@ class BEVFusionDetectionModel(ModuleBaseModel):
             )
         first_sample = voxels_data.batch_indices == 0
         voxels = voxels_data.voxels[first_sample].float()
-        coors = voxels_data.coords[first_sample].int().contiguous()
+        # Autoware feeds the voxel coordinates in ``(z, y, x)`` order
+        coors = voxels_data.coords[first_sample][:, [2, 1, 0]].int().contiguous()
         num_points_per_voxel = voxels_data.num_points[first_sample].int()
         return voxels, coors, num_points_per_voxel

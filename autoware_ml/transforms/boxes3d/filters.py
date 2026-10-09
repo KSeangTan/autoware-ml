@@ -1,125 +1,38 @@
-# Copyright 2026 TIER IV, Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """
-Bboxes 3d transforms for filtering bboxes (for example, label name filter).
-The code is modified based on https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/datasets/transforms/transforms_3d.py.
+Filters of the 3D bounding boxes of a sample, by class, attribute, range and point count.
+The code is modified based on
+https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/datasets/transforms/transforms_3d.py.
 """
 
-from typing import Mapping, Sequence, Tuple
+from collections.abc import Sequence
 
 import torch
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
-from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.geometry.points.base_points import BasePoints
+from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.transforms.base import BaseTransform
 
 
-class BBoxesLabelNameFilter(BaseTransform):
-    """Filter 3D bounding boxes by label names."""
-
-    _required_keys = ["detection3d_gt_bboxes_3d"]
-
-    def __init__(self, label_names_to_keep: Sequence[str]) -> None:
-        """Initialize the BBoxesLabelNameFilter transform."""
-        super().__init__(probability=None)
-        self.label_names_to_keep = label_names_to_keep
-
-    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Filter 3D bounding boxes by label names."""
-        # This is checked in the _validate_required_keys()
-        detection3d_gt_bboxes_3d: BaseBBoxes3D = multi_task_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
-        if not len(detection3d_gt_bboxes_3d):
-            return multi_task_gt_sample
-
-        bboxes_to_keep_mask = torch.tensor(
-            [
-                True if label_name in self.label_names_to_keep else False
-                for label_name in detection3d_gt_bboxes_3d.bbox_label_names
-            ],
-            dtype=torch.bool,
-        )
-
-        # TODO(Kok Seang): Consider to make it immutable and return a new instance
-        # instead of modifying in place.
-        detection3d_gt_bboxes_3d.remove_bboxes(bboxes_to_keep_mask)
-        return multi_task_gt_sample
-
-
-class BBoxesAttributeFilter(BaseTransform):
-    """Filter out 3D bounding boxes by their attributes, on a per label name basis.
-
-    For example, the following configuration removes every parked or stopped vehicle, and every
-    sitting pedestrian, while every other bounding box is kept:
-
-    .. code-block:: python
-
-        BBoxesAttributeFilter(
-            attributes_to_filter={
-                "vehicle": ["vehicle_state.parked", "vehicle_state.stopped"],
-                "pedestrian": ["pedestrian_state.sitting"],
-            }
-        )
+def parse_exclusion_rules(rules: Sequence[Sequence[str]]) -> frozenset[tuple[str, str]]:
     """
+    Read box exclusion rules as class and attribute pairs.
 
-    _required_keys = ["detection3d_gt_bboxes_3d"]
+    Args:
+      rules: Exclusion rules, each a [class_name, attribute] pair.
 
-    def __init__(self, attributes_to_filter: Mapping[str, Sequence[str]]) -> None:
-        """
-        Initialize the BBoxesAttributeFilter transform.
+    Returns:
+      frozenset[tuple[str, str]]: The rules as (class_name, attribute) pairs.
 
-        Args:
-            attributes_to_filter (Mapping[str, Sequence[str]]): Mapping from a bbox label name to
-                the attributes to filter out for that label name. A bounding box is removed when
-                its label name is in the mapping and it carries at least one of the attributes
-                listed for that label name. Label names that are absent from the mapping are
-                left untouched.
-        """
-        super().__init__(probability=None)
-        self.attributes_to_filter = {
-            label_name: set(attributes) for label_name, attributes in attributes_to_filter.items()
-        }
-
-    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Filter out 3D bounding boxes carrying the configured attributes."""
-        # This is checked in the _validate_required_keys()
-        detection3d_gt_bboxes_3d: BaseBBoxes3D = multi_task_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
-        if not len(detection3d_gt_bboxes_3d):
-            return multi_task_gt_sample
-
-        bbox_attributes = detection3d_gt_bboxes_3d.bbox_attributes
-        if bbox_attributes is None:
+    Raises:
+      ValueError: If a rule is not a pair.
+    """
+    for index, rule in enumerate(rules):
+        if isinstance(rule, str) or len(rule) != 2:
             raise ValueError(
-                f"{self.__class__.__name__}: The 3D bounding boxes do not carry any attribute, "
-                "therefore they cannot be filtered by attributes."
+                f"Exclusion rule {index} must be a [class_name, attribute] pair, got {rule!r}."
             )
-
-        bboxes_to_keep_mask = torch.tensor(
-            [
-                not self.attributes_to_filter.get(label_name, set()).intersection(attributes)
-                for label_name, attributes in zip(
-                    detection3d_gt_bboxes_3d.bbox_label_names, bbox_attributes
-                )
-            ],
-            dtype=torch.bool,
-        )
-
-        # TODO(Kok Seang): Consider to make it immutable and return a new instance
-        # instead of modifying in place.
-        detection3d_gt_bboxes_3d.remove_bboxes(bboxes_to_keep_mask)
-        return multi_task_gt_sample
+    return frozenset((str(rule[0]), str(rule[1])) for rule in rules)
 
 
 class BBoxesMinPointsFilter(BaseTransform):
@@ -130,75 +43,173 @@ class BBoxesMinPointsFilter(BaseTransform):
     def __init__(
         self,
         min_points: int,
-        bev_range: Tuple[float, float, float, float],
+        bev_range: Sequence[float],
     ) -> None:
         """
         Initialize the BBoxesMinPointsFilter transform.
 
         Args:
-            min_points (int): The minimum number of points required for a bounding box to be kept.
-            bev_range (Tuple[float, float, float, float]): The distance ([x_min, y_min, x_max, y_max]) of bounding boxes
-                to apply the minimum number of points filtering.
+            min_points (int): The minimum number of points required for a bounding box to be
+                kept.
+            bev_range (Sequence[float]): The BEV range ([x_min, y_min, x_max, y_max]) of the
+                bounding boxes the minimum number of points applies to.
         """
         super().__init__(probability=None)
         self.min_points = min_points
         self.bev_range = torch.tensor(bev_range, dtype=torch.float32)
 
-    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Filter 3D bounding boxes by label names."""
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Drop the boxes in range that hold fewer than ``min_points`` points."""
         # This is checked in the _validate_required_keys()
-        detection3d_gt_bboxes_3d: BaseBBoxes3D = multi_task_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
+        detection3d_gt_bboxes_3d: BaseBBoxes3D = (
+            model_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
+        )
         if not len(detection3d_gt_bboxes_3d):
-            return multi_task_gt_sample
+            return model_gt_sample
 
         # This is checked in the _validate_required_keys()
-        point_cloud_data: BasePoints = multi_task_gt_sample.point_cloud_data  # type: ignore[reportOptionalMemberAccess]
+        point_cloud_data: BasePoints = (
+            model_gt_sample.point_cloud_data  # type: ignore[reportOptionalMemberAccess]
+        )
 
-        distance_in_range_masks = detection3d_gt_bboxes_3d.in_range_bev(self.bev_range)
+        in_range = detection3d_gt_bboxes_3d.in_range_bev(self.bev_range)
         points_in_bboxes = detection3d_gt_bboxes_3d.compute_points_in_bboxes(
             points=point_cloud_data.coords,
         )
 
-        # Filter bboxes that are either within the specified distance range and
-        # have at least `min_points` points,
-        # or are outside the distance range (to keep them).
-        keep_bboxes_mask = (
-            points_in_bboxes.sum(dim=1) >= self.min_points
-        ) & distance_in_range_masks | (~distance_in_range_masks)
+        # Boxes outside the range are kept whatever their point count
+        keep_bboxes_mask = (points_in_bboxes.sum(dim=1) >= self.min_points) | ~in_range
         detection3d_gt_bboxes_3d.remove_bboxes(keep_bboxes_mask)
-        return multi_task_gt_sample
+        return model_gt_sample
 
 
-class BBoxesBEVDistanceFilter(BaseTransform):
-    """Filter 3D bounding boxes by their bev distance."""
+class BBoxesRangeFilter(BaseTransform):
+    """Filter 3D bounding boxes whose center lies outside the point cloud range."""
 
     _required_keys = ["detection3d_gt_bboxes_3d"]
 
     def __init__(
         self,
-        bev_range: Tuple[float, float, float, float],
+        point_cloud_range: Sequence[float],
     ) -> None:
         """
-        Initialize the BBoxesBEVDistanceFilter transform.
+        Initialize the BBoxesRangeFilter transform.
 
         Args:
-            bev_range (Tuple[float]): The distance ([x_min, y_min, x_max, y_max]) of bounding boxes
-                to apply the BEV distance filtering.
+            point_cloud_range (Sequence[float]): The range ([x_min, y_min, z_min, x_max, y_max,
+                z_max]) the bounding box centers have to lie in.
         """
         super().__init__(probability=None)
-        self.bev_range = torch.tensor(bev_range, dtype=torch.float32)
+        self.point_cloud_range = torch.tensor(point_cloud_range, dtype=torch.float32)
 
-    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Filter 3D bounding boxes by BEV distance."""
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Drop the boxes whose center lies outside the point cloud range."""
         # This is checked in the _validate_required_keys()
-        detection3d_gt_bboxes_3d: BaseBBoxes3D = multi_task_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
+        detection3d_gt_bboxes_3d: BaseBBoxes3D = (
+            model_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
+        )
         if not len(detection3d_gt_bboxes_3d):
-            return multi_task_gt_sample
+            return model_gt_sample
 
-        distance_in_range_masks = detection3d_gt_bboxes_3d.in_range_bev(self.bev_range)
-        detection3d_gt_bboxes_3d.remove_bboxes(distance_in_range_masks)
+        in_range_masks = detection3d_gt_bboxes_3d.in_range_3d(self.point_cloud_range)
+        detection3d_gt_bboxes_3d.remove_bboxes(in_range_masks)
 
-        return multi_task_gt_sample
+        return model_gt_sample
+
+
+class BBoxesLabelNameFilter(BaseTransform):
+    """Filter 3D bounding boxes by the name of the class they are mapped to.
+
+    A box keeps the label name it was annotated with, which can be finer than the class it
+    trains as (an ambulance trains as a car). The class is read from the label index of the
+    box, so a box is kept when its class is one of the kept names, whatever its own name.
+    """
+
+    _required_keys = ["detection3d_gt_bboxes_3d"]
+
+    def __init__(self, label_names_to_keep: Sequence[str], class_names: Sequence[str]) -> None:
+        """Initialize the BBoxesLabelNameFilter transform.
+
+        Args:
+            label_names_to_keep: Names of the classes whose boxes are kept.
+            class_names: Class names in label index order.
+        """
+        super().__init__(probability=None)
+        unknown = sorted(set(label_names_to_keep) - set(class_names))
+        if unknown:
+            raise ValueError(f"label_names_to_keep names classes that do not exist: {unknown}.")
+        self.label_indices_to_keep = torch.tensor(
+            [index for index, name in enumerate(class_names) if name in label_names_to_keep],
+            dtype=torch.int64,
+        )
+
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Filter 3D bounding boxes by the class of their label index."""
+        # This is checked in the _validate_required_keys()
+        detection3d_gt_bboxes_3d: BaseBBoxes3D = (
+            model_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
+        )
+        if not len(detection3d_gt_bboxes_3d):
+            return model_gt_sample
+
+        labels = detection3d_gt_bboxes_3d.bbox_labels.to(torch.int64)
+        bboxes_to_keep_mask = torch.isin(labels, self.label_indices_to_keep.to(labels.device))
+
+        # TODO(Kok Seang): Consider to make it immutable and return a new instance
+        # instead of modifying in place.
+        detection3d_gt_bboxes_3d.remove_bboxes(bboxes_to_keep_mask)
+        return model_gt_sample
+
+
+class BBoxesAttributeFilter(BaseTransform):
+    """
+    Drop the 3D bounding boxes whose class and attributes match an exclusion rule.
+
+    Some annotated objects are not detection targets, for example a parked bicycle or a
+    motorcycle without a rider. A rule names a class and an attribute. Boxes of that class with
+    that attribute are removed, so they are neither trained on nor scored.
+    """
+
+    _required_keys = ["detection3d_gt_bboxes_3d"]
+
+    def __init__(self, filter_attributes: Sequence[Sequence[str]]) -> None:
+        """
+        Initialize the BBoxesAttributeFilter transform.
+
+        Args:
+          filter_attributes: Exclusion rules, each a pair of class name and attribute name.
+        """
+        super().__init__(probability=None)
+        self.filter_attributes = parse_exclusion_rules(filter_attributes)
+
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Drop the boxes matching an exclusion rule."""
+        # This is checked in the _validate_required_keys()
+        detection3d_gt_bboxes_3d: BaseBBoxes3D = (
+            model_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
+        )
+        if not len(detection3d_gt_bboxes_3d) or not self.filter_attributes:
+            return model_gt_sample
+
+        bbox_attributes = detection3d_gt_bboxes_3d.bbox_attributes
+        if bbox_attributes is None:
+            raise ValueError(
+                "The attribute filter needs the attributes of every box, the dataset served none."
+            )
+
+        bboxes_to_keep_mask = torch.tensor(
+            [
+                not any(
+                    (label_name, attribute) in self.filter_attributes for attribute in attributes
+                )
+                for label_name, attributes in zip(
+                    detection3d_gt_bboxes_3d.bbox_label_names, bbox_attributes, strict=True
+                )
+            ],
+            dtype=torch.bool,
+        )
+        detection3d_gt_bboxes_3d.remove_bboxes(bboxes_to_keep_mask)
+        return model_gt_sample
 
 
 class BBoxesPhysicalFilter(BaseTransform):
@@ -230,12 +241,12 @@ class BBoxesPhysicalFilter(BaseTransform):
         super().__init__(probability=None)
         self.max_absolute_speed = max_absolute_speed
 
-    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Remove non-physical 3D bounding boxes."""
         # This is checked in the _validate_required_keys()
-        detection3d_gt_bboxes_3d: BaseBBoxes3D = multi_task_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
+        detection3d_gt_bboxes_3d: BaseBBoxes3D = model_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
         if not len(detection3d_gt_bboxes_3d):
-            return multi_task_gt_sample
+            return model_gt_sample
 
         is_finite_mask = torch.isfinite(detection3d_gt_bboxes_3d.bbox_params).all(dim=1)
         has_positive_dims_mask = (detection3d_gt_bboxes_3d.dims > 0.0).all(dim=1)
@@ -250,4 +261,4 @@ class BBoxesPhysicalFilter(BaseTransform):
         # TODO(Kok Seang): Consider to make it immutable and return a new instance
         # instead of modifying in place.
         detection3d_gt_bboxes_3d.remove_bboxes(keep_bboxes_mask)
-        return multi_task_gt_sample
+        return model_gt_sample

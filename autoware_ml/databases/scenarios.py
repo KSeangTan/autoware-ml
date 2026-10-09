@@ -17,7 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Sequence, Mapping, Annotated
 
-from pydantic import BaseModel, ConfigDict, BeforeValidator, model_validator
+from pydantic import BaseModel, ConfigDict, BeforeValidator, Field, model_validator
 
 from autoware_ml.types.dataset import SplitType
 
@@ -55,15 +55,21 @@ class DatasetParams(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True)
 
     dataset_name: str
-    sample_steps: int
+    sample_steps: int = Field(ge=1)
 
     def __str__(self) -> str:
         """String representation of the database version."""
-        return f"DatasetParams(dataset_name={self.dataset_name}, sample_steps={self.sample_steps})"
+        return (
+            f"DatasetParams(dataset_name={self.dataset_name}, "
+            f"sample_steps={self.sample_steps})"
+        )
 
     def __eq__(self, other: DatasetParams) -> bool:
         """Compare two database versions by their version and settings."""
-        return self.dataset_name == other.dataset_name and self.sample_steps == other.sample_steps
+        return (
+            self.dataset_name == other.dataset_name
+            and self.sample_steps == other.sample_steps
+        )
 
     def __hash__(self) -> int:
         """Hash the database version by its version and settings."""
@@ -77,10 +83,9 @@ class ScenarioData(BaseModel):
     in the scenario.
 
     Attributes:
-      dataset_name: Name of the dataset.
+      dataset_params: Parameters of the dataset the scenario belongs to.
       scenario_id: ID of the scenario.
       scenario_version: Version of the scenario.
-      sample_steps: Number of steps to sample.
       vehicle_type: Type of the vehicle.
       location: Location of the scenario.
       traffic_cone_barrier_bbox_status: Temporarly boolean value to mention if traffic_cone/barriers
@@ -90,10 +95,9 @@ class ScenarioData(BaseModel):
     # Set model config to frozen and strict
     model_config = ConfigDict(frozen=True, strict=True)
 
-    dataset_name: str
+    dataset_params: DatasetParams
     scenario_id: str
     scenario_version: str
-    sample_steps: int
     vehicle_type: str | None = None
     location: str | None = None
     # This is a temporary fix for T4Dataset
@@ -108,10 +112,9 @@ class ScenarioData(BaseModel):
         """
 
         return (
-            f"ScenarioData(dataset_name={self.dataset_name}, "
+            f"ScenarioData(dataset_params={self.dataset_params}, "
             f"scenario_id={self.scenario_id}, "
             f"scenario_version={self.scenario_version}, "
-            f"sample_steps={self.sample_steps}, "
             f"vehicle_type={self.vehicle_type}, "
             f"location={self.location})"
         )
@@ -125,10 +128,9 @@ class ScenarioData(BaseModel):
         """
 
         return (
-            self.dataset_name == other.dataset_name
+            self.dataset_params == other.dataset_params
             and self.scenario_id == other.scenario_id
             and self.scenario_version == other.scenario_version
-            and self.sample_steps == other.sample_steps
             and self.vehicle_type == other.vehicle_type
             and self.location == other.location
             and self.traffic_cone_barrier_bbox_status == other.traffic_cone_barrier_bbox_status

@@ -79,20 +79,20 @@ class _ExportDetectionOutputsTestCase(unittest.TestCase):
         """
         num_queries = num_decoder_layers * self.num_proposals
         separate_head_outputs = TransFusionSeparateHeadOutputs(
-            heatmaps=torch.randn(batch_size, self.num_classes, num_queries, device=self.device),
-            centers=torch.randn(batch_size, 2, num_queries, device=self.device),
-            heights=torch.randn(batch_size, 1, num_queries, device=self.device),
-            dims=torch.randn(batch_size, 3, num_queries, device=self.device),
-            rots=torch.randn(batch_size, 2, num_queries, device=self.device),
-            vels=torch.randn(batch_size, 2, num_queries, device=self.device)
+            heatmap=torch.randn(batch_size, self.num_classes, num_queries, device=self.device),
+            center=torch.randn(batch_size, 2, num_queries, device=self.device),
+            height=torch.randn(batch_size, 1, num_queries, device=self.device),
+            dim=torch.randn(batch_size, 3, num_queries, device=self.device),
+            rot=torch.randn(batch_size, 2, num_queries, device=self.device),
+            vel=torch.randn(batch_size, 2, num_queries, device=self.device)
             if with_velocity
             else None,
         )
         return TransFusionHeadOutputs(
-            dense_heatmaps=torch.randn(
+            dense_heatmap=torch.randn(
                 batch_size, self.num_classes, *heatmap_size, device=self.device
             ),
-            query_heatmap_scores=torch.rand(
+            query_heatmap_score=torch.rand(
                 batch_size, self.num_classes, self.num_proposals, device=self.device
             ),
             query_labels=torch.randint(
@@ -105,14 +105,14 @@ class _ExportDetectionOutputsTestCase(unittest.TestCase):
         self, separate_head_outputs: TransFusionSeparateHeadOutputs
     ) -> Float32[torch.Tensor, "num_box_channels num_proposals"]:
         """Stack the last-layer regression channels of sample 0 in the runtime order."""
-        assert separate_head_outputs.vels is not None
+        assert separate_head_outputs.vel is not None
         return torch.cat(
             [
-                separate_head_outputs.centers[0, :, -self.num_proposals :],
-                separate_head_outputs.heights[0, :, -self.num_proposals :],
-                separate_head_outputs.dims[0, :, -self.num_proposals :],
-                separate_head_outputs.rots[0, :, -self.num_proposals :],
-                separate_head_outputs.vels[0, :, -self.num_proposals :],
+                separate_head_outputs.center[0, :, -self.num_proposals :],
+                separate_head_outputs.height[0, :, -self.num_proposals :],
+                separate_head_outputs.dim[0, :, -self.num_proposals :],
+                separate_head_outputs.rot[0, :, -self.num_proposals :],
+                separate_head_outputs.vel[0, :, -self.num_proposals :],
             ],
             dim=0,
         )
@@ -122,8 +122,8 @@ class _ExportDetectionOutputsTestCase(unittest.TestCase):
     ) -> Float32[torch.Tensor, " num_proposals"]:
         """Score sample 0 as the predicted-class heatmap weighted by the query heatmap score."""
         class_scores = (
-            outputs.separate_head_outputs.heatmaps[0, :, -self.num_proposals :].sigmoid()
-            * outputs.query_heatmap_scores[0]
+            outputs.separate_head_outputs.heatmap[0, :, -self.num_proposals :].sigmoid()
+            * outputs.query_heatmap_score[0]
         )
         return class_scores.gather(0, outputs.query_labels[:1])[0]
 
@@ -264,7 +264,7 @@ class TestExportDetectionOutputsWithTransFusionHead(_ExportDetectionOutputsTestC
             bbox_pred, score, label_pred = export_detection_outputs(self.head, outputs)
 
         self.assertEqual(
-            outputs.separate_head_outputs.heatmaps.shape[-1],
+            outputs.separate_head_outputs.heatmap.shape[-1],
             self.num_decoder_layers * self.num_proposals,
         )
         self.assertEqual(bbox_pred.shape, (self.num_box_channels, self.num_proposals))

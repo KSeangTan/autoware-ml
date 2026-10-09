@@ -14,8 +14,9 @@ from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch, ModelGTSamp
 from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
-from autoware_ml.datamodule.base_data_module import BaseDataModule
-from autoware_ml.datamodule.base_dataset import BaseDataset
+from autoware_ml.datamodule.base_dataset import BaseDataset, ConcatDataset
+from autoware_ml.datamodule.data_module import DataModule
+from autoware_ml.datamodule.sources import DatasetSource
 from autoware_ml.geometry.points.lidar_points import LiDARPoints
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
@@ -30,7 +31,6 @@ class _Dataset(BaseDataset):
         super().__init__(
             database_root_path="/",
             max_num_3d_gt_bboxes=0,
-            split_type=SplitType.TRAIN,
             dataset_records_dataframe=pl.DataFrame({"index": list(range(num_samples))}),
             transforms=None,
         )
@@ -58,20 +58,31 @@ class _Dataset(BaseDataset):
         )
 
 
-def _datamodule(train_dataset: BaseDataset | None) -> BaseDataModule:
-    """Build a BaseDataModule around ``train_dataset``; the other collaborators are unused."""
-    return BaseDataModule(
-        database=SimpleNamespace(),  # type: ignore[arg-type]
+def _datamodule(train_dataset: BaseDataset | None) -> DataModule:
+    """Build a DataModule serving ``train_dataset`` as its set-up training split.
+
+    The source declares a test dataset so it is valid without a training one, and the
+    training split is bound directly instead of through ``setup``, which needs a database.
+    """
+    database = SimpleNamespace(root_path="/", taxonomy="taxonomy", version="v1", database_hash="h")
+    datamodule = DataModule(
         splitter=SimpleNamespace(),  # type: ignore[arg-type]
-        train_dataset=train_dataset,
-        validation_dataset=None,
-        test_dataset=None,
-        predict_dataset=None,
+        sources={
+            "main": DatasetSource(
+                database=database,  # type: ignore[arg-type]
+                train_dataset=train_dataset,
+                test_dataset=_Dataset(),
+            )
+        },
         train_dataloader=None,
         validation_dataloader=None,
         test_dataloader=None,
         predict_dataloader=None,
+        train_frame_sampling=None,
     )
+    if train_dataset is not None:
+        datamodule.datasets[SplitType.TRAIN] = ConcatDataset(datasets=[train_dataset], repeats=[1])
+    return datamodule
 
 
 class _Model(ModuleBaseModel):

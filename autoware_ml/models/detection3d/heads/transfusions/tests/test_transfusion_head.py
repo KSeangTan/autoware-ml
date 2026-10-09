@@ -376,24 +376,24 @@ class TestTransFusionHead(unittest.TestCase):
         num_queries = self.num_decoder_layers * self.num_proposals
 
         self.assertEqual(
-            outputs.dense_heatmaps.shape, (self.batch_size, self.num_classes, height, width)
+            outputs.dense_heatmap.shape, (self.batch_size, self.num_classes, height, width)
         )
         self.assertEqual(outputs.query_labels.shape, (self.batch_size, self.num_proposals))
         self.assertEqual(
-            outputs.query_heatmap_scores.shape,
+            outputs.query_heatmap_score.shape,
             (self.batch_size, self.num_classes, self.num_proposals),
         )
         self.assertEqual(
-            separate_head_outputs.heatmaps.shape,
+            separate_head_outputs.heatmap.shape,
             (self.batch_size, self.num_classes, num_queries),
         )
-        self.assertEqual(separate_head_outputs.centers.shape, (self.batch_size, 2, num_queries))
-        self.assertEqual(separate_head_outputs.heights.shape, (self.batch_size, 1, num_queries))
-        self.assertEqual(separate_head_outputs.dims.shape, (self.batch_size, 3, num_queries))
-        self.assertEqual(separate_head_outputs.rots.shape, (self.batch_size, 2, num_queries))
-        assert separate_head_outputs.vels is not None
-        self.assertEqual(separate_head_outputs.vels.shape, (self.batch_size, 2, num_queries))
-        self.assertTrue(torch.isfinite(separate_head_outputs.centers).all())
+        self.assertEqual(separate_head_outputs.center.shape, (self.batch_size, 2, num_queries))
+        self.assertEqual(separate_head_outputs.height.shape, (self.batch_size, 1, num_queries))
+        self.assertEqual(separate_head_outputs.dim.shape, (self.batch_size, 3, num_queries))
+        self.assertEqual(separate_head_outputs.rot.shape, (self.batch_size, 2, num_queries))
+        assert separate_head_outputs.vel is not None
+        self.assertEqual(separate_head_outputs.vel.shape, (self.batch_size, 2, num_queries))
+        self.assertTrue(torch.isfinite(separate_head_outputs.center).all())
 
     def test_forward_without_auxiliary_returns_only_the_last_layer(self) -> None:
         """
@@ -405,7 +405,7 @@ class TestTransFusionHead(unittest.TestCase):
         outputs = self._build_head_outputs(transfusion_head)
 
         self.assertEqual(
-            outputs.separate_head_outputs.heatmaps.shape,
+            outputs.separate_head_outputs.heatmap.shape,
             (self.batch_size, self.num_classes, self.num_proposals),
         )
 
@@ -423,7 +423,7 @@ class TestTransFusionHead(unittest.TestCase):
 
         outputs = self._build_head_outputs(transfusion_head)
 
-        self.assertIsNone(outputs.separate_head_outputs.vels)
+        self.assertIsNone(outputs.separate_head_outputs.vel)
 
     def test_build_dense_heatmap_targets_peaks_at_the_box_center(self) -> None:
         """
@@ -715,7 +715,7 @@ class TestTransFusionHead(unittest.TestCase):
         pedestrian_id = self.class_names.index("pedestrian")
         car_id = self.class_names.index("car")
         outputs = self._build_head_outputs(head)
-        outputs.dense_heatmaps.retain_grad()
+        outputs.dense_heatmap.retain_grad()
 
         losses = self._compute_losses(
             head,
@@ -726,7 +726,7 @@ class TestTransFusionHead(unittest.TestCase):
         assert isinstance(loss_heatmap, torch.Tensor)
         loss_heatmap.backward()
 
-        gradients = outputs.dense_heatmaps.grad
+        gradients = outputs.dense_heatmap.grad
         assert gradients is not None
         self.assertTrue(bool((gradients[1, pedestrian_id] == 0.0).all()))
         self.assertTrue(bool((gradients[0, pedestrian_id] != 0.0).any()))
@@ -754,7 +754,7 @@ class TestTransFusionHead(unittest.TestCase):
             gt_traffic_cone_barrier_bbox_status=unannotated,
         )
         expected = head.loss_heatmap(
-            outputs.dense_heatmaps[:, [car_id]], targets.dense_heatmaps[:, [car_id]]
+            outputs.dense_heatmap[:, [car_id]], targets.dense_heatmaps[:, [car_id]]
         )
 
         loss_heatmap = losses["loss_heatmap"]

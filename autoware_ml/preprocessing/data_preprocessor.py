@@ -1,9 +1,8 @@
 from typing import Sequence
 
-from torch import nn
-
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
+from autoware_ml.preprocessing.data_preprocessor_modules import DataPreprocessorModule 
 
 
 class DataPreprocessor:
@@ -16,29 +15,21 @@ class DataPreprocessor:
             on the input batch.
     """
 
-    def __init__(self, preprocessor_modules: Sequence[nn.Module]) -> None:
+    def __init__(self, preprocessor_modules: Sequence[DataPreprocessorModule]) -> None:
         self.preprocessor_modules = preprocessor_modules
 
-    def __call__(self, multi_task_gt_batch: ModelGTBatch, *, is_training: bool) -> ModelBatchInputs:
+    def __call__(self, batch: ModelGTBatch, *, is_training: bool) -> ModelBatchInputs:
         """Apply runtime preprocessing to the input batch.
 
         Args:
-            multi_task_gt_batch (ModelGTBatch): The input batch of data to be preprocessed.
+            batch (ModelGTBatch): The input batch of data to be preprocessed.
             is_training (bool): Set True if DataPreprocessor is run in the training mode.
 
         Returns:
             ModelBatchInputs: The batch of data after running the list of preprocessor_modules.
         """
-        # Build a ModelBatchInputs instance from the input batch
-        multi_task_batch_inputs = ModelBatchInputs(
-            multi_task_gt_batch=multi_task_gt_batch,
-            voxels_data=None,  # Placeholder for voxelization
-            # The collated image batch is passed through as-is, it is None for lidar-only models
-            image_data=multi_task_gt_batch.image_gt_batch,
-        )
-        for module in self.preprocessor_modules:
-            multi_task_batch_inputs = module(
-                multi_task_batch_inputs=multi_task_batch_inputs,
-                is_training=is_training,
-            )
-        return multi_task_batch_inputs
+        batch_inputs = ModelBatchInputs.from_gt_batch(batch)
+        for layer in self.preprocessor_modules:
+            batch_inputs = layer(batch_inputs, is_training=is_training)
+        return batch_inputs
+    

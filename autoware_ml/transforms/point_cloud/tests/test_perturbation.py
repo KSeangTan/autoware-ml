@@ -20,7 +20,7 @@ import torch
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.points.lidar_points import LiDARPoints
-from autoware_ml.transforms.point_cloud.perturbation import PointsRandomShuffle
+from autoware_ml.transforms.point_cloud.geometry import PointsRandomShuffle
 from autoware_ml.types.geometry import PointFeatureName
 
 

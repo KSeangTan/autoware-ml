@@ -104,56 +104,56 @@ class TestCenterHead(unittest.TestCase):
         dummy_input_features = torch.zeros((1, 384, 4, 4), device=self.device, dtype=torch.float32)
         outputs = self.center_head(dummy_input_features)
 
-        self.assertEqual(outputs.heatmaps.shape, (1, 2, 4, 4))
-        self.assertEqual(outputs.centers.shape, (1, 2, 4, 4))
-        self.assertEqual(outputs.dims.shape, (1, 3, 4, 4))
-        self.assertEqual(outputs.rots.shape, (1, 2, 4, 4))
-        self.assertEqual(outputs.vels.shape, (1, 2, 4, 4))
+        self.assertEqual(outputs.heatmap.shape, (1, 2, 4, 4))
+        self.assertEqual(outputs.reg.shape, (1, 2, 4, 4))
+        self.assertEqual(outputs.dim.shape, (1, 3, 4, 4))
+        self.assertEqual(outputs.rot.shape, (1, 2, 4, 4))
+        self.assertEqual(outputs.vel.shape, (1, 2, 4, 4))
 
         # All values are the same since the input features are zeros and biases for heatmap heads
         # are set to -2.19.
-        expected_heatmaps = torch.tensor(-2.1900, device=self.device).expand_as(outputs.heatmaps)
-        self.assertTrue(torch.allclose(outputs.heatmaps, expected_heatmaps))
+        expected_heatmaps = torch.tensor(-2.1900, device=self.device).expand_as(outputs.heatmap)
+        self.assertTrue(torch.allclose(outputs.heatmap, expected_heatmaps))
 
         expected_centers = (
             torch.tensor([[0.0541, 0.1058]], device=self.device)
             .view(1, 2, 1, 1)
-            .expand_as(outputs.centers)
+            .expand_as(outputs.reg)
         )
-        self.assertTrue(torch.allclose(outputs.centers, expected_centers, atol=1e-4))
+        self.assertTrue(torch.allclose(outputs.reg, expected_centers, atol=1e-4))
 
         expected_dims = (
             torch.tensor([[0.0855, -0.0303, 0.0646]], device=self.device)
             .view(1, 3, 1, 1)
-            .expand_as(outputs.dims)
+            .expand_as(outputs.dim)
         )
-        self.assertTrue(torch.allclose(outputs.dims, expected_dims, atol=1e-4))
+        self.assertTrue(torch.allclose(outputs.dim, expected_dims, atol=1e-4))
 
         expected_rots = (
             torch.tensor([[0.1088, -0.1206]], device=self.device)
             .view(1, 2, 1, 1)
-            .expand_as(outputs.rots)
+            .expand_as(outputs.rot)
         )
-        self.assertTrue(torch.allclose(outputs.rots, expected_rots, atol=1e-4))
+        self.assertTrue(torch.allclose(outputs.rot, expected_rots, atol=1e-4))
 
         expected_vels = (
             torch.tensor([[0.0809, 0.0154]], device=self.device)
             .view(1, 2, 1, 1)
-            .expand_as(outputs.vels)
+            .expand_as(outputs.vel)
         )
-        self.assertTrue(torch.allclose(outputs.vels, expected_vels, atol=1e-4))
+        self.assertTrue(torch.allclose(outputs.vel, expected_vels, atol=1e-4))
 
     def _build_center_head_outputs(
         self, batch_size: int, height: int, width: int, use_velocity: bool = True
     ) -> CenterHeadOutputs:
         """Build all-zero CenterHeadOutputs so tests only set the cells they care about."""
         return CenterHeadOutputs(
-            heatmaps=torch.zeros((batch_size, 2, height, width), device=self.device),
-            centers=torch.zeros((batch_size, 2, height, width), device=self.device),
-            heights=torch.zeros((batch_size, 1, height, width), device=self.device),
-            dims=torch.zeros((batch_size, 3, height, width), device=self.device),
-            rots=torch.zeros((batch_size, 2, height, width), device=self.device),
-            vels=(
+            heatmap=torch.zeros((batch_size, 2, height, width), device=self.device),
+            reg=torch.zeros((batch_size, 2, height, width), device=self.device),
+            height=torch.zeros((batch_size, 1, height, width), device=self.device),
+            dim=torch.zeros((batch_size, 3, height, width), device=self.device),
+            rot=torch.zeros((batch_size, 2, height, width), device=self.device),
+            vel=(
                 torch.zeros((batch_size, 2, height, width), device=self.device)
                 if use_velocity
                 else None
@@ -215,11 +215,11 @@ class TestCenterHead(unittest.TestCase):
         dummy_outputs = self._build_center_head_outputs(
             batch_size=1, height=4, width=4, use_velocity=False
         )
-        dummy_outputs.heatmaps[0, :, :, :] = -20.0
-        dummy_outputs.heatmaps[0, 0, 3, 2] = 20.0
-        dummy_outputs.heights[0, 0, 3, 2] = 0.2
-        dummy_outputs.dims[0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5], device=self.device).log()
-        dummy_outputs.rots[0, 1, 3, 2] = 1.0
+        dummy_outputs.heatmap[0, :, :, :] = -20.0
+        dummy_outputs.heatmap[0, 0, 3, 2] = 20.0
+        dummy_outputs.height[0, 0, 3, 2] = 0.2
+        dummy_outputs.dim[0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5], device=self.device).log()
+        dummy_outputs.rot[0, 1, 3, 2] = 1.0
         dummy_detection3d_outputs = Detection3DHeadOutputs(
             center_head_outputs=dummy_outputs, transfusion_head_outputs=None
         )
@@ -281,12 +281,12 @@ class TestCenterHead(unittest.TestCase):
         dummy_outputs = self._build_center_head_outputs(
             batch_size=1, height=4, width=4, use_velocity=False
         )
-        dummy_outputs.heatmaps[0, :, :, :] = -20.0
-        dummy_outputs.heatmaps[0, 0, y_index, x_index] = 20.0
-        dummy_outputs.centers[0, :, y_index, x_index] = reg_target[0:2]
-        dummy_outputs.heights[0, 0, y_index, x_index] = reg_target[2]
-        dummy_outputs.dims[0, :, y_index, x_index] = reg_target[3:6]
-        dummy_outputs.rots[0, :, y_index, x_index] = reg_target[6:8]
+        dummy_outputs.heatmap[0, :, :, :] = -20.0
+        dummy_outputs.heatmap[0, 0, y_index, x_index] = 20.0
+        dummy_outputs.reg[0, :, y_index, x_index] = reg_target[0:2]
+        dummy_outputs.height[0, 0, y_index, x_index] = reg_target[2]
+        dummy_outputs.dim[0, :, y_index, x_index] = reg_target[3:6]
+        dummy_outputs.rot[0, :, y_index, x_index] = reg_target[6:8]
 
         decoded_outputs = center_head.decode_outputs(
             Detection3DHeadOutputs(center_head_outputs=dummy_outputs, transfusion_head_outputs=None)
@@ -314,19 +314,19 @@ class TestCenterHead(unittest.TestCase):
         # Modify dummy_outputs to have velocity values for testing
         # Dummy outputs from CenterHead.forward
         dummy_outputs = CenterHeadOutputs(
-            heatmaps=torch.full((1, 2, 4, 4), -20.0, device=self.device),
-            centers=torch.zeros((1, 2, 4, 4), device=self.device),
-            heights=torch.zeros((1, 1, 4, 4), device=self.device),
-            dims=torch.zeros((1, 3, 4, 4), device=self.device),
-            rots=torch.zeros((1, 2, 4, 4), device=self.device),
-            vels=torch.zeros((1, 2, 4, 4), device=self.device),
+            heatmap=torch.full((1, 2, 4, 4), -20.0, device=self.device),
+            reg=torch.zeros((1, 2, 4, 4), device=self.device),
+            height=torch.zeros((1, 1, 4, 4), device=self.device),
+            dim=torch.zeros((1, 3, 4, 4), device=self.device),
+            rot=torch.zeros((1, 2, 4, 4), device=self.device),
+            vel=torch.zeros((1, 2, 4, 4), device=self.device),
         )
-        dummy_outputs.heatmaps[0, 0, 3, 2] = 20.0
-        dummy_outputs.heights[0, 0, 3, 2] = 0.2
-        dummy_outputs.dims[0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5], device=self.device).log()
-        dummy_outputs.rots[0, 1, 3, 2] = 1.0
-        assert dummy_outputs.vels is not None
-        dummy_outputs.vels[0, :, 3, 2] = torch.tensor([0.5, -0.1], device=self.device)
+        dummy_outputs.heatmap[0, 0, 3, 2] = 20.0
+        dummy_outputs.height[0, 0, 3, 2] = 0.2
+        dummy_outputs.dim[0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5], device=self.device).log()
+        dummy_outputs.rot[0, 1, 3, 2] = 1.0
+        assert dummy_outputs.vel is not None
+        dummy_outputs.vel[0, :, 3, 2] = torch.tensor([0.5, -0.1], device=self.device)
         dummy_detection3d_outputs = Detection3DHeadOutputs(
             center_head_outputs=dummy_outputs, transfusion_head_outputs=None
         )
@@ -355,7 +355,7 @@ class TestCenterHead(unittest.TestCase):
         outputs = self._build_center_head_outputs(
             batch_size=batch_size, height=4, width=4, use_velocity=use_velocity
         )
-        outputs.heatmaps[:] = -20.0
+        outputs.heatmap[:] = -20.0
         return Detection3DHeadOutputs(center_head_outputs=outputs, transfusion_head_outputs=None)
 
     def test_get_targets_produces_non_finite_targets_for_degenerate_boxes(self) -> None:
@@ -439,12 +439,12 @@ class TestCenterHead(unittest.TestCase):
         assert outputs.center_head_outputs is not None
         center_head_outputs = outputs.center_head_outputs
         predictions = [
-            center_head_outputs.heatmaps,
-            center_head_outputs.centers,
-            center_head_outputs.heights,
-            center_head_outputs.dims,
-            center_head_outputs.rots,
-            center_head_outputs.vels,
+            center_head_outputs.heatmap,
+            center_head_outputs.reg,
+            center_head_outputs.height,
+            center_head_outputs.dim,
+            center_head_outputs.rot,
+            center_head_outputs.vel,
         ]
         for prediction in predictions:
             assert prediction is not None
@@ -471,11 +471,11 @@ class TestCenterHead(unittest.TestCase):
             assert prediction is not None and prediction.grad is not None
             self.assertTrue(torch.isfinite(prediction.grad).all())
         # The velocity channels are the NaN ones, so they must receive no gradient at all
-        assert center_head_outputs.vels is not None and center_head_outputs.vels.grad is not None
+        assert center_head_outputs.vel is not None and center_head_outputs.vel.grad is not None
         self.assertTrue(
             torch.equal(
-                center_head_outputs.vels.grad,
-                torch.zeros_like(center_head_outputs.vels.grad),
+                center_head_outputs.vel.grad,
+                torch.zeros_like(center_head_outputs.vel.grad),
             )
         )
 
@@ -632,21 +632,21 @@ class TestCenterHead(unittest.TestCase):
         # metric x equals (grid x + predicted offset), which keeps the expectations readable.
         outputs = self._build_center_head_outputs(batch_size=1, height=4, width=4)
         # flattened index 14 -> (y=3, x=2, 3*4+2 = 14), flattened index 5 -> (y=1, x=1, 1*4+1 = 5)
-        outputs.centers[0, :, 3, 2] = torch.tensor([0.25, 0.5], device=self.device)
-        outputs.centers[0, :, 1, 1] = torch.tensor([-0.5, 0.25], device=self.device)
-        outputs.heights[0, 0, 3, 2] = 0.2
-        outputs.heights[0, 0, 1, 1] = -1.0
-        outputs.dims[0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5], device=self.device).log()
-        outputs.dims[0, :, 1, 1] = torch.tensor([2.0, 3.0, 0.5], device=self.device).log()
-        outputs.rots[0, :, 3, 2] = torch.tensor(
+        outputs.reg[0, :, 3, 2] = torch.tensor([0.25, 0.5], device=self.device)
+        outputs.reg[0, :, 1, 1] = torch.tensor([-0.5, 0.25], device=self.device)
+        outputs.height[0, 0, 3, 2] = 0.2
+        outputs.height[0, 0, 1, 1] = -1.0
+        outputs.dim[0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5], device=self.device).log()
+        outputs.dim[0, :, 1, 1] = torch.tensor([2.0, 3.0, 0.5], device=self.device).log()
+        outputs.rot[0, :, 3, 2] = torch.tensor(
             [math.sin(0.25), math.cos(0.25)], device=self.device
         )
-        outputs.rots[0, :, 1, 1] = torch.tensor(
+        outputs.rot[0, :, 1, 1] = torch.tensor(
             [math.sin(-1.2), math.cos(-1.2)], device=self.device
         )
-        assert outputs.vels is not None
-        outputs.vels[0, :, 3, 2] = torch.tensor([0.5, -0.1], device=self.device)
-        outputs.vels[0, :, 1, 1] = torch.tensor([-2.0, 3.0], device=self.device)
+        assert outputs.vel is not None
+        outputs.vel[0, :, 3, 2] = torch.tensor([0.5, -0.1], device=self.device)
+        outputs.vel[0, :, 1, 1] = torch.tensor([-2.0, 3.0], device=self.device)
 
         flatten_indices = torch.tensor([[14, 5]], dtype=torch.int64, device=self.device)
         bboxes_predictions = self.center_head._decode_regression_outputs(
@@ -675,10 +675,10 @@ class TestCenterHead(unittest.TestCase):
         """
         outputs = self._build_center_head_outputs(batch_size=2, height=4, width=4)
         # Both samples read the same flattened index but hold different values there.
-        outputs.heights[0, 0, 3, 2] = 1.0
-        outputs.dims[0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5], device=self.device).log()
-        outputs.heights[1, 0, 3, 2] = -3.0
-        outputs.dims[1, :, 3, 2] = torch.tensor([2.0, 8.0, 0.5], device=self.device).log()
+        outputs.height[0, 0, 3, 2] = 1.0
+        outputs.dim[0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5], device=self.device).log()
+        outputs.height[1, 0, 3, 2] = -3.0
+        outputs.dim[1, :, 3, 2] = torch.tensor([2.0, 8.0, 0.5], device=self.device).log()
 
         flatten_indices = torch.tensor([[14], [14]], dtype=torch.int64, device=self.device)
         bboxes_predictions = self.center_head._decode_regression_outputs(
@@ -720,8 +720,8 @@ class TestCenterHead(unittest.TestCase):
         outputs = self._build_center_head_outputs(
             batch_size=1, height=4, width=4, use_velocity=False
         )
-        outputs.heights[0, 0, 3, 2] = 0.2
-        outputs.dims[0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5], device=self.device).log()
+        outputs.height[0, 0, 3, 2] = 0.2
+        outputs.dim[0, :, 3, 2] = torch.tensor([4.0, 1.6, 1.5], device=self.device).log()
 
         flatten_indices = torch.tensor([[14]], dtype=torch.int64, device=self.device)
         bboxes_predictions = center_head._decode_regression_outputs(

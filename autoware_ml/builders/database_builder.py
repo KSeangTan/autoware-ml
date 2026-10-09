@@ -18,7 +18,7 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig
 
 from autoware_ml.databases.database_interface import DatabaseInterface
-from autoware_ml.datamodule.base_data_module import BaseDataModule
+from autoware_ml.datamodule.data_module import DataModule
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ def build_database(cfg: DictConfig) -> DatabaseInterface:
     return database
 
 
-def build_datamodule(cfg: DictConfig, database: DatabaseInterface) -> BaseDataModule:
+def build_datamodule(cfg: DictConfig, database: DatabaseInterface) -> DataModule:
     """
     Build a DataModule from the Hydra configuration.
 
@@ -46,7 +46,7 @@ def build_datamodule(cfg: DictConfig, database: DatabaseInterface) -> BaseDataMo
         cfg: Hydra configuration
         database: A DatabaseInterface object
     Returns:
-        A BaseDataModule object.
+        A DataModule object.
     """
     logger.info("Building datamodule...")
     datamodule = instantiate(cfg.datamodule, database=database)

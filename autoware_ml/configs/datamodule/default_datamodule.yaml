@@ -1,0 +1,24 @@
+_target_: autoware_ml.datamodule.data_module.DataModule
+_convert_: all
+
+defaults:
+  - splitter: default_scenario_splitter
+  - dataloader@train_dataloader: default_dataloader
+  - dataloader@validation_dataloader: default_dataloader
+  - dataloader@test_dataloader: default_dataloader
+  - dataloader@predict_dataloader: default_dataloader
+
+# Dataset sources by name. A source serves the splits it declares a dataset for, and the
+# sources of a split are concatenated in declaration order. The datasets of the training and
+# test splits are composed at the top level `datasets` key by the database specific datamodule
+# configs, the validation and predict splits read the test one.
+sources:
+  main:
+    _target_: autoware_ml.datamodule.sources.DatasetSource
+    database: ${database}
+    train_dataset: ${datasets.train}
+    validation_dataset: ${datasets.test}
+    test_dataset: ${datasets.test}
+    predict_dataset: ${datasets.test}
+
+train_frame_sampling: null

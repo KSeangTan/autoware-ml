@@ -1,218 +1,176 @@
-# Copyright 2026 TIER IV, Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-"""Helpers for 3D detection dataloaders.
-
-This module provides reusable dataset and datamodule components for lidar-based
-3D detection tasks across supported datasets.
-"""
-
-from __future__ import annotations
-
-from collections.abc import Callable, Mapping
-import os
-from typing import Any
+import logging
 
 import numpy as np
-from torch.utils.data import DataLoader, Dataset
+import polars as pl
 
-from autoware_ml.datamodule.samplers import DistributedWeightedRandomSampler
+from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
+from autoware_ml.databases.schemas.box3d_schemas import Box3DDatasetSchema
+from autoware_ml.datamodule.base_dataset_task import BaseDatasetTask
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
+from autoware_ml.types.geometry import Box3DFieldIndex, Box3DCenterCoordinateType
 
-
-def resolve_data_path(data_root: str, path: str) -> str:
-    """Resolve a stored annotation path relative to a dataset root.
-
-    Absolute paths are returned unchanged. Paths already nested under
-    ``data_root`` are returned without re-prefixing. Other paths are joined
-    with ``data_root``.
-
-    Args:
-        data_root: Dataset root directory.
-        path: Stored annotation path to normalize.
-
-    Returns:
-        Absolute path or root-relative path resolved against ``data_root``.
-    """
-    normalized_path = os.path.normpath(path)
-    normalized_root = os.path.normpath(data_root)
-    if os.path.isabs(normalized_path):
-        return normalized_path
-    if normalized_path == normalized_root or normalized_path.startswith(normalized_root + os.sep):
-        return normalized_path
-    return os.path.join(normalized_root, normalized_path)
+logger = logging.getLogger(__name__)
 
 
-def resolve_sweep_paths(sample: Mapping[str, Any], data_root: str) -> list[dict[str, Any]]:
-    """Resolve sweep ``lidar_path`` entries against the dataset root.
+class Detection3DTask(BaseDatasetTask):
+    """Read the 3D boxes of a record, with the cone and barrier annotation flag when stored."""
 
-    Args:
-        sample: Detection sample containing optional ``sweeps`` metadata.
-        data_root: Dataset root directory.
+    def select_columns(self, dataset_records_dataframe: pl.DataFrame) -> pl.DataFrame:
+        """
+        Keep the box column of the records, and the cone and barrier flag when present.
 
-    Returns:
-        Sweep dictionaries with ``lidar_path`` normalized when present.
-    """
-    sweep_entries = []
-    for sweep in sample.get("sweeps", []):
-        sweep_entry = dict(sweep)
-        if "lidar_path" in sweep_entry:
-            sweep_entry["lidar_path"] = resolve_data_path(data_root, sweep_entry["lidar_path"])
-        sweep_entries.append(sweep_entry)
-    return sweep_entries
+        Args:
+          dataset_records_dataframe: Records of the corpus.
 
+        Returns:
+          pl.DataFrame: The records with their boxes.
+        """
+        columns = [DatasetTableSchema.BOXES_3D.name]
+        # Older database caches predate the cone/barrier flag, so only keep it when present.
+        if (
+            DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name
+            in dataset_records_dataframe.columns
+        ):
+            columns.append(DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name)
+        return dataset_records_dataframe.select(columns)
 
-def build_sweep_entries(sample: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Convert stored ``lidar_sweeps`` metadata into loader-ready sweep entries.
+    def __str__(self) -> str:
+        """
+        String representation of the dataset type.
 
-    Each entry carries the sweep point-cloud path, its timestamp, and the
-    rigid transform from the sweep lidar frame into the key lidar frame.
+        Returns:
+          str: String representation of the dataset type.
+        """
+        return "Detection3DTask"
 
-    The precomputed ``lidar2sensor`` matrix (the key-lidar → sweep-lidar
-    transform including ego motion) is preferred when present. Recomposing the
-    transform from the stored ego poses is only a fallback
+    def get_data_sample(self, idx: int) -> ModelGTSample:
+        """
+        Read the boxes of one record.
 
-    Args:
-        sample: Raw sample dictionary with ``lidar_points``, ``ego2global``,
-            and ``lidar_sweeps`` metadata.
+        Args:
+          idx: Index of the record.
 
-    Returns:
-        Sweep dictionaries carrying the path, timestamp and key-lidar transform of each sweep.
+        Returns:
+          ModelGTSample: Sample holding the 3D boxes of the record.
+        """
+        selected_row = self.dataset_records_dataframe.item(
+            idx, DatasetTableSchema.BOXES_3D.name
+        ).struct
+        gt_bboxes_3d = (
+            selected_row.field(Box3DDatasetSchema.BOX3D_PARAMS.name)
+            .to_numpy()
+            .astype(np.float32, copy=False)
+        )
+        gt_bboxes_labels = (
+            selected_row.field(Box3DDatasetSchema.BOX3D_LABEL_INDEX.name)
+            .to_numpy()
+            .astype(np.int32, copy=False)
+        )
+        gt_bboxes_label_names = selected_row.field(
+            Box3DDatasetSchema.BOX3D_LABEL_NAME.name
+        ).to_list()
+        gt_bboxes_num_lidar_points = (
+            selected_row.field(Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTS.name)
+            .to_numpy()
+            .astype(np.int32, copy=False)
+        )
+        gt_bboxes_attributes = selected_row.field(
+            Box3DDatasetSchema.BOX3D_ATTRIBUTES.name
+        ).to_list()
 
-    Raises:
-        KeyError: If a sweep is missing the pose or path metadata required to
-            express it in the key lidar frame.
-    """
-    lidar_sweeps = sample.get("lidar_sweeps", [])
-    if not lidar_sweeps:
-        return []
-
-    global2key_lidar = None
-
-    entries = []
-    for sweep in lidar_sweeps:
-        lidar2sensor = sweep["lidar_points"].get("lidar2sensor")
-        if lidar2sensor is not None:
-            sweep2key_lidar = np.linalg.inv(np.asarray(lidar2sensor, dtype=np.float64))
+        if not len(gt_bboxes_3d):
+            gt_bboxes_3d = np.zeros((0, len(Box3DFieldIndex)), dtype=np.float32)
+            gt_bboxes_labels = np.zeros((0,), dtype=np.int32)
+            gt_bboxes_num_lidar_points = np.zeros((0,), dtype=np.int32)
         else:
-            if global2key_lidar is None:
-                key_lidar2ego = np.asarray(sample["lidar_points"]["lidar2ego"], dtype=np.float64)
-                key_ego2global = np.asarray(sample["ego2global"], dtype=np.float64)
-                global2key_lidar = np.linalg.inv(key_ego2global @ key_lidar2ego)
-            sweep_lidar2ego = np.asarray(sweep["lidar_points"]["lidar2ego"], dtype=np.float64)
-            sweep_ego2global = np.asarray(sweep["ego2global"], dtype=np.float64)
-            sweep2key_lidar = global2key_lidar @ sweep_ego2global @ sweep_lidar2ego
-        entries.append(
-            {
-                "lidar_path": sweep["lidar_points"]["lidar_path"],
-                "timestamp": sweep["timestamp"],
-                "sensor2lidar_rotation": sweep2key_lidar[:3, :3].astype(np.float32),
-                "sensor2lidar_translation": sweep2key_lidar[:3, 3].astype(np.float32),
-            }
+            # A box with no annotated velocity is stored with a non finite one and is served
+            # at zero velocity. The size targets are log encoded, so boxes with a non finite
+            # geometry or a zero extent are dropped. Boxes with no lidar points are kept, the
+            # training filters and the metrics apply the point count.
+            finite = np.isfinite(gt_bboxes_3d)
+            extents = gt_bboxes_3d[:, Box3DFieldIndex.LENGTH : Box3DFieldIndex.YAW]
+            valid = finite[:, : Box3DFieldIndex.VELOCITY_X].all(axis=1) & (extents > 0.0).all(
+                axis=1
+            )
+            gt_bboxes_3d = np.where(finite, gt_bboxes_3d, np.float32(0.0))[valid]
+            gt_bboxes_labels = gt_bboxes_labels[valid]
+            gt_bboxes_label_names = [
+                name for name, keep in zip(gt_bboxes_label_names, valid, strict=True) if keep
+            ]
+            gt_bboxes_num_lidar_points = gt_bboxes_num_lidar_points[valid]
+            gt_bboxes_attributes = [
+                attributes
+                for attributes, keep in zip(gt_bboxes_attributes, valid, strict=True)
+                if keep
+            ]
+
+        detection3d_bboxes_3d = LidarBBoxes3D.from_numpy(
+            bbox_params=gt_bboxes_3d,
+            bbox_labels=gt_bboxes_labels,
+            bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
+            bbox_label_names=gt_bboxes_label_names,
+            bbox_num_lidar_points=gt_bboxes_num_lidar_points,
+            bbox_attributes=gt_bboxes_attributes,
         )
-    return entries
 
-
-def normalize_detection_sample(sample: dict[str, Any]) -> dict[str, Any]:
-    """Normalize one detection annotation entry to the framework schema.
-
-    Args:
-        sample: Raw sample dictionary loaded from an annotation file.
-
-    Returns:
-        Sample dictionary that follows the internal detection convention with a
-        top-level ``lidar_path`` field and list-backed optional collections.
-    """
-    normalized = dict(sample)
-    if "lidar_path" not in normalized:
-        normalized["lidar_path"] = normalized["lidar_points"]["lidar_path"]
-    normalized.setdefault("instances", [])
-    if "sweeps" not in normalized:
-        normalized["sweeps"] = build_sweep_entries(normalized)
-    return normalized
-
-
-def load_detection_data_infos(data: dict[str, Any]) -> list[dict[str, Any]]:
-    """Load normalized detection samples from an annotation payload.
-
-    Args:
-        data: Deserialized annotation payload.
-
-    Returns:
-        Normalized list of detection samples.
-    """
-    return [normalize_detection_sample(sample) for sample in data["data_list"]]
-
-
-def build_label_to_category(metainfo: Mapping[str, Any]) -> dict[int, str]:
-    """Build a ``{label_index: category_name}`` map from annotation metainfo.
-
-    Supports both annotation schemas:
-      - ``categories`` (a ``{name: index}`` mapping, e.g. the nuScenes converter), and
-      - ``classes`` (an ordered list, e.g. the T4 converter),
-
-    so the loaded ``bbox_label_3d`` indices can be decoded to class names.
-
-    Args:
-        metainfo: ``metainfo`` block from a deserialized annotation payload.
-
-    Returns:
-        Mapping from stored label index to category name.
-    """
-    categories = metainfo.get("categories")
-    if categories:
-        return {int(index): str(name) for name, index in categories.items()}
-    classes = metainfo.get("classes")
-    if classes:
-        return {label: str(category) for label, category in enumerate(classes)}
-    raise ValueError("Annotation file metainfo must define 'categories' or 'classes'.")
-
-
-def build_detection_dataloader(
-    dataset: Dataset,
-    dataloader_cfg: Any,
-    *,
-    is_train: bool,
-    train_frame_sampling: Any,
-    collate_fn: Callable[[list[dict[str, Any]]], dict[str, Any]],
-) -> DataLoader:
-    """Build a dataloader for one 3D detection dataset split.
-
-    Training loaders use ``DistributedWeightedRandomSampler`` when repeat-factor
-    frame sampling is configured. In that mode, shuffling is disabled because
-    sample order is controlled by the sampler. Non-training loaders use the
-    dataloader configuration directly.
-
-    Args:
-        dataset: Dataset for the requested split. Training datasets must expose
-            ``frame_weights`` when repeat-factor frame sampling is enabled.
-        dataloader_cfg: Split dataloader configuration. It must provide
-            ``to_dataloader_kwargs()`` and ``drop_last``.
-        is_train: Whether the requested split is the training split.
-        train_frame_sampling: Repeat-factor frame sampling configuration.
-            A non-``None`` value enables weighted sampling for training.
-        collate_fn: Callable passed to ``DataLoader`` to merge samples into a
-            batch dictionary.
-
-    Returns:
-        Detection dataloader for the requested split.
-    """
-    dataloader_kwargs = dataloader_cfg.to_dataloader_kwargs()
-    if is_train and train_frame_sampling is not None:
-        dataloader_kwargs["shuffle"] = False
-        dataloader_kwargs["sampler"] = DistributedWeightedRandomSampler(
-            dataset,
-            dataset.frame_weights,
-            drop_last=dataloader_cfg.drop_last,
+        return ModelGTSample(
+            lidar_point_cloud_samples=None,
+            image_samples=None,
+            point_cloud_data=None,
+            camera_image_data=None,
+            detection3d_gt_bboxes_3d=detection3d_bboxes_3d,
+            segmentation3d_gt_sample=None,
+            detection3d_traffic_cone_barrier_bbox_status=(
+                self._get_traffic_cone_barrier_bbox_status(idx)
+            ),
         )
-    return DataLoader(dataset=dataset, collate_fn=collate_fn, **dataloader_kwargs)
+
+    def _get_traffic_cone_barrier_bbox_status(self, idx: int) -> bool | None:
+        """
+        Read whether traffic cones and barriers are annotated in the given record.
+
+        Args:
+          idx: Index of the record.
+
+        Returns:
+          bool | None: The flag, or None when the database does not carry it for this record.
+        """
+        column_name = DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name
+        if column_name not in self.dataset_records_dataframe.columns:
+            return None
+        status = self.dataset_records_dataframe.item(idx, column_name)
+        return None if status is None else bool(status)
+
+    def log_dataset_info(self) -> None:
+        """
+        Log the number of boxes per class, before and after dropping the boxes without lidar
+        points.
+        """
+        if self.dataset_records_dataframe is None:
+            logger.warning("Dataset records dataframe is not available.")
+            return
+
+        class_counts = (
+            self.dataset_records_dataframe.select(DatasetTableSchema.BOXES_3D.name)
+            .explode(DatasetTableSchema.BOXES_3D.name)
+            .unnest(DatasetTableSchema.BOXES_3D.name)
+            .group_by(Box3DDatasetSchema.BOX3D_LABEL_NAME.name)
+            .agg(
+                [
+                    pl.len().alias("count"),
+                    (pl.col(Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTS.name) > 0)
+                    .sum()
+                    .alias("valid_count"),
+                ]
+            )
+            .sort("count", descending=True)
+        )
+        class_names = class_counts[Box3DDatasetSchema.BOX3D_LABEL_NAME.name].to_list()
+        total_counts = dict(zip(class_names, class_counts["count"].to_list(), strict=True))
+        valid_counts = dict(zip(class_names, class_counts["valid_count"].to_list(), strict=True))
+
+        logger.info(f"Number of bboxes per class in the dataset: {total_counts}")
+        logger.info(
+            f"Number of bboxes after filtering num_lidar_points > 0 per class: {valid_counts}"
+        )

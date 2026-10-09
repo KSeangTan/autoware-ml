@@ -65,41 +65,64 @@ A complete task config includes these sections:
 
 ### `datamodule`
 
-Controls data loading and split-specific transforms:
+Controls the dataset sources, datasets, transforms and dataloaders of every split. Task configs
+select a datamodule config from `configs/datamodule/` and override what they need:
 
 ```yaml
+defaults:
+  - /database@database: t4dataset/t4dataset_j6gen2_semaseg
+  - /datamodule@datamodule: t4dataset/default_segmentation3d_datamodule
+  - _self_
+
+# Datasets of the training and test splits, the validation and predict splits read the test one
+datasets:
+  train:
+    max_num_3d_gt_bboxes: 0
+    # Only the semantic masks of the corpus supervise the run
+    det3d_supervised: false
+    # Transform pipeline of the training split
+    transforms:
+      _target_: autoware_ml.transforms.base.TransformsCompose
+      _convert_: all
+      pipeline:
+        - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+          use_dim: [0, 1, 2, 3]
+
 datamodule:
-  _target_: autoware_ml.datamodule.my_dataset.MyDataModule
-  data_root: ${data_root}
-  train_ann_file: ${data_root}/info/train.pkl
-  val_ann_file: ${data_root}/info/val.pkl
+  # Dataset sources by name, several sources mix their corpora
+  sources:
+    main:
+      repeat: 1
 
-  # collation_map: whitelist of batch keys and how to merge them across samples.
-  # Keys not listed here are dropped before the batch reaches the model.
-  # Strategies:
-  #   stack        - fixed-shape tensors concatenated along a new batch dim (all shapes must match)
-  #   concat       - variable-length tensors concatenated along dim 0. Adds a
-  #                  batch["offset"] key with cumulative per-sample lengths so
-  #                  downstream code can recover per-sample boundaries.
-  #   index_concat - like concat, but values are integer indices into the
-  #                  concatenated concat key (e.g. point indices into the point cloud).
-  #                  Each sample's indices are shifted by the cumulative element
-  #                  count of preceding samples so they remain globally valid after concat.
-  #   list         - variable-shape values kept as a Python list (no tensor conversion)
-  collation_map:
-    input_tensor: stack
-    gt_labels: stack
-
-  train_dataloader_cfg:
+  train_dataloader:
     batch_size: 8
     num_workers: 4
     shuffle: true
-
-  train_transforms:
-    pipeline:
-      - _target_: autoware_ml.transforms.my_transforms.my_transform.MyTransform
-        param: value
 ```
+
+A split (`train`, `validation`, `test`, `predict`) is served by the sources declaring a dataset
+for it:
+
+- `datasets.train` and `datasets.test` are the dataset configs the datamodule config composes at
+  the top level, instantiated without records. They name the database they read
+  (`database_root_path`, `lidar_intensity_scale`, both from `${database}`), whether its boxes
+  (`det3d_supervised`) and semantic masks (`seg3d_supervised`) supervise the run, and carry the
+  task datasets (`dataset_tasks`) and the transforms of the split. The validation and predict
+  splits read the test one.
+- `datamodule.sources.<name>` is a `DatasetSource` that Hydra instantiates. It names a database,
+  the dataset of every split it serves (`train_dataset`, `validation_dataset`, `test_dataset`,
+  `predict_dataset`, `null` for a split it stays out of), and how many times its frames appear
+  in one training epoch (`repeat`). Every dataset of a source must read the database of that
+  source, so a source over a second database composes its own copy of the split dataset config.
+  The default source `main` reads `${database}` with `${datasets.train}` for training and
+  `${datasets.test}` for the other splits. In `setup()` the datamodule binds a copy of each
+  dataset to the records of its database and concatenates the sources of a split in declaration
+  order.
+- `<split>_dataloader` holds the dataloader settings (batch size, workers, shuffling, pin_memory).
+
+The dataset configs leave `transforms` required. Every model writes the pipeline of the training
+and test datasets in its own task config, so two models never share a pipeline and a fine tuning
+config changes only the values it needs.
 
 For custom components, point `_target_` at the concrete implementation module,
 for example `autoware_ml.transforms.my_transforms.my_transform.MyTransform` or
@@ -244,10 +267,9 @@ defaults:
   - _self_                        # Apply this file's overrides
 
 # Override specific values
-data_root: /path/to/dataset
-
 datamodule:
-  data_root: ${data_root}
+  train_dataloader:
+    batch_size: 4
 ```
 
 ## Variable Interpolation
@@ -255,11 +277,13 @@ datamodule:
 Reference other config values with `${...}`:
 
 ```yaml
-data_root: /path/to/dataset
+batch_size: 8
 
 datamodule:
-  data_root: ${data_root}
-  train_ann_file: ${data_root}/info/train.pkl
+  train_dataloader:
+    batch_size: ${batch_size}
+  validation_dataloader:
+    batch_size: ${batch_size}
 ```
 
 Hydra resolvers:

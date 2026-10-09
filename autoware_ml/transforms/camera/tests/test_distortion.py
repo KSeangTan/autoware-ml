@@ -21,7 +21,7 @@ import torch
 from torch import Tensor
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
-from autoware_ml.geometry.cameras.base_images import BaseImages
+from autoware_ml.geometry.cameras.base_images import BaseImages, compose_lidar2images
 from autoware_ml.transforms.camera.distortion import UndistortImage
 
 
@@ -62,7 +62,7 @@ class TestUndistortImage(unittest.TestCase):
             images=torch.rand(
                 (num_cameras, 3, self.image_height, self.image_width), dtype=torch.float32
             ),
-            timestamps=torch.zeros(num_cameras, dtype=torch.float32),
+            timestamps=torch.zeros(num_cameras, dtype=torch.float64),
             camera_intrinsics=self.camera_intrinsic.repeat(num_cameras, 1, 1),
             camera_names=[f"camera{index}" for index in range(num_cameras)],
             lidar2images=torch.eye(4).repeat(num_cameras, 1, 1),
@@ -128,7 +128,7 @@ class TestUndistortImage(unittest.TestCase):
         self.assertFalse(torch.equal(output.camera_image_data.images, images))
 
     def test_new_camera_matrix_updated(self) -> None:
-        """Test that the augmented intrinsics are replaced and the coefficients zeroed."""
+        """Test that the augmented intrinsics are replaced and the coefficients cleared."""
         sample = self.build_multi_task_gt_sample()
         assert sample.camera_image_data is not None
 
@@ -142,12 +142,8 @@ class TestUndistortImage(unittest.TestCase):
                     camera_image_data.augmented_camera_intrinsics[index], self.camera_intrinsic
                 )
             )
-            self.assertTrue(
-                torch.allclose(
-                    camera_image_data.distortion_coefficients[index],
-                    torch.zeros_like(self.distortion_coefficients),
-                )
-            )
+            # The coefficients are cleared, the images are pinhole now.
+            self.assertEqual(camera_image_data.distortion_coefficients[index].numel(), 0)
         # The raw intrinsics stay untouched, only the augmented ones follow the transform.
         self.assertTrue(
             torch.equal(
@@ -167,13 +163,19 @@ class TestUndistortImage(unittest.TestCase):
         self.assertIsInstance(camera_image_data, BaseImages)
         self.assertEqual(camera_image_data.camera_names, sample.camera_image_data.camera_names)
         self.assertEqual(
-            camera_image_data.distortion_models, sample.camera_image_data.distortion_models
+            camera_image_data.distortion_models, [""] * len(camera_image_data.camera_names)
         )
         self.assertTrue(
             torch.equal(camera_image_data.timestamps, sample.camera_image_data.timestamps)
         )
+        # The projections follow the new intrinsics.
         self.assertTrue(
-            torch.equal(camera_image_data.lidar2images, sample.camera_image_data.lidar2images)
+            torch.allclose(
+                camera_image_data.lidar2images,
+                compose_lidar2images(
+                    camera_image_data.augmented_camera_intrinsics, camera_image_data.lidar2cams
+                ),
+            )
         )
         self.assertTrue(
             torch.equal(camera_image_data.lidar2cams, sample.camera_image_data.lidar2cams)

@@ -35,7 +35,7 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
-from autoware_ml.datamodule.base_data_module import BaseDataModule
+from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.eval_mixin import MetricEvalMixin
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
@@ -80,8 +80,8 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
 
     def __init__(
         self,
-        data_preprocessor: DataPreprocessor,
-        log_dict_configs: LogDictConfigs,
+        data_preprocessor: DataPreprocessor | None = None,
+        log_dict_configs: LogDictConfigs | None = None,
         optimizer: Callable[..., Optimizer] | None = None,
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
@@ -91,11 +91,12 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
         """Initialize base model.
 
         Args:
-            data_preprocessor: Data preprocessor to preprocess input batches.
-            log_dict_configs: Configuration for logging metrics in Lightning.
+            data_preprocessor: Data preprocessor to preprocess input batches, an empty one when
+                omitted.
+            log_dict_configs: Configuration for logging metrics in Lightning, epoch-level
+                progress bar logging when omitted.
             optimizer: Callable that returns an optimizer when given model parameters.
             scheduler: Callable that returns a scheduler when given the optimizer.
-            log_dict_configs: Configuration for logging metrics in Lightning.
             optimizer_group_overrides: Optional optimizer overrides keyed by
                 model-defined optimizer group name.
             scheduler_config: Optional Lightning scheduler metadata such as
@@ -104,14 +105,22 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
                 or ``None`` logs only losses.
         """
         super().__init__(metrics=metrics)
-        self._data_preprocessor = data_preprocessor
+        self._data_preprocessor = (
+            data_preprocessor
+            if data_preprocessor is not None
+            else DataPreprocessor(preprocessor_modules=[])
+        )
         self.optimizer_partial = optimizer
         self.scheduler_partial = scheduler
         self.optimizer_group_overrides = (
             dict(optimizer_group_overrides) if optimizer_group_overrides else None
         )
         self.scheduler_config = dict(scheduler_config) if scheduler_config else {}
-        self.log_dict_configs = log_dict_configs
+        self.log_dict_configs = (
+            log_dict_configs
+            if log_dict_configs is not None
+            else LogDictConfigs(prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
+        )
 
     def setup(self, stage: str) -> None:
         """Expose one training sample as the example input so the model summary reports FLOPs.
@@ -147,15 +156,31 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
 
         Returns:
             A batch holding the first training sample, or ``None`` when the trainer has no
-            :class:`BaseDataModule` with a set-up, non-empty training dataset.
+            :class:`DataModule` with a set-up, non-empty training dataset.
         """
         datamodule = self.trainer.datamodule
-        if not isinstance(datamodule, BaseDataModule):
+        if not isinstance(datamodule, DataModule):
             return None
-        dataset = datamodule.train_dataset
+        dataset = datamodule.datasets.get(SplitType.TRAIN)
         if dataset is None or len(dataset) == 0:
             return None
         return dataset.collate_fn([dataset[0]])
+
+    def transfer_batch_to_device(
+        self, batch: ModelGTBatch, device: torch.device, dataloader_idx: int
+    ) -> ModelGTBatch:
+        """Move the typed batch to the device Lightning runs the step on.
+
+        Args:
+            batch: Collated typed batch from the dataloader.
+            device: Target device.
+            dataloader_idx: Lightning dataloader index.
+
+        Returns:
+            The batch on the target device.
+        """
+        del dataloader_idx
+        return batch.to_device(device)
 
     def on_after_batch_transfer(self, batch: ModelGTBatch, dataloader_idx: int) -> ModelBatchInputs:
         """Apply runtime preprocessing after Lightning moves a batch to device.
@@ -169,7 +194,9 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
         """
         return self._data_preprocessor(batch, is_training=self.training)
 
-    def decode_outputs(self, outputs: ModelOutputs) -> ModelPredictions:
+    def decode_outputs(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
+    ) -> ModelPredictions:
         """Convert raw model outputs into task-level predictions.
 
         Task wrappers must override this when prediction-time outputs differ from
@@ -177,6 +204,8 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
         and labels.
 
         Args:
+            multi_task_batch_inputs: Batch the outputs were computed from, for predictions
+                that map back onto the inputs such as per-point labels.
             outputs: Raw outputs returned by :meth:`forward`.
 
         Returns:
@@ -367,7 +396,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule):
             Predictions after decoding the raw model outputs.
         """
         outputs = self(multi_task_batch_inputs)
-        return self.decode_outputs(outputs)
+        return self.decode_outputs(multi_task_batch_inputs, outputs)
 
     def configure_optimizers(self) -> Optimizer | dict[str, Any]:
         """Configure optimizers and schedulers.
