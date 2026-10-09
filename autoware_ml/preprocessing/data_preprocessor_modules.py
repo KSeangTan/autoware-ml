@@ -23,7 +23,7 @@ class DataPreprocessorModule(ABC):
     @abstractmethod
     def __call__(
         self,
-        multi_task_batch_inputs: ModelBatchInputs,
+        batch: ModelBatchInputs,
         *,
         is_training: bool,
     ) -> ModelBatchInputs:
@@ -31,7 +31,7 @@ class DataPreprocessorModule(ABC):
         Process batch data and convert to multi_task_batch_inputs for downstream tasks.
 
         Args:
-            multi_task_batch_inputs (ModelBatchInputs): The input features after processing.
+            batch (ModelBatchInputs): The input features after processing.
             is_training (bool): Flag indicating whether the model is in training mode.
 
         Returns:

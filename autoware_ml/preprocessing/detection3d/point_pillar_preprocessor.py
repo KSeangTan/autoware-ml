@@ -23,7 +23,7 @@ import torch
 
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.preprocessing.data_preprocessor_modules import DataPreprocessorModule
-from autoware_ml.ops.voxelization.voxelization import hard_voxelize, VoxelsData
+from autoware_ml.ops.voxelization.voxelization import hard_voxelize
 
 
 class PointPillarPreprocessor(DataPreprocessorModule):
@@ -41,8 +41,7 @@ class PointPillarPreprocessor(DataPreprocessorModule):
         max_num_points: Maximum number of points kept per pillar.
         max_voxels: Maximum number of pillars retained per sample.
         eval_max_voxels: Maximum number of pillars retained per sample during
-            evaluation and inference. Required before the preprocessor runs in
-            evaluation mode.
+            evaluation and inference.
     """
 
     def __init__(
@@ -63,6 +62,7 @@ class PointPillarPreprocessor(DataPreprocessorModule):
     def __call__(
         self,
         multi_task_batch_inputs: ModelBatchInputs,
+        *,
         is_training: bool,
     ) -> ModelBatchInputs:
         """
@@ -96,6 +96,4 @@ class PointPillarPreprocessor(DataPreprocessorModule):
             max_voxels=self.max_voxels if is_training else self.eval_max_voxels,
         )
 
-        return multi_task_batch_inputs.replace(
-            voxels_data=voxels_data
-        )
+        return multi_task_batch_inputs.replace(voxels_data=voxels_data)

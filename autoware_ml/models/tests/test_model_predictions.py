@@ -12,9 +12,10 @@ from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
+from autoware_ml.preprocessing.data_preprocessor_modules import DataPreprocessorModule
 
 
-class _ShiftPoints:
+class _ShiftPoints(DataPreprocessorModule):
     """Preprocessing module shifting the points of the batch by one."""
 
     def __call__(self, batch_inputs: ModelBatchInputs, *, is_training: bool) -> ModelBatchInputs:
