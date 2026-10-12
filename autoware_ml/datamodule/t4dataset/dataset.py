@@ -4,7 +4,7 @@ import json
 import logging
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 from jaxtyping import Float32
 import polars as pl
@@ -38,6 +38,9 @@ from autoware_ml.datamodule.t4dataset.frame_meta import scene_dir_fragment
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.types.tasks import TaskType
 
+if TYPE_CHECKING:
+    from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider
+
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +62,7 @@ class T4Dataset(BaseDataset):
         lidar_sources: Sequence[str] | None = None,
         camera_names: Sequence[str] | None = None,
         camera_sources: Sequence[str] | None = None,
+        map_provider: LaneletMapProvider | None = None,
     ) -> None:
         """
         Initialize the T4Dataset class.
@@ -88,6 +92,8 @@ class T4Dataset(BaseDataset):
           camera_sources: Channel names of the cameras to serve one by one, each camera of a
             record as its own sample. The records missing one of them at the sample time are
             left out. It replaces camera_names and cannot be combined with lidar_sources.
+          map_provider: Resolves a scene token of this database to its lanelet map, read by
+            the map-backed evaluation filters. None when the database ships no maps.
         """
         task_builders = {TaskType(key): build_task for key, build_task in dataset_tasks.items()}
         if lidar_sources is not None:
@@ -117,6 +123,7 @@ class T4Dataset(BaseDataset):
             transforms=transforms,
             det3d_supervised=det3d_supervised,
             seg3d_supervised=seg3d_supervised,
+            map_provider=map_provider,
         )
         self.task_builders: MappingProxyType[TaskType, Callable[..., BaseDatasetTask]] = (
             MappingProxyType(task_builders)

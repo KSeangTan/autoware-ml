@@ -25,10 +25,6 @@ from __future__ import annotations
 import os
 from typing import Any
 
-<<<<<<< HEAD
-
-=======
->>>>>>> refactor/unified-data-interface-clean15
 from autoware_ml.datamodule.base import Dataset
 from autoware_ml.datamodule.common.multiview_detection3d import (
     MultiviewDetection3DDataModule,

@@ -337,6 +337,6 @@ Configuration is done through the `deploy` section in task configs.
 | New model       | Subclass `BaseModel`, implement `forward()` and `compute_metrics()`, override hooks as needed |
 | New dataset     | Subclass `BaseDatabase` and `BaseDataset`, add task datasets deriving `BaseDatasetTask`       |
 | New transform   | Subclass `BaseTransform`, implement `transform()`                                             |
-| New task        | Create config in `configs/tasks/`                                                             |
+| New task        | Create config in `configs/experiments/`                                                       |
 
 See [Adding Models](../contributing/adding-models.md) for a detailed guide.

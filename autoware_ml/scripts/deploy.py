@@ -29,7 +29,7 @@ from omegaconf import DictConfig, OmegaConf
 from pathlib import Path
 import torch
 
-from autoware_ml.builders.database_builder import build_database, build_datamodule
+from autoware_ml.builders.database_builder import build_datamodule
 from autoware_ml.builders.mlflow_builder import build_mlflow_run_context
 from autoware_ml.builders.model_builder import (
     build_model,
@@ -181,8 +181,7 @@ def main(cfg: DictConfig):
     logger.info("Output directory for deployment: %s", output_dir)
 
     # Build datamodule
-    database = build_database(cfg)
-    datamodule = build_datamodule(cfg, database=database)
+    datamodule = build_datamodule(cfg)
 
     # Build model
     data_preprocessor = build_data_preprocessor(cfg)

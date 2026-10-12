@@ -1,0 +1,5 @@
+# @package _global_
+defaults:
+  - base
+  - /experiments/segmentation3d/ptv3/encoder_tiny
+  - _self_

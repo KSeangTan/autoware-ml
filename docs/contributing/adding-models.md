@@ -158,17 +158,21 @@ deriving `BaseDatasetTask`, listed under `dataset_tasks` of the dataset config.
 
 Create a task config:
 
-```yaml title="configs/tasks/my_task/my_model/base.yaml"
+```yaml title="configs/experiments/my_task/my_model/base.yaml"
 # @package _global_
 defaults:
-  - /defaults/default_runtime
+  - /experiments/default_experiment
+  - /optimizers@optimizer: default_adamw
   - _self_
+
+database: ???
+point_cloud_range: ???
 
 model:
   _target_: autoware_ml.models.my_task.my_model.MyModel
-  num_classes: ${dataset.segmentation3d.num_classes}
-  ignore_index: ${dataset.segmentation3d.ignore_index}
-  metrics: ${dataset.segmentation3d.metrics}
+  num_classes: ${class_count:${database.taxonomy.segmentation3d.class_names}}
+  ignore_index: ${database.taxonomy.segmentation3d.ignore_index}
+  metrics: ${metrics}
 
   encoder:
     _target_: torch.nn.Linear
@@ -180,43 +184,42 @@ model:
     in_features: 64
     out_features: ${model.num_classes}
 
-  optimizer:
-    _target_: torch.optim.AdamW
-    _partial_: true
-    lr: 0.001
-    weight_decay: 0.01
-
+  optimizer: ${optimizer}
   scheduler:
     _target_: torch.optim.lr_scheduler.CosineAnnealingLR
     _partial_: true
     T_max: ${trainer.max_epochs}
 
 trainer:
-  max_epochs: 50
+  max_epochs: ???
 
-data_preprocessing:
-  _target_: autoware_ml.preprocessing.base.DataPreprocessing
-  pipeline: []
+data_preprocessor:
+  preprocessor_modules: []
 ```
 
-Create a dataset-specific config that selects the database, the datamodule and the dataloader
-settings:
+The classes come from the taxonomy of the database, the metric suites from the `metrics` group
+of the evaluated database, and the optimizer from the shared `optimizers` group. The experiment
+root declares `metrics`, `metric_ranges`, `database` and the experiment name as mandatory, so a
+leaf cannot run until it names them.
 
-```yaml title="configs/tasks/my_task/my_model/my_config.yaml"
+Create a range base per database that composes its metric suites and datamodule and writes the
+pipelines under `datasets.train` and `datasets.test`, then one leaf per database with the batch
+size, epochs and experiment name:
+
+```yaml title="configs/experiments/my_task/my_model/t4dataset/base_122m.yaml"
 # @package _global_
 defaults:
-  - /tasks/my_task/my_model/base
-  - /datasets/t4dataset/segmentation3d
-  - /datasets/t4dataset/lidar
-  - /database@database: t4dataset/t4dataset_j6gen2_semaseg
+  - ../base
+  - /metrics/t4dataset/segmentation3d/default_segmentation3d_metrics
+  - /metrics/t4dataset/segmentation3d@metrics: default_segmentation3d_metric_suites
+  - /metrics/t4dataset/segmentation3d@metric_ranges: default_segmentation3d_120m_metric_ranges
   - /datamodule@datamodule: t4dataset/default_segmentation3d_datamodule
   - _self_
 
-dataset: ${t4dataset}
 point_cloud_range: [-122.88, -122.88, -3.0, 122.88, 122.88, 5.0]
 
-datamodule:
-  train_dataset:
+datasets:
+  train:
     transforms:
       _target_: autoware_ml.transforms.base.TransformsCompose
       _convert_: all
@@ -229,7 +232,7 @@ datamodule:
           translation_std: [0.5, 0.5, 0.2]
         - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRangeFilter
           points_range: ${point_cloud_range}
-  test_dataset:
+  test:
     transforms:
       _target_: autoware_ml.transforms.base.TransformsCompose
       _convert_: all
@@ -238,18 +241,34 @@ datamodule:
           use_dim: [0, 1, 2, 3]
         - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRangeFilter
           points_range: ${point_cloud_range}
+
+# Batch size and workers reach every dataloader from the top level, only the exceptions go here.
+datamodule:
   train_dataloader:
-    batch_size: 8
-    num_workers: 4
     shuffle: true
-  validation_dataloader:
-    batch_size: 8
-    num_workers: 4
+  predict_dataloader:
+    batch_size: 1
 ```
 
-The dataset configs leave `transforms` required, so every task config writes the pipeline of the
-training and test datasets. Validation and predict use the test pipeline. Models never share a
-pipeline, a model that needs the same steps copies them.
+```yaml title="configs/experiments/my_task/my_model/t4dataset/my_model_b8_50e_t4dataset_122m_j6gen2_semaseg.yaml"
+# @package _global_
+defaults:
+  - base_122m
+  - /database@database: t4dataset/t4dataset_j6gen2_semaseg
+  - _self_
+
+batch_size: 8
+num_workers: 4
+experiment_group_name: my_model/${database.version}/j6gen2_semaseg
+experiment_name: my_model_b8_50e_t4dataset_122m
+
+trainer:
+  max_epochs: 50
+```
+
+The dataset configs leave `transforms` required, so every experiment writes the pipeline of the
+training and test datasets under `datasets`. Validation and predict use the test pipeline. Models
+never share a pipeline, a model that needs the same steps copies them.
 
 A run can mix several corpora. Every entry of `datamodule.sources` is a `DatasetSource` that
 Hydra instantiates. It names a database, the dataset of every split it serves, and how many
@@ -283,7 +302,8 @@ datamodule:
 ```
 
 !!! note
-    Some parameters are inherited from the default runtime config. Take a look at `configs/defaults/default_runtime.yaml` for more details.
+    The trainer, callbacks, logger, deploy and path settings come from the modules under
+    `configs/defaults/modules/`, composed by `configs/experiments/default_experiment.yaml`.
 
 Runtime preprocessing lives at the top level of the composed config and is
 attached to the model by the entrypoints.
@@ -314,11 +334,11 @@ class MyAugmentation(BaseTransform):
         return model_gt_sample._replace(point_cloud_data=point_cloud_data)
 ```
 
-Add the transform to the training pipeline in your task config:
+Add the transform to the training pipeline of your range base:
 
-```yaml title="configs/tasks/my_task/my_model/my_config.yaml"
-datamodule:
-  train_dataset:
+```yaml title="configs/experiments/my_task/my_model/t4dataset/base_122m.yaml"
+datasets:
+  train:
     transforms:
       _target_: autoware_ml.transforms.base.TransformsCompose
       _convert_: all
@@ -333,16 +353,18 @@ datamodule:
 ## Step 5: Add Runtime Data Preprocessing (Optional)
 
 Runtime preprocessing runs on the target device after batch transfer and
-before the forward pass. It is configured at the top level and attached to
-the model by the entrypoint scripts.
+before the forward pass. It is configured at the top level as `data_preprocessor`, a
+`DataPreprocessor` holding `DataPreprocessorModule` instances, and handed to the model by the
+builders.
 
 If your task needs custom preprocessing:
 
 ```python title="autoware_ml/preprocessing/my_preprocessing/my_preprocessing.py"
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.preprocessing.data_preprocessor_modules import DataPreprocessorModule
 
 
-class MyPreprocessingLayer:
+class MyPreprocessingLayer(DataPreprocessorModule):
     def __init__(self, scale: float = 1.0):
         self.scale = scale
 
@@ -356,17 +378,16 @@ class MyPreprocessingLayer:
 Add to config:
 
 ```yaml
-data_preprocessing:
-  _target_: autoware_ml.preprocessing.base.DataPreprocessing
-  pipeline:
+data_preprocessor:
+  preprocessor_modules:
     - _target_: autoware_ml.preprocessing.my_preprocessing.my_preprocessing.MyPreprocessingLayer
       scale: 1.0
 ```
 
 !!! warning
-    Preprocessing layers must be callable objects that accept `ModelBatchInputs` and the keyword
-    `is_training`, and return `ModelBatchInputs` with the features they compute added or the
-    data they change replaced.
+    Preprocessing modules derive `DataPreprocessorModule`, accept `ModelBatchInputs` and the
+    keyword `is_training`, and return `ModelBatchInputs` with the features they compute added or
+    the data they change replaced.
 
 Output-side shaping (logits -> probabilities, decoder scatter, voxel-to-point mapping, etc.) belongs
 **inside the model** - in `forward()`, `compute_metrics()`, or `predict_outputs()`.

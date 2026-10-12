@@ -13,19 +13,20 @@ All configs live in `autoware_ml/configs/`:
 ```text
 configs/
 ├── defaults/          # Base settings and module defaults
-└── tasks/             # Task-specific configs
+└── experiments/       # Experiment configs, one tree per task and model
 ```
 
 ## Hydra Syntax
 
 ### `# @package _global_`
 
-Always include this directive at the top of task configs to merge contents at the root level:
+Always include this directive at the top of experiment configs to merge contents at the root
+level. A model base composes the experiment root, which brings in the runtime modules:
 
 ```yaml
 # @package _global_
 defaults:
-  - /defaults/default_runtime
+  - /experiments/default_experiment
   - _self_
 ```
 
@@ -108,7 +109,10 @@ for it:
   (`database_root_path`, `lidar_intensity_scale`, both from `${database}`), whether its boxes
   (`det3d_supervised`) and semantic masks (`seg3d_supervised`) supervise the run, and carry the
   task datasets (`dataset_tasks`) and the transforms of the split. The validation and predict
-  splits read the test one.
+  splits read the test one. A T4 dataset also carries the lanelet `map_provider` of its
+  database, resolved against its own `database_root_path`, so the map-backed evaluation
+  filters of the task configs read `${datasets.test.map_provider}` and follow whichever
+  corpus is evaluated.
 - `datamodule.sources.<name>` is a `DatasetSource` that Hydra instantiates. It names a database,
   the dataset of every split it serves (`train_dataset`, `validation_dataset`, `test_dataset`,
   `predict_dataset`, `null` for a split it stays out of), and how many times its frames appear
@@ -128,16 +132,15 @@ For custom components, point `_target_` at the concrete implementation module,
 for example `autoware_ml.transforms.my_transforms.my_transform.MyTransform` or
 `autoware_ml.models.common.backbones.my_backbone.MyBackbone`.
 
-### `data_preprocessing`
+### `data_preprocessor`
 
 Defines runtime preprocessing that runs after batch transfer and before
-`forward()`. This section is instantiated by the entrypoint and attached to the
-model through `BaseModel.set_data_preprocessing(...)`:
+`forward()`. The experiment root declares an empty `DataPreprocessor`, a model base lists the
+modules it needs, and the builders hand the instance to the model:
 
 ```yaml
-data_preprocessing:
-  _target_: autoware_ml.preprocessing.base.DataPreprocessing
-  pipeline:
+data_preprocessor:
+  preprocessor_modules:
     - _target_: autoware_ml.preprocessing.my_preprocessing.my_preprocessing.MyPreprocessingLayer
       param: value
 ```
@@ -263,7 +266,7 @@ Configs inherit using the `defaults` key:
 ```yaml
 # @package _global_
 defaults:
-  - /tasks/my_task/my_model/base  # Inherit base config
+  - /experiments/my_task/my_model/base  # Inherit base config
   - _self_                        # Apply this file's overrides
 
 # Override specific values
@@ -318,10 +321,10 @@ autoware-ml train --config-name <task>/<model>/<config> \
 
 Create a new YAML file inheriting from a base config:
 
-```yaml title="configs/tasks/my_task/my_model/my_experiment.yaml"
+```yaml title="configs/experiments/my_task/my_model/my_experiment.yaml"
 # @package _global_
 defaults:
-  - /tasks/my_task/my_model/base
+  - /experiments/my_task/my_model/base
   - _self_
 
 trainer:

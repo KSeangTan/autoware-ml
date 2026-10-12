@@ -1,15 +1,12 @@
 # @package _global_
 defaults:
   - /experiments/default_experiment
-  - /metrics/t4dataset/detection3d/default_detection3d_metrics
   - /optimizers@optimizer: default_adamw
-  - /metrics/t4dataset/detection3d@metrics: default_detection3d_metric_suites
   - _self_
 
 database: ???
 point_cloud_range: ???
 voxel_size: ???
-metric_ranges: ???
 max_num_points: 32
 max_voxels: 96000
 eval_max_voxels: 96000
@@ -32,15 +29,6 @@ trainer:
   check_val_every_n_epoch: 5
   gradient_clip_val: 5.0
   gradient_clip_algorithm: norm
-
-callbacks:
-  dynamic_validation:
-    _target_: autoware_ml.callbacks.dynamic_validation.DynamicValidation
-    # [start_epoch, check_val_every_n_epoch] pairs. Validate every 5 epochs while the loss is
-    # still falling quickly, then every epoch from epoch 20 so the best checkpoint is picked at
-    # epoch resolution. The callback rewrites trainer.check_val_every_n_epoch at every epoch
-    # start; 50-epoch experiments override the second entry.
-    epoch_intervals: [[0, 5], [20, 1]]
 
 deploy:
   onnx:
@@ -108,7 +96,7 @@ model:
   bbox_head:
     _target_: autoware_ml.models.detection3d.heads.centerhead.CenterHead
     in_channels: 384
-    class_names: ${database.database_task_configs.detection3d.label_names}
+    class_names: ${database.taxonomy.detection3d.class_names}
     shared_channels: 64
     point_cloud_range: ${point_cloud_range}
     voxel_size: ${voxel_size}

@@ -6,7 +6,7 @@ import itertools
 import time
 from abc import abstractmethod
 from pathlib import Path
-from typing import Self, Sequence
+from typing import TYPE_CHECKING, Self, Sequence
 
 
 import polars as pl
@@ -14,6 +14,9 @@ from torch.utils.data import Dataset
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch, ModelGTSample
 from autoware_ml.transforms.base import TransformsCompose
+
+if TYPE_CHECKING:
+    from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider
 
 
 class BaseDataset(Dataset):
@@ -23,6 +26,10 @@ class BaseDataset(Dataset):
     of that corpus supervising the run. The datamodule declares it once, without records, and
     binds it to the records of its dataset source in setup. Binding returns a copy serving
     those records. A dataset built with its records directly is bound from the start.
+
+    The dataset also owns the map provider of its corpus, when the corpus ships lanelet maps.
+    The evaluation filters and collision metrics read the map of a scene through it, so the
+    provider follows the database the dataset reads instead of the task being evaluated.
     """
 
     def __init__(
@@ -34,6 +41,7 @@ class BaseDataset(Dataset):
         transforms: TransformsCompose | None,
         det3d_supervised: bool = True,
         seg3d_supervised: bool = True,
+        map_provider: LaneletMapProvider | None = None,
     ) -> None:
         """
         Initialize the dataset.
@@ -49,6 +57,9 @@ class BaseDataset(Dataset):
               gets an empty box set.
           seg3d_supervised: Whether the semantic masks of this corpus are used. If False, every
               point gets the ignore index.
+          map_provider: Resolves a scene token of this corpus to its lanelet map. None when
+              the corpus has no maps, which leaves every map-backed metric filter without a
+              provider.
         """
         super().__init__()
         self.database_root_path = Path(database_root_path)
@@ -57,6 +68,7 @@ class BaseDataset(Dataset):
         self.dataset_records_dataframe = dataset_records_dataframe
         self.det3d_supervised = det3d_supervised
         self.seg3d_supervised = seg3d_supervised
+        self.map_provider = map_provider
 
     @property
     def is_bound(self) -> bool:

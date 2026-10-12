@@ -4,6 +4,7 @@ _convert_: all
 defaults:
   - /datamodule/t4dataset/datasets/detection3d@dataset_tasks.detection3d: default_detection3d
   - /datamodule/t4dataset/datasets/segmentation3d@dataset_tasks.segmentation3d: default_segmentation3d
+  - /datamodule/t4dataset/datasets/map_provider@map_provider: default_map_provider
 
 max_num_3d_gt_bboxes: 500
 

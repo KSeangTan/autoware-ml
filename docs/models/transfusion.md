@@ -21,14 +21,14 @@ TransFusion is a LiDAR-based 3D object detection model integrated under the `det
 
 No standalone TransFusion experiment config is bundled under `autoware_ml/configs/experiments/` yet. The LiDAR-only [BEVFusion](bevfusion.md) experiments run the same sparse-voxel encoder, `SECOND` backbone, `SECONDFPN` neck, and TransFusion head stack, and are the recommended way to train this architecture today.
 
-The legacy configs under `autoware_ml/configs/tasks/detection3d/transfusion/` predate the current entrypoints and cannot be loaded by `autoware-ml train`, `test`, or `deploy`. To add a TransFusion experiment, mirror the CenterPoint layout: a `base.yaml` with the model and export modules, a `t4dataset/base_<range>.yaml` with the range-dependent settings and transforms, a voxel-level base, and one leaf per database.
+Experiment configs live under `autoware_ml/configs/experiments/detection3d/transfusion/` and follow the CenterPoint layout: a `base.yaml` with the model and export modules, a `t4dataset/base_<range>.yaml` with the range-dependent settings and transforms, a voxel-level base, and one leaf per database. The bundled leaves are `detection3d/transfusion/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base` and `detection3d/transfusion/nuscenes/voxel0075_second_secfpn_b16_30e_nuscenes_54m`.
 
 ## Training
 
 Once an experiment config exists it is trained through the standard entrypoint, with `--weights` supplying a pretrained checkpoint when the config declares `weights: ???`:
 
 ```bash
-autoware-ml train --config-name detection3d/transfusion/<experiment>
+autoware-ml train --config-name detection3d/transfusion/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base
 ```
 
 Checkpoints are written to `mlruns/<config_name>/<run_id>/artifacts/checkpoints/` as `best.ckpt` and `last.ckpt`.
@@ -37,8 +37,8 @@ Checkpoints are written to `mlruns/<config_name>/<run_id>/artifacts/checkpoints/
 
 ```bash
 autoware-ml test \
-    --config-name detection3d/transfusion/<experiment> \
-    --weights mlruns/detection3d/transfusion/<experiment>/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name detection3d/transfusion/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base \
+    --weights mlruns/detection3d/transfusion/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 Evaluation runs on a single device by default so metrics are deterministic. Pass `--use-config-devices` to keep the `trainer.devices` from the config.
@@ -47,8 +47,8 @@ Evaluation runs on a single device by default so metrics are deterministic. Pass
 
 ```bash
 autoware-ml deploy \
-    --config-name detection3d/transfusion/<experiment> \
-    --weights mlruns/detection3d/transfusion/<experiment>/<run_id>/artifacts/checkpoints/best.ckpt \
+    --config-name detection3d/transfusion/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base \
+    --weights mlruns/detection3d/transfusion/t4dataset/voxel0170_second_secfpn_b16_30e_t4dataset_120m_j6gen2_base/<run_id>/artifacts/checkpoints/best.ckpt \
     --release v1.0.0
 ```
 
@@ -67,21 +67,21 @@ Exports land in `mlruns/<config_name>/<run_id>/artifacts/exports/` of a dedicate
 
 ## Implementation
 
-| Path                                                    | Description                                      |
-| ------------------------------------------------------- | ------------------------------------------------ |
-| `autoware_ml/models/detection3d/transfusion.py`         | TransFusion model wrapper                        |
-| `autoware_ml/models/detection3d/encoders/voxel.py`      | Hard voxelization feature encoder                |
-| `autoware_ml/models/detection3d/encoders/sparse.py`     | Sparse 3D convolution encoder                    |
-| `autoware_ml/models/detection3d/backbones/second.py`    | SECOND backbone                                  |
-| `autoware_ml/models/detection3d/necks/second_fpn.py`    | SECONDFPN neck                                   |
-| `autoware_ml/models/detection3d/heads/transfusion.py`   | TransFusion detection head                       |
-| `autoware_ml/models/detection3d/task_modules/`          | Shared assigners, costs, coders                  |
-| `autoware_ml/datamodule/t4dataset/dataset.py`           | T4Dataset records as a dataset                   |
-| `autoware_ml/datamodule/nuscenes/dataset.py`            | nuScenes dataset                                 |
-| `autoware_ml/datamodule/detection3d.py`                 | 3D boxes of a record                             |
-| `autoware_ml/configs/datamodule/`                       | Datamodule, dataset and transform configurations |
-| `autoware_ml/preprocessing/detection3d/point_pillar.py` | Pillar preprocessing                             |
-| `autoware_ml/configs/tasks/detection3d/transfusion/`    | Task configurations                              |
+| Path                                                       | Description                                      |
+| ---------------------------------------------------------- | ------------------------------------------------ |
+| `autoware_ml/models/detection3d/transfusion.py`            | TransFusion model wrapper                        |
+| `autoware_ml/models/detection3d/encoders/voxel.py`         | Hard voxelization feature encoder                |
+| `autoware_ml/models/detection3d/encoders/sparse.py`        | Sparse 3D convolution encoder                    |
+| `autoware_ml/models/detection3d/backbones/second.py`       | SECOND backbone                                  |
+| `autoware_ml/models/detection3d/necks/second_fpn.py`       | SECONDFPN neck                                   |
+| `autoware_ml/models/detection3d/heads/transfusion.py`      | TransFusion detection head                       |
+| `autoware_ml/models/detection3d/task_modules/`             | Shared assigners, costs, coders                  |
+| `autoware_ml/datamodule/t4dataset/dataset.py`              | T4Dataset records as a dataset                   |
+| `autoware_ml/datamodule/nuscenes/dataset.py`               | nuScenes dataset                                 |
+| `autoware_ml/datamodule/detection3d.py`                    | 3D boxes of a record                             |
+| `autoware_ml/configs/datamodule/`                          | Datamodule, dataset and transform configurations |
+| `autoware_ml/preprocessing/detection3d/point_pillar.py`    | Pillar preprocessing                             |
+| `autoware_ml/configs/experiments/detection3d/transfusion/` | Experiment configurations                        |
 
 ## Acknowledgment
 

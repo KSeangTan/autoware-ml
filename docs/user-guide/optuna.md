@@ -43,10 +43,10 @@ This launches 50 trials, minimizing the objective metric (default: validation lo
 
 Define hyperparameter ranges in your config:
 
-```yaml title="configs/tasks/my_task/my_model/my_optuna.yaml"
+```yaml title="configs/experiments/my_task/my_model/my_optuna.yaml"
 # @package _global_
 defaults:
-  - /tasks/my_task/my_model/base
+  - /experiments/my_task/my_model/base
   - _self_
 
 hydra:
@@ -136,10 +136,10 @@ All trials are logged to MLflow. Use the MLflow UI to compare trials as regular 
 
 ## Example: Full Optimization Config
 
-```yaml title="configs/tasks/my_task/my_model/my_optuna.yaml"
+```yaml title="configs/experiments/my_task/my_model/my_optuna.yaml"
 # @package _global_
 defaults:
-  - /tasks/my_task/my_model/base
+  - /experiments/my_task/my_model/base
   - override /hydra/sweeper: optuna
   - _self_
 

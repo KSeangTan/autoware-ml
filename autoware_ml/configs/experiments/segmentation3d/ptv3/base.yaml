@@ -1,0 +1,93 @@
+# @package _global_
+defaults:
+  - /experiments/default_experiment
+  - /experiments/segmentation3d/ptv3/encoder_base
+  - /experiments/segmentation3d/ptv3/voxel_encoder
+  - /experiments/segmentation3d/ptv3/seg_head_base
+  - /optimizers@optimizer: default_adamw
+  - _self_
+
+database: ???
+point_cloud_range: ???
+# Edge of the cubic voxels the encoder serializes, in meters.
+grid_size: ???
+max_voxels: ???
+
+data_preprocessor:
+  preprocessor_modules:
+    - _target_: autoware_ml.preprocessing.detection3d.point_pillar_preprocessor.PointPillarPreprocessor
+      voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
+      point_cloud_range: ${point_cloud_range}
+      max_num_points: 32
+      max_voxels: ${max_voxels}
+      eval_max_voxels: ${max_voxels}
+
+optimizer:
+  lr: 0.002
+  weight_decay: 0.005
+
+trainer:
+  max_epochs: ???
+  # Initial value only, the dynamic_validation callback of the root rewrites it per epoch.
+  check_val_every_n_epoch: 5
+  gradient_clip_val: 10.0
+
+callbacks:
+  model_checkpoint:
+    monitor: val/loss
+    mode: min
+  early_stopping:
+    monitor: val/loss
+    patience: 20
+    mode: min
+
+deploy:
+  onnx:
+    enabled: true
+    opset_version: 17
+    dynamo: false
+    do_constant_folding: false
+    modules:
+      ptv3_encoder:
+        output_names: [point_feat_0, point_feat_1, point_feat_2, point_feat_3, point_feat_4]
+        metainfo:
+          point_cloud_range: ${point_cloud_range}
+          voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
+          serialization_orders: [z, z-trans]
+          pooling_strides: ${model.encoder.stride}
+          enc_channels: ${model.encoder.enc_channels}
+      ptv3_seg3d_head:
+        output_names: [pred_labels, pred_probs]
+        metainfo:
+          dec_depths: ${model.seg3d_head.dec_depths}
+          class_names: ${database.taxonomy.segmentation3d.class_names}
+  tensorrt:
+    enabled: false
+
+model:
+  _target_: autoware_ml.models.segmentation3d.ptv3.PTv3SegmentationModel
+  _convert_: all
+  metrics: ${metrics}
+  log_dict_configs:
+    _target_: autoware_ml.models.module_base_model.LogDictConfigs
+    _convert_: all
+    on_step: true
+    on_epoch: true
+    prog_bar: true
+    sync_dist: true
+  grid_size: ${grid_size}
+  point_cloud_range: ${point_cloud_range}
+  optimizer: ${optimizer}
+  optimizer_group_overrides:
+    block:
+      lr: 0.0002
+  scheduler:
+    _target_: torch.optim.lr_scheduler.OneCycleLR
+    _partial_: true
+    max_lr: [0.002, 0.0002]
+    pct_start: 0.04
+    anneal_strategy: cos
+    div_factor: 10.0
+    final_div_factor: 100.0
+  scheduler_config:
+    interval: step

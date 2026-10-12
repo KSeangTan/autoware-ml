@@ -1,0 +1,6 @@
+# @package _global_
+defaults:
+  - /experiments/segmentation3d/ptv3/tiny
+  - /experiments/segmentation3d/litept/encoder_tiny
+  - /experiments/segmentation3d/litept/seg_head_tiny
+  - _self_

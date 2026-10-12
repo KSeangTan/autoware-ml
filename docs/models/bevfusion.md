@@ -121,7 +121,7 @@ Exports land in `mlruns/<config_name>/<run_id>/artifacts/exports/` of a dedicate
 | `autoware_ml/transforms/camera/`                              | Multiview image loading and augmentation         |
 | `autoware_ml/configs/datamodule/`                             | Datamodule, dataset and transform configurations |
 | `autoware_ml/preprocessing/detection3d/point_pillar.py`       | Pillar preprocessing                             |
-| `autoware_ml/configs/tasks/detection3d/bevfusion/`            | Task configurations                              |
+| `autoware_ml/configs/experiments/detection3d/bevfusion/`      | Experiment configurations                        |
 
 ## Acknowledgment
 

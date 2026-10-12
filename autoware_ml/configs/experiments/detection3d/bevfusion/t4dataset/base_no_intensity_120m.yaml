@@ -9,7 +9,7 @@ model:
     pts_voxel_encoder:
       _target_: autoware_ml.models.detection3d.encoders.voxel.HardSimpleVoxelSinCosEncoder
       in_channels: 4
-      # Normalization ranges for (x, y, z, intensity).
+      # Normalization ranges for (x, y, z, time_lag).
       min_norm_values:
         - ${point_cloud_range.0}
         - ${point_cloud_range.1}
@@ -28,9 +28,11 @@ model:
       output_channels: 128
       dense_output_shapes: ???
 
-datamodule:
-  # Overwrite transforms
-  train_dataset:
+# The encoder is built for 4 channels (x, y, z, timestamp), so every pipeline drops intensity.
+# Hydra replaces lists wholesale, so both pipelines are repeated with `use_dim: [0, 1, 2]`.
+# Validation and predict read the test dataset.
+datasets:
+  train:
     transforms:
       _target_: autoware_ml.transforms.base.TransformsCompose
       _convert_: all
@@ -116,15 +118,9 @@ datamodule:
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesAttributeFilter
           _convert_: all
 
-          filter_attributes:
-            - [bicycle, vehicle_state.parked]
-            - [bicycle, cycle_state.without_rider]
-            - [bicycle, motorcycle_state.without_rider]
+          filter_attributes: ${filter_attributes}
 
-  # The encoder is built for 4 channels (x, y, z, timestamp), so validation, test and predict
-  # pipelines must also drop intensity. Hydra replaces lists wholesale, so the full default
-  # test pipeline is repeated here with `use_dim: [0, 1, 2]`.
-  validation_dataset:
+  test:
     transforms:
       _target_: autoware_ml.transforms.base.TransformsCompose
       _convert_: all
@@ -141,7 +137,7 @@ datamodule:
 
           past:
             _target_: autoware_ml.transforms.point_cloud.loading.SweepWindow
-            num: 2
+            num: 1
             time_lag_range: [0.05, 0.25]
             selection: nearest
           bev_remove_radius: 1.0
@@ -167,13 +163,4 @@ datamodule:
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesAttributeFilter
           _convert_: all
 
-          filter_attributes:
-            - [bicycle, vehicle_state.parked]
-            - [bicycle, cycle_state.without_rider]
-            - [bicycle, motorcycle_state.without_rider]
-
-  test_dataset:
-    transforms: ${datamodule.validation_dataset.transforms}
-
-  predict_dataset:
-    transforms: ${datamodule.validation_dataset.transforms}
+          filter_attributes: ${filter_attributes}

@@ -119,7 +119,7 @@ deploy:
     modules:
       <module>:
         metainfo:
-          class_names: ${dataset.detection3d.class_names}
+          class_names: ${database.taxonomy.detection3d.class_names}
 ```
 
 Each `metainfo` value is stamped as one compact JSON document (scalars,
