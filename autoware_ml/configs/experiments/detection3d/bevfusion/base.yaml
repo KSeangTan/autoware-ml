@@ -34,6 +34,7 @@ trainer:
   check_val_every_n_epoch: 5
   gradient_clip_val: 35.0
   gradient_clip_algorithm: norm
+  sync_batchnorm: true
 
 # Lidar-only models export the bevfusion_lidar main body; camera-lidar models export
 # bevfusion_image_backbone plus the bevfusion_camera_lidar main body.
