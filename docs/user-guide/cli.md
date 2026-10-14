@@ -104,9 +104,9 @@ autoware-ml deploy \
 
 ```bash
 autoware-ml deploy \
-    --config-name detection3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
-    --weights mlruns/segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt \
-    --weights mlruns/detection3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
+    --weights mlruns/segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## test
@@ -134,9 +134,9 @@ autoware-ml test \
 
 ```bash
 autoware-ml test \
-    --config-name detection3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
-    --weights mlruns/segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt \
-    --weights mlruns/detection3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
+    --weights mlruns/segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 ## mlflow ui
@@ -183,7 +183,7 @@ running sessions, and stop the task.
 
 ```bash
 autoware-ml session start --name ptv3-train --cwd /workspace -- \
-    train --config-name segmentation3d/ptv3/voxel005_51m_nuscenes
+    train --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m
 ```
 
 Use `--raw` to run a non-`autoware-ml` command in the managed session:

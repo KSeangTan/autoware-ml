@@ -413,9 +413,9 @@ Use these rules when creating `<variant>`:
 Examples:
 
 ```text
-segmentation3d/ptv3/voxel005_51m_nuscenes
-segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2
-my_task/my_model/my_variant_my_dataset
+segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m
+segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg
+my_task/my_model/my_dataset/my_variant_my_dataset
 ```
 
 ```bash
