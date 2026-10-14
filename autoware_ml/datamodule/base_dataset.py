@@ -13,7 +13,7 @@ import polars as pl
 from torch.utils.data import Dataset
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch, ModelGTSample
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.base import PipelineContext, TransformsCompose
 
 if TYPE_CHECKING:
     from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider
@@ -141,7 +141,8 @@ class BaseDataset(Dataset):
         """
         start_time = time.perf_counter()
         model_gt_sample = self.get_data_sample(index)
-        transformed_gt_sample = self.apply_transforms(model_gt_sample)
+        context = PipelineContext(dataset=self, index=index)
+        transformed_gt_sample = self.apply_transforms(model_gt_sample, self.transforms, context)
         return transformed_gt_sample._replace(io_processing_time=time.perf_counter() - start_time)
 
     @abstractmethod
@@ -158,18 +159,29 @@ class BaseDataset(Dataset):
     def apply_transforms(
         self,
         model_gt_sample: ModelGTSample,
+        transforms: TransformsCompose | None = None,
+        context: PipelineContext | None = None,
     ) -> ModelGTSample:
-        """Apply a specific transform pipeline to a metadata sample.
+        """Apply a transform pipeline to a metadata sample.
+
+        Context-aware transforms draw secondary samples through the context, which is why a
+        pipeline context materializes a secondary sample through this method with the
+        pre-transform of the transform requesting it.
 
         Args:
             model_gt_sample: ModelGTSample instance.
+            transforms: Pipeline to run. None runs the transforms of the dataset.
+            context: Pipeline context of the sample, forwarded to every transform. None runs
+                the pipeline without one, which only plain transforms accept.
 
         Returns:
             Transformed ModelGTSample instance.
         """
-        if self.transforms is None:
+        if transforms is None:
+            transforms = self.transforms
+        if transforms is None:
             return model_gt_sample
-        return self.transforms(model_gt_sample)
+        return transforms(model_gt_sample, context=context)
 
     def collate_fn(self, batch: Sequence[ModelGTSample]) -> ModelGTBatch:
         """
