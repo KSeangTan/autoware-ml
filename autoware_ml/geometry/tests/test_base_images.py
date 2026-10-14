@@ -34,7 +34,7 @@ def _valid_fields(num_cameras: int = NUM_CAMERAS) -> dict[str, Any]:
     return {
         "images": torch.zeros(num_cameras, 3, 8, 8),
         "depth_maps": torch.zeros(num_cameras, 1, 8, 8),
-        "timestamps": torch.zeros(num_cameras),
+        "timestamps": torch.zeros(num_cameras, dtype=torch.float64),
         "camera_intrinsics": intrinsics,
         "camera_names": [f"camera{i}" for i in range(num_cameras)],
         "lidar2images": extrinsics.clone(),
@@ -86,7 +86,7 @@ def test_inconsistent_num_cameras_is_rejected(field_name: str) -> None:
 
 def test_error_message_lists_every_mismatch() -> None:
     fields = _valid_fields()
-    fields["timestamps"] = torch.zeros(NUM_CAMERAS + 1)
+    fields["timestamps"] = torch.zeros(NUM_CAMERAS + 1, dtype=torch.float64)
     fields["camera_names"] = ["only_one"]
     with pytest.raises(ValidationError, match="timestamps=4, camera_names=1"):
         BaseImages(**fields)
@@ -94,6 +94,8 @@ def test_error_message_lists_every_mismatch() -> None:
 
 def test_model_validate_recheck_catches_inconsistent_model_copy() -> None:
     images = BaseImages(**_valid_fields())
-    broken = images.model_copy(update={"timestamps": torch.zeros(NUM_CAMERAS + 1)})
+    broken = images.model_copy(
+        update={"timestamps": torch.zeros(NUM_CAMERAS + 1, dtype=torch.float64)}
+    )
     with pytest.raises(ValidationError, match="timestamps=4"):
         BaseImages.model_validate(broken)
