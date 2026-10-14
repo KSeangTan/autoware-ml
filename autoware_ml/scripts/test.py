@@ -43,6 +43,7 @@ from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.utils.mlflow_helpers import resolve_lineage_context
 from autoware_ml.utils.runtime import (
     configure_torch_runtime,
+    restrict_console_logging_to_rank_zero,
     get_config_path,
     instantiate_callbacks,
     instantiate_trainer,
@@ -128,6 +129,7 @@ def main(cfg: DictConfig):
     )
 
     configure_torch_runtime()
+    restrict_console_logging_to_rank_zero()
     set_seed(cfg)
 
     # Build trainer logger

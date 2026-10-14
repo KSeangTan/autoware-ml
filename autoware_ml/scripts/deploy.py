@@ -47,6 +47,7 @@ from autoware_ml.utils.deploy import (
 )
 from autoware_ml.utils.runtime import (
     configure_torch_runtime,
+    restrict_console_logging_to_rank_zero,
     get_config_path,
     log_configuration,
     log_hyperparameters,
@@ -163,6 +164,7 @@ def main(cfg: DictConfig):
 
     validate_cuda_available()
     configure_torch_runtime()
+    restrict_console_logging_to_rank_zero()
     set_seed(cfg)
 
     device = torch.device("cuda")
@@ -195,7 +197,7 @@ def main(cfg: DictConfig):
         enforce_full_coverage=True,
     )
 
-    if mlflow_client is not None and run_context is None:
+    if mlflow_client is not None and run_context is not None:
         log_config_params(
             mlflow_client,
             run_context.run_id,
