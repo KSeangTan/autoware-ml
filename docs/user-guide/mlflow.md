@@ -122,7 +122,7 @@ Autoware-ML now keeps both Hydra scratch outputs and MLflow-owned artifacts
 under the same `mlruns/` root:
 
 - `mlruns/mlflow.db`: Shared SQLite backend store
-- `mlruns/<task>/<model>/<config>/<run_id>/hydra/`: Hydra scratch directory and local command outputs
+- `mlruns/<task>/<model>/<config>/<run_id>/artifacts/hydra/`: Hydra scratch directory and local command outputs
 - `mlruns/<task>/<model>/<config>/<run_id>/artifacts/`: Run-owned MLflow artifacts
 - `mlruns/<task>/<model>/<config>/<run_id>/artifacts/run_metadata.json`: Run metadata used to preserve lineage across train, test, and deploy
 

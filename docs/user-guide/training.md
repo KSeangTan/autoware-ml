@@ -13,7 +13,7 @@ autoware-ml train --config-name <task>/<model>/<config>
 ```
 
 Hydra scratch outputs are saved automatically under
-`mlruns/<task>/<model>/<config>/<run_id>/hydra/`.
+`mlruns/<task>/<model>/<config>/<run_id>/artifacts/hydra/`.
 MLflow-owned artifacts are saved under
 `mlruns/<task>/<model>/<config>/<run_id>/artifacts/`, including checkpoints,
 resolved config snapshots, and run metadata.
