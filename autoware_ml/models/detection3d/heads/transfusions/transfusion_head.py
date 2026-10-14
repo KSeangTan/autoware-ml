@@ -518,7 +518,8 @@ class TransFusionHead(nn.Module):
 
             resolved_groups.append(
                 ScoreThresholdGroup(
-                    class_ids=class_ids, score_thresold=score_threshold_config_group.score_threshold
+                    class_ids=class_ids,
+                    score_threshold=score_threshold_config_group.score_threshold,
                 )
             )
         return resolved_groups

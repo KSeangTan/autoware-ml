@@ -34,7 +34,7 @@ class ScoreThresholdGroup(NamedTuple):
     """
 
     class_ids: Sequence[int]
-    score_thresold: float
+    score_threshold: float
 
 
 def normalize_boxes3d(boxes: Float32[torch.Tensor, " 9"]) -> torch.Tensor:
@@ -235,7 +235,7 @@ class TransFusionBBoxCoder:
                         f"TransFusionBBoxCoder score threshold group {group_index} class id "
                         f"{class_id} is out of range for {num_classes} classes."
                     )
-                class_thresholds[class_id] = group.score_thresold
+                class_thresholds[class_id] = group.score_threshold
 
         # (num_classes,)[(batch_size, num_proposals)] -> (batch_size, num_proposals)
         return bbox_scores > class_thresholds[bbox_classes]
