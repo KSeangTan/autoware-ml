@@ -30,9 +30,7 @@ from autoware_ml.ops.deformable_aggregation import (
     flatten_feature_maps,
 )
 
-# Inputs and outputs recorded from the original extension of
-# https://github.com/HorizonRobotics/Sparse4D: its feature_maps_format, forward and backward run
-# on seeded inputs, with the removed THC atomics include dropped from the CUDA source.
+# Outputs of the original Sparse4D v3 extension
 SPARSE4D_V3_REFERENCE = Path(__file__).parent / "test_data" / "sparse4d_v3_reference.npz"
 
 
