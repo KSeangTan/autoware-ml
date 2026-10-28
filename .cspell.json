@@ -254,6 +254,7 @@
     "reweights",
     "RGBDI",
     "rtol",
+    "savez",
     "secfpn",
     "SECONDFPN",
     "semaseg",

@@ -107,6 +107,12 @@ def get_ext_modules() -> list[Extension]:
             sources=["src/diff_iou_rotated.cpp"],
             sources_cuda=["src/diff_iou_rotated_cuda.cu"],
         ),
+        make_cuda_ext(
+            name="deformable_aggregation_ext",
+            module="autoware_ml.ops.deformable_aggregation",
+            sources=["src/deformable_aggregation.cpp"],
+            sources_cuda=["src/deformable_aggregation_cuda.cu"],
+        ),
     ]
 
 

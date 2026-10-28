@@ -17,6 +17,11 @@ bookkeeping, it should not live in `ops/`.
 
 - `bev_pool/`
   - BEV pooling CUDA/C++ extension used by camera-lidar detection models
+- `deformable_aggregation/`
+  - efficient deformable aggregation of Sparse4D: samples the feature pyramids of every
+    camera at the projected key points of the anchors and sums the samples with learned
+    weights in one CUDA kernel, forward and backward. Adapted from the Horizon Robotics
+    reference; the token flattening keeps the reference layout
 - `diff_iou_rotated/`
   - differentiable IoU of rotated 2D/3D boxes. The polygon construction and the vertex
     sorting kernel are adapted from mmcv; the candidate deduplication, the geometry
