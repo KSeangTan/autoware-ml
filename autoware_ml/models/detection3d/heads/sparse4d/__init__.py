@@ -14,6 +14,7 @@
 
 """Building blocks, instance bank, targets, losses and decoder of the Sparse4D head."""
 
+from autoware_ml.models.detection3d.heads.sparse4d.attention import GraphAttention
 from autoware_ml.models.detection3d.heads.sparse4d.blocks import (
     AsymmetricFFN,
     DeformableFeatureAggregation,
@@ -28,6 +29,8 @@ from autoware_ml.models.detection3d.heads.sparse4d.box3d import (
     SparseBox3DRefinementModule,
 )
 from autoware_ml.models.detection3d.heads.sparse4d.decoder import SparseBox3DDecoder, decode_box
+from autoware_ml.models.detection3d.heads.sparse4d.decoder_layer import Sparse4DDecoderLayer
+from autoware_ml.models.detection3d.heads.sparse4d.head import Sparse4DHead, clone_module
 from autoware_ml.models.detection3d.heads.sparse4d.instance_bank import (
     InstanceBank,
     InstanceBankState,
@@ -48,11 +51,14 @@ __all__ = [
     "AsymmetricFFN",
     "DeformableFeatureAggregation",
     "DenseDepthNet",
+    "GraphAttention",
     "InstanceBank",
     "InstanceBankState",
     "NEGATIVE_DN_CLASS",
     "QualityIndex",
     "Scale",
+    "Sparse4DDecoderLayer",
+    "Sparse4DHead",
     "SparseBox3DDecoder",
     "SparseBox3DEncoder",
     "SparseBox3DKeyPointsGenerator",
@@ -62,6 +68,7 @@ __all__ = [
     "SparseBox3DTarget",
     "TemporalDenoisingCache",
     "TemporalDenoisingUpdate",
+    "clone_module",
     "decode_box",
     "encode_reg_target",
     "linear_relu_ln",

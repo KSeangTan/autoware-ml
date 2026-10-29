@@ -24,6 +24,8 @@ import torch
 from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     CenterHeadOutputs,
     Detection3DHeadOutputs,
+    Sparse4DDenoisingOutputs,
+    Sparse4DHeadOutputs,
     StreamPETRDenoisingOutputs,
     StreamPETRHeadOutputs,
     TransFusionHeadOutputs,
@@ -441,12 +443,12 @@ class TestDetection3DHeadOutputs(unittest.TestCase):
         Input: a wrapper with no head outputs set.
         Expected: exactly one head family produces the outputs, so an empty wrapper is rejected,
         and the error names every head field, the StreamPETR one included.
-        Check: a ValidationError listing the three head fields and the empty set is raised.
+        Check: a ValidationError listing the four head fields and the empty set is raised.
         """
         with self.assertRaisesRegex(
             ValidationError,
             "Exactly one of center_head_outputs, transfusion_head_outputs, "
-            r"streampetr_head_outputs must be set, got \[\]",
+            r"streampetr_head_outputs, sparse4d_head_outputs must be set, got \[\]",
         ):
             Detection3DHeadOutputs(center_head_outputs=None, transfusion_head_outputs=None)
 
@@ -502,3 +504,156 @@ class TestDetection3DHeadOutputs(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _sparse4d_outputs(num_layers: int = 2, batch_size: int = 1, num_anchors: int = 3) -> dict:
+    """Fields of a valid Sparse4DHeadOutputs with two classes."""
+    return {
+        "prediction": torch.zeros(num_layers, batch_size, num_anchors, 11),
+        "classification": torch.zeros(num_layers, batch_size, num_anchors, 2),
+        "quality": torch.zeros(num_layers, batch_size, num_anchors, 2),
+        "instance_id": None,
+        "denoising": None,
+    }
+
+
+def _sparse4d_denoising(num_layers: int = 2, batch_size: int = 1, num_noised: int = 4) -> dict:
+    """Fields of a valid Sparse4DDenoisingOutputs with two classes."""
+    return {
+        "prediction": torch.zeros(num_layers, batch_size, num_noised, 11),
+        "classification": torch.zeros(num_layers, batch_size, num_noised, 2),
+        "box_target": torch.zeros(batch_size, num_noised, 11),
+        "cls_target": torch.zeros(batch_size, num_noised, dtype=torch.long),
+        "valid_mask": torch.ones(batch_size, num_noised, dtype=torch.bool),
+    }
+
+
+class TestSparse4DDenoisingOutputs(unittest.TestCase):
+    """Unit tests for the noised anchor outputs."""
+
+    def test_holds_the_targets_with_and_without_temporal_ones(self) -> None:
+        """
+        Input: the plain targets, then the plain and the temporal targets.
+        Expected: both are kept.
+        Check: construction succeeds and the temporal fields are stored.
+        """
+        fields = _sparse4d_denoising()
+        outputs = Sparse4DDenoisingOutputs.model_validate(fields)
+        self.assertIsNone(outputs.temp_cls_target)
+
+        fields["temp_box_target"] = torch.zeros(1, 4, 11)
+        fields["temp_cls_target"] = torch.zeros(1, 4, dtype=torch.long)
+        fields["temp_valid_mask"] = torch.ones(1, 4, dtype=torch.bool)
+        outputs = Sparse4DDenoisingOutputs.model_validate(fields)
+        self.assertEqual(outputs.temp_box_target.shape, (1, 4, 11))
+
+    def test_partial_temporal_targets_are_rejected(self) -> None:
+        """
+        Input: only the temporal class targets.
+        Expected: the temporal targets come together.
+        Check: ValidationError mentioning the temporal targets.
+        """
+        fields = _sparse4d_denoising()
+        fields["temp_cls_target"] = torch.zeros(1, 4, dtype=torch.long)
+
+        with self.assertRaisesRegex(ValidationError, "temporal targets"):
+            Sparse4DDenoisingOutputs.model_validate(fields)
+
+    def test_mismatched_anchors_and_fields_are_rejected(self) -> None:
+        """
+        Input: a valid mask over three anchors, then a box target of ten fields.
+        Expected: both mismatches are refused.
+        Check: ValidationError naming the field.
+        """
+        fields = _sparse4d_denoising()
+        fields["valid_mask"] = torch.ones(1, 3, dtype=torch.bool)
+        with self.assertRaisesRegex(ValidationError, "valid_mask"):
+            Sparse4DDenoisingOutputs.model_validate(fields)
+
+        fields = _sparse4d_denoising()
+        fields["box_target"] = torch.zeros(1, 4, 10)
+        with self.assertRaisesRegex(ValidationError, "box_target"):
+            Sparse4DDenoisingOutputs.model_validate(fields)
+
+
+class TestSparse4DHeadOutputs(unittest.TestCase):
+    """Unit tests for the Sparse4D head outputs."""
+
+    def test_holds_the_layer_outputs(self) -> None:
+        """
+        Input: two layers of three anchors with quality, ids and noised anchors.
+        Expected: everything is kept.
+        Check: the stored shapes.
+        """
+        fields = _sparse4d_outputs()
+        fields["instance_id"] = torch.zeros(1, 3, dtype=torch.long)
+        fields["denoising"] = Sparse4DDenoisingOutputs.model_validate(_sparse4d_denoising())
+
+        outputs = Sparse4DHeadOutputs.model_validate(fields)
+
+        self.assertEqual(outputs.prediction.shape, (2, 1, 3, 11))
+        self.assertEqual(outputs.denoising.prediction.shape, (2, 1, 4, 11))
+
+    def test_quality_and_ids_are_optional(self) -> None:
+        """
+        Input: outputs without quality and ids.
+        Expected: they default to None.
+        Check: both None.
+        """
+        fields = _sparse4d_outputs()
+        del fields["quality"]
+        del fields["instance_id"]
+
+        outputs = Sparse4DHeadOutputs.model_validate(fields)
+
+        self.assertIsNone(outputs.quality)
+        self.assertIsNone(outputs.instance_id)
+
+    def test_mismatches_are_rejected(self) -> None:
+        """
+        Input: logits of another anchor count, quality of another layer count, ids of
+            another anchor count and noised anchors of another class count.
+        Expected: every mismatch is refused.
+        Check: ValidationError naming the field.
+        """
+        fields = _sparse4d_outputs()
+        fields["classification"] = torch.zeros(2, 1, 4, 2)
+        with self.assertRaisesRegex(ValidationError, "classification"):
+            Sparse4DHeadOutputs.model_validate(fields)
+
+        fields = _sparse4d_outputs()
+        fields["quality"] = torch.zeros(1, 1, 3, 2)
+        with self.assertRaisesRegex(ValidationError, "quality"):
+            Sparse4DHeadOutputs.model_validate(fields)
+
+        fields = _sparse4d_outputs()
+        fields["instance_id"] = torch.zeros(1, 4, dtype=torch.long)
+        with self.assertRaisesRegex(ValidationError, "instance_id"):
+            Sparse4DHeadOutputs.model_validate(fields)
+
+        fields = _sparse4d_outputs()
+        denoising = _sparse4d_denoising()
+        denoising["classification"] = torch.zeros(2, 1, 4, 3)
+        fields["denoising"] = Sparse4DDenoisingOutputs.model_validate(denoising)
+        with self.assertRaisesRegex(ValidationError, "noised anchors"):
+            Sparse4DHeadOutputs.model_validate(fields)
+
+
+class TestDetection3DHeadOutputsSparse4D(unittest.TestCase):
+    """The Sparse4D slot of the head-agnostic wrapper."""
+
+    def test_holds_sparse4d_outputs_and_names_them_to_other_readers(self) -> None:
+        """
+        Input: Sparse4D outputs in the wrapper.
+        Expected: the Sparse4D reader returns them and the others name the set slot.
+        Check: identity through sparse4d_head and the error of streampetr_head.
+        """
+        sparse4d_head_outputs = Sparse4DHeadOutputs.model_validate(_sparse4d_outputs())
+
+        outputs = Detection3DHeadOutputs(sparse4d_head_outputs=sparse4d_head_outputs)
+
+        self.assertIs(outputs.sparse4d_head(), sparse4d_head_outputs)
+        with self.assertRaisesRegex(
+            ValueError, "in sparse4d_head_outputs, not in streampetr_head_outputs"
+        ):
+            outputs.streampetr_head()

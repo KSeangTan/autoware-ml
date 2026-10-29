@@ -27,6 +27,7 @@ from autoware_ml.models.detection3d.task_modules.streaming import (
     memory_refresh,
     pos2posemb1d,
     pos2posemb3d,
+    reduce_mean_count,
     topk_gather,
     transform_reference_points,
 )
@@ -135,3 +136,29 @@ class TestInverseSigmoid(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReduceMeanCount(unittest.TestCase):
+    """The count normalization without a process group."""
+
+    def test_floors_the_count_and_keeps_the_rest(self) -> None:
+        """
+        Input: a count of 0, a count of 3 and a pair (0, 4) without a process group.
+        Expected: a count below the floor becomes 1, the others stay, as float.
+        Check: 1, 3 and (1, 4) in float32.
+        """
+        torch.testing.assert_close(reduce_mean_count(torch.tensor(0)), torch.tensor(1.0))
+        torch.testing.assert_close(reduce_mean_count(torch.tensor(3)), torch.tensor(3.0))
+        torch.testing.assert_close(
+            reduce_mean_count(torch.tensor([0.0, 4.0])), torch.tensor([1.0, 4.0])
+        )
+
+    def test_custom_floor(self) -> None:
+        """
+        Input: a count of 0 with ``min_total=2``.
+        Expected: the floor applies.
+        Check: 2.
+        """
+        torch.testing.assert_close(
+            reduce_mean_count(torch.tensor(0.0), min_total=2.0), torch.tensor(2.0)
+        )
