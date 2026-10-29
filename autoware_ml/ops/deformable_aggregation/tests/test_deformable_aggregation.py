@@ -24,11 +24,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from autoware_ml.ops.deformable_aggregation import (
-    FlattenedFeatureMaps,
-    deformable_aggregation,
-    flatten_feature_maps,
-)
+from autoware_ml.dataclasses.models.detection2d.feature_maps import FlattenedFeatureMaps
+from autoware_ml.ops.deformable_aggregation import deformable_aggregation, flatten_feature_maps
 
 # Outputs of the original Sparse4D v3 extension
 SPARSE4D_V3_REFERENCE = Path(__file__).parent / "test_data" / "sparse4d_v3_reference.npz"

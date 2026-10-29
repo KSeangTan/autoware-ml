@@ -16,7 +16,7 @@
 # Adapted from projects/mmdet3d_plugin/ops/__init__.py and deformable_aggregation.py of
 # https://github.com/HorizonRobotics/Sparse4D (MIT License). The flattening keeps the token
 # layout of the reference ``feature_maps_format`` so the deployed graphs of the reference and
-# its TensorRT plugin read the same tensors; it returns a named tuple instead of a list.
+# its TensorRT plugin read the same tensors; it returns a dataclass instead of a list.
 
 """Efficient deformable aggregation of Sparse4D.
 
@@ -34,31 +34,15 @@ and :func:`deformable_aggregation` runs the kernel with autograd support.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import NamedTuple
 
 from jaxtyping import Float, Float32, Int32, Int64
 import torch
 from torch.autograd import Function
 from torch.autograd.function import once_differentiable
 
+from autoware_ml.dataclasses.models.detection2d.feature_maps import FlattenedFeatureMaps
+
 from . import deformable_aggregation_ext
-
-
-class FlattenedFeatureMaps(NamedTuple):
-    """Feature pyramids of every camera in the token layout of the aggregation kernel.
-
-    Attributes:
-        features: Tokens of every camera, level by level, pixels row-major:
-            ``(batch, num_tokens, channels)`` with
-            ``num_tokens = cameras * sum(height_l * width_l)``.
-        spatial_shapes: ``(height, width)`` of every level of every camera,
-            ``(cameras, levels, 2)``.
-        level_start_index: Token offset of every level of every camera, ``(cameras, levels)``.
-    """
-
-    features: Float[torch.Tensor, "batch_size num_tokens channels"]
-    spatial_shapes: Int64[torch.Tensor, "num_cams num_levels 2"]
-    level_start_index: Int64[torch.Tensor, "num_cams num_levels"]
 
 
 def flatten_feature_maps(

@@ -16,14 +16,12 @@
 
 from autoware_ml.ops.deformable_aggregation.deformable_aggregation import (
     DeformableAggregationFunction,
-    FlattenedFeatureMaps,
     deformable_aggregation,
     flatten_feature_maps,
 )
 
 __all__ = [
     "DeformableAggregationFunction",
-    "FlattenedFeatureMaps",
     "deformable_aggregation",
     "flatten_feature_maps",
 ]
