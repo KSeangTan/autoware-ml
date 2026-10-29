@@ -64,9 +64,7 @@ class TestInstanceBank(unittest.TestCase):
             max_time_interval=2.0,
         )
         with torch.no_grad():
-            self.bank.instance_feature.copy_(
-                torch.arange(NUM_ANCHOR * EMBED_DIMS).reshape(NUM_ANCHOR, EMBED_DIMS)
-            )
+            self.bank.instance_feature.copy_(torch.arange(8).reshape(NUM_ANCHOR, EMBED_DIMS))
         self.timestamp = torch.tensor([10.0], dtype=torch.float64)
         self.pose = torch.eye(4).unsqueeze(0)
 
@@ -271,7 +269,8 @@ class TestInstanceBank(unittest.TestCase):
             self.pose,
         )
 
-        expected = torch.tensor([3.0, 2.0]).sigmoid() * 0.6
+        # 0.6 * sigmoid(3) and 0.6 * sigmoid(2).
+        expected = torch.tensor([0.5715445, 0.5284782])
         torch.testing.assert_close(self.bank.confidence[0], expected)
 
     def test_instance_ids_follow_the_cached_instances(self) -> None:

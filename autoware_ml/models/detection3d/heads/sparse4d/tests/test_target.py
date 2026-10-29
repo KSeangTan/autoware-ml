@@ -31,6 +31,9 @@ from autoware_ml.models.detection3d.heads.sparse4d.target import (
 from autoware_ml.types.geometry import Box3DFieldIndex
 
 NUM_CLASSES = 2
+TEN_ONES = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+TEN_HALVES = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+ELEVEN_TWOS = [2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0]
 
 
 def _metric_box(x: float, yaw: float = 0.0) -> torch.Tensor:
@@ -66,7 +69,7 @@ class TestEncodeRegTarget(unittest.TestCase):
         Expected: the log sizes, sin 1, cos 0 and the velocity.
         Check: the 11 encoded fields.
         """
-        box = torch.tensor([1.0, 2.0, 3.0, math.e, math.e**2, 1.0, math.pi / 2, 4.0, 5.0, 6.0])
+        box = torch.tensor([1.0, 2.0, 3.0, math.e, math.exp(2.0), 1.0, math.pi / 2, 4.0, 5.0, 6.0])
 
         encoded = encode_reg_target(box.unsqueeze(0))
 
@@ -136,7 +139,7 @@ class TestSparseBox3DTargetSample(unittest.TestCase):
         Expected: the anchor matched to the class 0 box carries weights 2, the other ones.
         Check: the regression weights of anchors 0 and 2.
         """
-        target = SparseBox3DTarget(cls_wise_reg_weights={0: [2.0] * ANCHOR_DIMS})
+        target = SparseBox3DTarget(cls_wise_reg_weights={0: ELEVEN_TWOS})
 
         matched = target.sample(self.cls_pred, self.box_pred, self.gt_labels, self.gt_boxes)
 
@@ -179,7 +182,7 @@ class TestSparseBox3DTargetSample(unittest.TestCase):
         Expected: the mismatch is refused.
         Check: ValueError.
         """
-        target = SparseBox3DTarget(reg_weights=[1.0] * 10)
+        target = SparseBox3DTarget(reg_weights=TEN_ONES)
 
         with self.assertRaisesRegex(ValueError, "reg_weights"):
             target.sample(self.cls_pred, self.box_pred, self.gt_labels, self.gt_boxes)
@@ -262,7 +265,7 @@ class TestSparseBox3DTargetDenoising(unittest.TestCase):
         Expected: only the first box of every sample is noised, and only along x.
         Check: one noised anchor per sample whose non-x fields equal the box.
         """
-        scale = [1.0] + [0.0] * (ANCHOR_DIMS - 1)
+        scale = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         target = SparseBox3DTarget(
             num_dn_groups=1, dn_noise_scale=scale, add_neg_dn=False, max_dn_gt=1
         )
@@ -279,7 +282,7 @@ class TestSparseBox3DTargetDenoising(unittest.TestCase):
         Expected: the mismatch is refused.
         Check: ValueError.
         """
-        target = SparseBox3DTarget(num_dn_groups=1, dn_noise_scale=[0.5] * 10)
+        target = SparseBox3DTarget(num_dn_groups=1, dn_noise_scale=TEN_HALVES)
 
         with self.assertRaisesRegex(ValueError, "dn_noise_scale"):
             target.get_dn_anchors(self.gt_labels, self.gt_boxes)
@@ -329,12 +332,8 @@ class TestSparseBox3DTargetTemporalDenoising(unittest.TestCase):
         """Set up two groups of two noised anchors per sample after two learnable instances."""
         self.target = SparseBox3DTarget(num_dn_groups=2, num_temp_dn_groups=1)
         self.embed_dims = 3
-        self.instance_feature = torch.arange(2 * 6 * self.embed_dims, dtype=torch.float32).reshape(
-            2, 6, self.embed_dims
-        )
-        self.anchor = torch.arange(2 * 6 * ANCHOR_DIMS, dtype=torch.float32).reshape(
-            2, 6, ANCHOR_DIMS
-        )
+        self.instance_feature = torch.arange(36, dtype=torch.float32).reshape(2, 6, self.embed_dims)
+        self.anchor = torch.arange(132, dtype=torch.float32).reshape(2, 6, ANCHOR_DIMS)
         self.box_target = torch.stack([_anchor(0.0), _anchor(20.0)]).repeat(2, 2, 1)
         self.cls_target = torch.tensor([[0, 1, 0, 1], [0, 1, 0, 1]])
         self.valid_mask = torch.ones(2, 4, dtype=torch.bool)

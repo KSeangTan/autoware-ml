@@ -122,7 +122,7 @@ class TestSparseBox3DLoss(unittest.TestCase):
 
         torch.testing.assert_close(
             losses.loss_centerness,
-            torch.tensor((1.0 - math.exp(-1.0)) * 20.0),
+            torch.tensor(12.642411),
             atol=1e-4,
             rtol=1e-4,
         )
@@ -148,7 +148,7 @@ class TestSparseBox3DLoss(unittest.TestCase):
             avg_factor=1.0,
         )
 
-        expected = torch.tensor(0.25 * math.log(2.0))
+        expected = torch.tensor(0.1732868)
         torch.testing.assert_close(aligned.loss_yawness, expected)
         torch.testing.assert_close(opposed.loss_yawness, expected)
         self.assertLess(confident.loss_yawness.item(), 1e-6)
@@ -165,5 +165,5 @@ class TestSparseBox3DLoss(unittest.TestCase):
             _heading(0.0, 1.0), _heading(0.0, 1.0), quality=torch.zeros(1, 2), avg_factor=1.0
         )
 
-        torch.testing.assert_close(losses.loss_centerness, torch.tensor(2.0 * math.log(2.0)))
-        torch.testing.assert_close(losses.loss_yawness, torch.tensor(0.5 * math.log(2.0)))
+        torch.testing.assert_close(losses.loss_centerness, torch.tensor(1.3862944))
+        torch.testing.assert_close(losses.loss_yawness, torch.tensor(0.3465736))
