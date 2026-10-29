@@ -102,3 +102,36 @@ class TestDetection3DSamplePredictions(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDetection3DSamplePredictionsInstanceIds(unittest.TestCase):
+    """The optional tracking ids."""
+
+    def test_ids_of_every_box_are_kept(self) -> None:
+        """
+        Input: two boxes with ids 4 and 5.
+        Expected: the ids are stored.
+        Check: the id tensor.
+        """
+        predictions = Detection3DSamplePredictions(
+            bboxes_3d=torch.zeros(2, 9),
+            scores_3d=torch.zeros(2),
+            labels_3d=torch.zeros(2, dtype=torch.long),
+            instance_ids_3d=torch.tensor([4, 5]),
+        )
+
+        torch.testing.assert_close(predictions.instance_ids_3d, torch.tensor([4, 5]))
+
+    def test_ids_must_describe_every_box(self) -> None:
+        """
+        Input: two boxes with one id.
+        Expected: the mismatch is refused.
+        Check: ValidationError mentioning instance_ids_3d.
+        """
+        with self.assertRaisesRegex(ValidationError, "instance_ids_3d"):
+            Detection3DSamplePredictions(
+                bboxes_3d=torch.zeros(2, 9),
+                scores_3d=torch.zeros(2),
+                labels_3d=torch.zeros(2, dtype=torch.long),
+                instance_ids_3d=torch.tensor([4]),
+            )

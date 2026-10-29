@@ -22,6 +22,8 @@ from pydantic import ValidationError
 import torch
 
 from autoware_ml.dataclasses.models.detection3d.head_targets import (
+    Sparse4DDenoisingTargets,
+    Sparse4DMatchedTargets,
     CenterHeadTargets,
     TransFusionHeadTargets,
 )
@@ -182,3 +184,97 @@ class TestTransFusionHeadTargets(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSparse4DMatchedTargets(unittest.TestCase):
+    """The matched targets of a Sparse4D decoder layer."""
+
+    def test_consistent_targets_are_accepted(self) -> None:
+        """
+        Input: targets for two samples of three anchors with eleven fields.
+        Expected: the dataclass keeps them.
+        Check: the stored shapes.
+        """
+        targets = Sparse4DMatchedTargets(
+            cls_target=torch.zeros(2, 3, dtype=torch.long),
+            box_target=torch.zeros(2, 3, 11),
+            reg_weights=torch.zeros(2, 3, 11),
+        )
+
+        self.assertEqual(targets.box_target.shape, (2, 3, 11))
+
+    def test_mismatched_anchors_are_rejected(self) -> None:
+        """
+        Input: box targets for four anchors while the classes cover three.
+        Expected: the mismatch is refused.
+        Check: ValidationError mentioning box_target.
+        """
+        with self.assertRaisesRegex(ValidationError, "box_target"):
+            Sparse4DMatchedTargets(
+                cls_target=torch.zeros(2, 3, dtype=torch.long),
+                box_target=torch.zeros(2, 4, 11),
+                reg_weights=torch.zeros(2, 4, 11),
+            )
+
+    def test_mismatched_weights_are_rejected(self) -> None:
+        """
+        Input: regression weights of ten fields for eleven-field targets.
+        Expected: the mismatch is refused.
+        Check: ValidationError mentioning reg_weights.
+        """
+        with self.assertRaisesRegex(ValidationError, "reg_weights"):
+            Sparse4DMatchedTargets(
+                cls_target=torch.zeros(2, 3, dtype=torch.long),
+                box_target=torch.zeros(2, 3, 11),
+                reg_weights=torch.zeros(2, 3, 10),
+            )
+
+
+class TestSparse4DDenoisingTargets(unittest.TestCase):
+    """The noised anchors of a Sparse4D training frame."""
+
+    def setUp(self) -> None:
+        """Set up two samples of four noised anchors."""
+        self.fields = {
+            "anchors": torch.zeros(2, 4, 11),
+            "box_target": torch.zeros(2, 4, 11),
+            "cls_target": torch.zeros(2, 4, dtype=torch.long),
+            "attn_mask": torch.zeros(4, 4, dtype=torch.bool),
+            "valid_mask": torch.ones(2, 4, dtype=torch.bool),
+            "id_target": None,
+        }
+
+    def test_consistent_targets_are_accepted(self) -> None:
+        """
+        Input: the fixture, with and without id targets.
+        Expected: both are kept.
+        Check: construction succeeds and the ids are stored.
+        """
+        targets = Sparse4DDenoisingTargets.model_validate(self.fields)
+        self.assertIsNone(targets.id_target)
+
+        self.fields["id_target"] = torch.zeros(2, 4, dtype=torch.long)
+        targets = Sparse4DDenoisingTargets.model_validate(self.fields)
+        self.assertEqual(targets.id_target.shape, (2, 4))
+
+    def test_mismatched_anchor_counts_are_rejected(self) -> None:
+        """
+        Input: a valid mask over three anchors.
+        Expected: the mismatch is refused.
+        Check: ValidationError mentioning valid_mask.
+        """
+        self.fields["valid_mask"] = torch.ones(2, 3, dtype=torch.bool)
+
+        with self.assertRaisesRegex(ValidationError, "valid_mask"):
+            Sparse4DDenoisingTargets.model_validate(self.fields)
+
+    def test_mismatched_attention_mask_is_rejected(self) -> None:
+        """
+        Input: a 3x3 attention mask for four anchors.
+        Expected: the mismatch is refused.
+        Check: ValidationError mentioning attn_mask.
+        """
+        self.fields["attn_mask"] = torch.zeros(3, 3, dtype=torch.bool)
+
+        with self.assertRaisesRegex(ValidationError, "attn_mask"):
+            Sparse4DDenoisingTargets.model_validate(self.fields)

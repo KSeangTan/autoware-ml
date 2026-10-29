@@ -105,3 +105,87 @@ class TransFusionHeadTargets(BaseModel):
                 f"got {tuple(self.dense_heatmaps.shape)}."
             )
         return self
+
+
+class Sparse4DMatchedTargets(BaseModel):
+    """Store the matched targets of one Sparse4D decoder layer.
+
+    Attributes:
+        cls_target: Class of every anchor, ``num_classes`` for an unmatched anchor.
+        box_target: Encoded box of every anchor, zero for an unmatched anchor.
+        reg_weights: Per-anchor, per-field regression weights, zero for an unmatched anchor and
+            for the fields its box leaves undefined.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
+
+    cls_target: Int64[torch.Tensor, "batch_size num_anchors"]
+    box_target: Float[torch.Tensor, "batch_size num_anchors box_dims"]
+    reg_weights: Float[torch.Tensor, "batch_size num_anchors box_dims"]
+
+    @model_validator(mode="after")
+    def _check_anchors(self) -> Sparse4DMatchedTargets:
+        """Check that the three targets describe the same anchors."""
+        if self.box_target.shape[:2] != self.cls_target.shape:
+            raise ValueError(
+                f"box_target must cover the anchors of cls_target {tuple(self.cls_target.shape)}, "
+                f"got {tuple(self.box_target.shape)}."
+            )
+        if self.reg_weights.shape != self.box_target.shape:
+            raise ValueError(
+                f"reg_weights must have the shape of box_target {tuple(self.box_target.shape)}, "
+                f"got {tuple(self.reg_weights.shape)}."
+            )
+        return self
+
+
+class Sparse4DDenoisingTargets(BaseModel):
+    """Store the noised anchors of one Sparse4D training frame and their targets.
+
+    Every ground truth box is replicated ``num_groups`` times with noise and, with negative
+    samples, once more with noise too large to count as the box. The groups are laid out one
+    after the other along the anchor axis.
+
+    Attributes:
+        anchors: Noised anchors of every group.
+        box_target: Encoded box every noised anchor is matched to.
+        cls_target: Class every noised anchor is matched to, ``-1`` for the padding of a sample
+            with fewer boxes and ``-3`` for a negative sample.
+        attn_mask: Self-attention mask between the noised anchors, True where an anchor must
+            not see another, which keeps the groups apart.
+        valid_mask: True for the noised anchors that come from a real box, False for the ones
+            that come from the padding.
+        id_target: Instance id of the box every noised anchor is matched to, ``-1`` for the
+            padding and the negatives, ``None`` without instance ids.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
+
+    anchors: Float[torch.Tensor, "batch_size num_noised box_dims"]
+    box_target: Float[torch.Tensor, "batch_size num_noised box_dims"]
+    cls_target: Int64[torch.Tensor, "batch_size num_noised"]
+    attn_mask: Bool[torch.Tensor, "num_noised num_noised"]
+    valid_mask: Bool[torch.Tensor, "batch_size num_noised"]
+    id_target: Int64[torch.Tensor, "batch_size num_noised"] | None
+
+    @model_validator(mode="after")
+    def _check_noised_anchors(self) -> Sparse4DDenoisingTargets:
+        """Check that every target describes the noised anchors."""
+        batch_size, num_noised = self.cls_target.shape
+        for name, tensor in (
+            ("anchors", self.anchors),
+            ("box_target", self.box_target),
+            ("valid_mask", self.valid_mask),
+            ("id_target", self.id_target),
+        ):
+            if tensor is not None and tensor.shape[:2] != (batch_size, num_noised):
+                raise ValueError(
+                    f"{name} must cover the noised anchors ({batch_size}, {num_noised}), "
+                    f"got {tuple(tensor.shape)}."
+                )
+        if self.attn_mask.shape != (num_noised, num_noised):
+            raise ValueError(
+                f"attn_mask must have shape ({num_noised}, {num_noised}), "
+                f"got {tuple(self.attn_mask.shape)}."
+            )
+        return self

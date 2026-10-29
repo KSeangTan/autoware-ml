@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Building blocks of the Sparse4D head."""
+"""Building blocks, instance bank, targets, losses and decoder of the Sparse4D head."""
 
 from autoware_ml.models.detection3d.heads.sparse4d.blocks import (
     AsymmetricFFN,
@@ -27,7 +27,20 @@ from autoware_ml.models.detection3d.heads.sparse4d.box3d import (
     SparseBox3DKeyPointsGenerator,
     SparseBox3DRefinementModule,
 )
+from autoware_ml.models.detection3d.heads.sparse4d.decoder import SparseBox3DDecoder, decode_box
+from autoware_ml.models.detection3d.heads.sparse4d.instance_bank import (
+    InstanceBank,
+    InstanceBankState,
+)
 from autoware_ml.models.detection3d.heads.sparse4d.layers import Scale, linear_relu_ln
+from autoware_ml.models.detection3d.heads.sparse4d.loss import SparseBox3DLoss, SparseBox3DLosses
+from autoware_ml.models.detection3d.heads.sparse4d.target import (
+    NEGATIVE_DN_CLASS,
+    SparseBox3DTarget,
+    TemporalDenoisingCache,
+    TemporalDenoisingUpdate,
+    encode_reg_target,
+)
 
 __all__ = [
     "ANCHOR_DIMS",
@@ -35,10 +48,21 @@ __all__ = [
     "AsymmetricFFN",
     "DeformableFeatureAggregation",
     "DenseDepthNet",
+    "InstanceBank",
+    "InstanceBankState",
+    "NEGATIVE_DN_CLASS",
     "QualityIndex",
     "Scale",
+    "SparseBox3DDecoder",
     "SparseBox3DEncoder",
     "SparseBox3DKeyPointsGenerator",
+    "SparseBox3DLoss",
+    "SparseBox3DLosses",
     "SparseBox3DRefinementModule",
+    "SparseBox3DTarget",
+    "TemporalDenoisingCache",
+    "TemporalDenoisingUpdate",
+    "decode_box",
+    "encode_reg_target",
     "linear_relu_ln",
 ]

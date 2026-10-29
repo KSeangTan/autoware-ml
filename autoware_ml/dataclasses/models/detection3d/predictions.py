@@ -20,6 +20,8 @@ class Detection3DSamplePredictions(BaseModel):
         predicted as well.
       scores_3d: Confidence score for each predicted box.
       labels_3d: Class index for each predicted box.
+      instance_ids_3d: Tracking id of each predicted box, ``None`` for a detector without
+        tracking.
     """
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
@@ -29,14 +31,20 @@ class Detection3DSamplePredictions(BaseModel):
     bboxes_3d: Float32[torch.Tensor, "num_boxes num_bbox_params"]
     scores_3d: Float32[torch.Tensor, " num_boxes"]
     labels_3d: Int64[torch.Tensor, " num_boxes"]
+    instance_ids_3d: Int64[torch.Tensor, " num_boxes"] | None = None
 
     @model_validator(mode="after")
     def _check_num_boxes(self) -> Detection3DSamplePredictions:
-        """Check that boxes, scores and labels describe the same number of boxes."""
+        """Check that boxes, scores, labels and ids describe the same number of boxes."""
         num_boxes = self.bboxes_3d.shape[0]
         if self.scores_3d.shape[0] != num_boxes or self.labels_3d.shape[0] != num_boxes:
             raise ValueError(
                 "bboxes_3d, scores_3d and labels_3d must have the same number of boxes, got "
                 f"{num_boxes}, {self.scores_3d.shape[0]} and {self.labels_3d.shape[0]}."
+            )
+        if self.instance_ids_3d is not None and self.instance_ids_3d.shape[0] != num_boxes:
+            raise ValueError(
+                f"instance_ids_3d must describe the {num_boxes} boxes, "
+                f"got {self.instance_ids_3d.shape[0]}."
             )
         return self
