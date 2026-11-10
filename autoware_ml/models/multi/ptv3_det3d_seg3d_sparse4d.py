@@ -36,7 +36,7 @@ from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
-from autoware_ml.models.detection3d.heads.sparse4d import (
+from autoware_ml.models.detection3d.heads.sparse4d.sparse4d_head import (
     TEMPORAL_QUERY_INDEX_OUTPUT_NAME,
     TEMPORAL_STATE_INPUT_NAMES,
     TEMPORAL_STATE_OUTPUT_NAMES,

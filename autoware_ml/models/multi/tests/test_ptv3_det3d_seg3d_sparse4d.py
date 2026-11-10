@@ -16,7 +16,10 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_ptv3_encoder,
     build_seg3d_head,
 )
-from autoware_ml.models.detection3d.heads.sparse4d import ANCHOR_DIM, TEMPORAL_STATE_INPUT_NAMES
+from autoware_ml.models.detection3d.heads.sparse4d.sparse4d_head import (
+    ANCHOR_DIM,
+    TEMPORAL_STATE_INPUT_NAMES,
+)
 from autoware_ml.models.detection3d.tests.sparse4d_fixtures import (
     build_sparse4d_head,
     make_anchor_file,

@@ -19,7 +19,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from autoware_ml.models.detection3d.heads.sparse4d import (
+from autoware_ml.models.detection3d.heads.sparse4d.sparse4d_head import (
     BEVDeformableAggregation,
     Sparse4DHead,
     SparseBox3DKeyPointsGenerator,

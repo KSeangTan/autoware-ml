@@ -27,7 +27,7 @@ from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     Detection3DHeadOutputs,
     Sparse4DHeadOutputs,
 )
-from autoware_ml.models.detection3d.heads.sparse4d import (
+from autoware_ml.models.detection3d.heads.sparse4d.sparse4d_head import (
     ANCHOR_DIM,
     InstanceBank,
     InstanceTracker,

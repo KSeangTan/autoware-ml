@@ -6,7 +6,7 @@ from pathlib import Path
 
 import torch
 
-from autoware_ml.models.detection3d.heads.sparse4d import (
+from autoware_ml.models.detection3d.heads.sparse4d.sparse4d_head import (
     ANCHOR_DIM,
     build_denoising_attention_mask,
     build_denoising_queries,

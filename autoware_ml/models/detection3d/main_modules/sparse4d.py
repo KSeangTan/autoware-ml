@@ -40,7 +40,7 @@ from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
-from autoware_ml.models.detection3d.heads.sparse4d import Sparse4DHead
+from autoware_ml.models.detection3d.heads.sparse4d.sparse4d_head import Sparse4DHead
 from autoware_ml.models.detection3d.main_modules.sparse4ds.export_wrappers import (
     build_sparse4d_lidar_export_spec,
 )

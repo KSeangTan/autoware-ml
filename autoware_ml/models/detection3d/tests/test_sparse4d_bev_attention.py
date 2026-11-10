@@ -21,11 +21,13 @@ from pathlib import Path
 import pytest
 import torch
 
-from autoware_ml.models.detection3d.heads.sparse4d import (
-    BEVCrossAttention,
+from autoware_ml.models.detection3d.heads.sparse4d.cmt_position_embedding import (
     CMTPositionEmbedding,
-    Sparse4DHead,
     sincos_position_embedding,
+)
+from autoware_ml.models.detection3d.heads.sparse4d.sparse4d_head import (
+    BEVCrossAttention,
+    Sparse4DHead,
 )
 from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import POINT_CLOUD_RANGE
 from autoware_ml.models.detection3d.tests.sparse4d_fixtures import (

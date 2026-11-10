@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from autoware_ml.models.detection3d.heads.sparse4d import ANCHOR_DIM, Sparse4DHead
+from autoware_ml.models.detection3d.heads.sparse4d.sparse4d_head import ANCHOR_DIM, Sparse4DHead
 from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import POINT_CLOUD_RANGE
 
 

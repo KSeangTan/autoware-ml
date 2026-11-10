@@ -317,30 +317,31 @@ The split export produces one graph per `deploy.onnx.modules` entry:
 
 ## Implementation
 
-| Path                                                                    | Description                                        |
-| ----------------------------------------------------------------------- | -------------------------------------------------- |
-| `autoware_ml/models/segmentation3d/ptv3.py`                             | PTv3 Lightning model wrapper                       |
-| `autoware_ml/models/segmentation3d/heads/ptv3.py`                       | PTv3 segmentation decoder head                     |
-| `autoware_ml/models/detection3d/ptv3.py`                                | PTv3 BEV neck and detection model wrapper          |
-| `autoware_ml/models/detection3d/heads/transfusions/transfusion_head.py` | TransFusion detection head                         |
-| `autoware_ml/models/detection3d/heads/sparse4d.py`                      | Sparse4D temporal query detection head             |
-| `autoware_ml/models/detection3d/main_modules/sparse4d.py`               | Sparse4D detector wrapper                          |
-| `autoware_ml/models/detection3d/main_modules/sparse4ds/`                | Sparse4D lidar branch and export wrapper           |
-| `autoware_ml/models/multi/ptv3_det3d_seg3d_sparse4d.py`                 | PTv3 segmentation and Sparse4D model wrapper       |
-| `autoware_ml/scripts/generate_anchors.py`                               | Sparse4D anchors from the training boxes           |
-| `autoware_ml/models/segmentation3d/encoders/ptv3.py`                    | Reusable PTv3 encoder components                   |
-| `autoware_ml/models/segmentation3d/encoders/voxel.py`                   | Voxel feature encoders of single frames and sweeps |
-| `autoware_ml/utils/point_cloud/`                                        | Shared point-cloud utilities and serialization     |
-| `autoware_ml/ops/segment/segment_csr.py`                                | Segment reduction export operator                  |
-| `autoware_ml/ops/deformable_aggregation/`                               | Sparse4D keypoint sampling export operators        |
-| `autoware_ml/losses/segmentation3d/`                                    | Segmentation losses used by PTv3                   |
-| `autoware_ml/datamodule/t4dataset/dataset.py`                           | T4Dataset records as a dataset                     |
-| `autoware_ml/datamodule/nuscenes/dataset.py`                            | nuScenes dataset                                   |
-| `autoware_ml/datamodule/t4dataset/segmentation3d.py`                    | Semantic masks of a T4Dataset record               |
-| `autoware_ml/datamodule/common/detection3d.py`                          | 3D boxes of a record                               |
-| `autoware_ml/transforms/point_cloud/`                                   | Shared point-cloud transforms used by PTv3         |
-| `autoware_ml/configs/tasks/segmentation3d/ptv3/`                        | Segmentation experiment configurations             |
-| `autoware_ml/configs/tasks/detection3d/ptv3/`                           | Detection experiment configurations                |
+| Path                                                                      | Description                                        |
+| ------------------------------------------------------------------------- | -------------------------------------------------- |
+| `autoware_ml/models/segmentation3d/ptv3.py`                               | PTv3 Lightning model wrapper                       |
+| `autoware_ml/models/segmentation3d/heads/ptv3.py`                         | PTv3 segmentation decoder head                     |
+| `autoware_ml/models/detection3d/ptv3.py`                                  | PTv3 BEV neck and detection model wrapper          |
+| `autoware_ml/models/detection3d/heads/transfusions/transfusion_head.py`   | TransFusion detection head                         |
+| `autoware_ml/models/detection3d/heads/sparse4d/sparse4d_head.py`          | Sparse4D temporal query detection head             |
+| `autoware_ml/models/detection3d/heads/sparse4d/cmt_position_embedding.py` | CMT positional embedding of the BEV attention      |
+| `autoware_ml/models/detection3d/main_modules/sparse4d.py`                 | Sparse4D detector wrapper                          |
+| `autoware_ml/models/detection3d/main_modules/sparse4ds/`                  | Sparse4D lidar branch and export wrapper           |
+| `autoware_ml/models/multi/ptv3_det3d_seg3d_sparse4d.py`                   | PTv3 segmentation and Sparse4D model wrapper       |
+| `autoware_ml/scripts/generate_anchors.py`                                 | Sparse4D anchors from the training boxes           |
+| `autoware_ml/models/segmentation3d/encoders/ptv3.py`                      | Reusable PTv3 encoder components                   |
+| `autoware_ml/models/segmentation3d/encoders/voxel.py`                     | Voxel feature encoders of single frames and sweeps |
+| `autoware_ml/utils/point_cloud/`                                          | Shared point-cloud utilities and serialization     |
+| `autoware_ml/ops/segment/segment_csr.py`                                  | Segment reduction export operator                  |
+| `autoware_ml/ops/deformable_aggregation/`                                 | Sparse4D keypoint sampling export operators        |
+| `autoware_ml/losses/segmentation3d/`                                      | Segmentation losses used by PTv3                   |
+| `autoware_ml/datamodule/t4dataset/dataset.py`                             | T4Dataset records as a dataset                     |
+| `autoware_ml/datamodule/nuscenes/dataset.py`                              | nuScenes dataset                                   |
+| `autoware_ml/datamodule/t4dataset/segmentation3d.py`                      | Semantic masks of a T4Dataset record               |
+| `autoware_ml/datamodule/common/detection3d.py`                            | 3D boxes of a record                               |
+| `autoware_ml/transforms/point_cloud/`                                     | Shared point-cloud transforms used by PTv3         |
+| `autoware_ml/configs/tasks/segmentation3d/ptv3/`                          | Segmentation experiment configurations             |
+| `autoware_ml/configs/tasks/detection3d/ptv3/`                             | Detection experiment configurations                |
 
 ## Acknowledgment
 

@@ -22,7 +22,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from autoware_ml.models.detection3d.heads.sparse4d import (
+from autoware_ml.models.detection3d.heads.sparse4d.sparse4d_head import (
     TEMPORAL_STATE_INPUT_NAMES,
     Sparse4DHead,
 )

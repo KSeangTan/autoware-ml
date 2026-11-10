@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from autoware_ml.models.detection3d.heads.sparse4d import (
+from autoware_ml.models.detection3d.heads.sparse4d.sparse4d_head import (
     ANCHOR_DIM,
     InstanceTracker,
     encode_ground_truth,

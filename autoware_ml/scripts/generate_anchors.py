@@ -36,7 +36,7 @@ from omegaconf import DictConfig
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDatasetSchema
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.datamodule.data_module import DataModule
-from autoware_ml.models.detection3d.heads.sparse4d import ANCHOR_DIM
+from autoware_ml.models.detection3d.heads.sparse4d.sparse4d_head import ANCHOR_DIM
 from autoware_ml.types.dataset import SplitType
 from autoware_ml.utils.cli.helpers import resolve_config_reference
 

@@ -145,7 +145,7 @@ model:
   camera_network: null
 
   bbox_head:
-    _target_: autoware_ml.models.detection3d.heads.sparse4d.Sparse4DHead
+    _target_: autoware_ml.models.detection3d.heads.sparse4d.sparse4d_head.Sparse4DHead
     num_classes: ${class_count:${taxonomy.detection3d.class_names}}
     class_names: ${taxonomy.detection3d.class_names}
     embed_dims: 256

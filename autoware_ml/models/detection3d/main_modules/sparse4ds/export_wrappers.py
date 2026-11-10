@@ -27,7 +27,7 @@ import torch
 import torch.nn as nn
 
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
-from autoware_ml.models.detection3d.heads.sparse4d import (
+from autoware_ml.models.detection3d.heads.sparse4d.sparse4d_head import (
     TEMPORAL_QUERY_INDEX_OUTPUT_NAME,
     TEMPORAL_STATE_INPUT_NAMES,
     TEMPORAL_STATE_OUTPUT_NAMES,
