@@ -1,0 +1,10 @@
+# @package _global_
+# The BEV attention with every query attending only to the cells within a radius of its anchor
+# center. The radius opens by the epoch as base_bev_attention lists, up to every cell.
+defaults:
+  - base_bev_attention
+  - _self_
+
+model:
+  bbox_head:
+    local_attention: true

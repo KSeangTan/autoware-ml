@@ -1084,7 +1084,8 @@ class BEVCrossAttention(nn.Module):
     With ``local_radius`` a query attends only to the cells whose centers lie within that
     distance of its anchor center. Nothing but the learned embedding keeps the attention over
     the whole map near the query, and training gave that up for one read of the map shared by
-    all queries. The mask leaves a query its own neighborhood alone.
+    all queries. The mask leaves a query its own neighborhood alone. The radius is a buffer of
+    the block, so that a checkpoint reads the map as the epoch it was saved in did.
     """
 
     def __init__(
@@ -1108,7 +1109,8 @@ class BEVCrossAttention(nn.Module):
             dropout: Dropout on the attended features.
             attn_drop: Dropout on the attention weights in training.
             local_radius: Metric distance from the anchor center within which a query attends
-                to the cells, in training and in inference. None attends to every cell.
+                to the cells, in training and in inference, changed by
+                :meth:`set_local_radius`. None attends to every cell and fixes that.
 
         Raises:
             ValueError: If the feature dimension does not split into the heads, or if the
@@ -1119,7 +1121,9 @@ class BEVCrossAttention(nn.Module):
             raise ValueError(f"embed_dims {embed_dims} not divisible by num_heads {num_heads}.")
         if local_radius is not None and local_radius <= 0.0:
             raise ValueError(f"local_radius must be positive, got {local_radius}.")
-        self.local_radius = local_radius
+        self.register_buffer(
+            "local_radius", None if local_radius is None else torch.tensor(float(local_radius))
+        )
         self.embed_dims = embed_dims
         self.num_heads = num_heads
         self.attn_drop = attn_drop
@@ -1171,10 +1175,26 @@ class BEVCrossAttention(nn.Module):
             dim=1,
         )
         key = value + torch.cat([self.position_embedding.cells(level) for level in bev_levels])
-        mask = None if self.local_radius is None else self._local_mask(position, bev_levels)
+        radius = math.inf if self.local_radius is None else float(self.local_radius)
+        mask = self._local_mask(position, bev_levels, radius) if math.isfinite(radius) else None
         return instance_feature + self.proj_drop(self._attend(query, key, value, mask))
 
-    def _local_mask(self, position: torch.Tensor, bev_levels: Sequence[BEVLevel]) -> torch.Tensor:
+    def set_local_radius(self, local_radius: float | None) -> None:
+        """Change the radius of the cells a query attends to, None for every cell.
+
+        Raises:
+            ValueError: If the block was built to attend to every cell, or if the radius is not
+                positive.
+        """
+        if self.local_radius is None:
+            raise ValueError("The block attends to every cell, build it with a local_radius.")
+        if local_radius is not None and local_radius <= 0.0:
+            raise ValueError(f"local_radius must be positive, got {local_radius}.")
+        self.local_radius.fill_(math.inf if local_radius is None else local_radius)
+
+    def _local_mask(
+        self, position: torch.Tensor, bev_levels: Sequence[BEVLevel], radius: float
+    ) -> torch.Tensor:
         """Cells every query attends to ``(B, N, L)``, those within the radius of its anchor.
 
         The cell nearest to a query stays with it at any distance: a softmax without a cell is
@@ -1182,7 +1202,7 @@ class BEVCrossAttention(nn.Module):
         """
         centers = torch.cat([self.position_embedding.cell_centers(level) for level in bev_levels])
         distance = torch.cdist(position.float(), centers.float().expand(len(position), -1, -1))
-        mask = distance <= self.local_radius
+        mask = distance <= radius
         return mask.scatter(-1, distance.argmin(dim=-1, keepdim=True), True)
 
     def _attend(
@@ -2002,6 +2022,23 @@ class SparseQueryHead(nn.Module):
         return head.eval()
 
 
+def _local_attention_radii(
+    radii: Sequence[Sequence[float | None]],
+) -> tuple[tuple[int, float | None], ...]:
+    """Validate the pairs of an epoch and the radius of the local attention from it on.
+
+    Raises:
+        ValueError: If the epochs do not rise from 0, or if a radius is not positive.
+    """
+    pairs = tuple((int(epoch), None if radius is None else float(radius)) for epoch, radius in radii)
+    epochs = [epoch for epoch, _ in pairs]
+    if not pairs or epochs[0] != 0 or any(a >= b for a, b in zip(epochs, epochs[1:])):
+        raise ValueError(f"local_attention_radii needs rising epochs from 0, got {epochs}.")
+    if any(radius is not None and radius <= 0.0 for _, radius in pairs):
+        raise ValueError(f"local_attention_radii needs positive radii or None, got {pairs}.")
+    return pairs
+
+
 class Sparse4DHead(SparseQueryHead):
     """Sparse4D query head sampling the sparse stages or the BEV map of a lidar branch."""
 
@@ -2064,7 +2101,7 @@ class Sparse4DHead(SparseQueryHead):
         position_temperature: float = 10000.0,
         position_scale: float = 1.0,
         local_attention: bool = False,
-        local_attention_radius: float = 30.0,
+        local_attention_radii: Sequence[Sequence[float | None]] = ((0, 30.0),),
         aggregation: Callable[..., SparseDeformableAggregation] = SparseDeformableAggregation,
         yaw_free_classes: Sequence[str] = (),
         yaw_reversible_classes: Sequence[str] = (),
@@ -2140,9 +2177,12 @@ class Sparse4DHead(SparseQueryHead):
                 embedding of ``bev_attention``.
             position_scale: Turns of the fastest wave of that embedding over the point cloud
                 range, 1 for the embedding of CMT.
-            local_attention: A query of ``bev_attention`` attends only to the cells within
-                ``local_attention_radius`` of its anchor center, in training and in inference.
-            local_attention_radius: Metric radius of the cells a query attends to.
+            local_attention: A query of ``bev_attention`` attends only to the cells within a
+                radius of its anchor center, in training and in inference.
+            local_attention_radii: Pairs of an epoch and the metric radius the queries attend
+                within from that epoch on, by rising epoch and from epoch 0. A radius of None
+                attends to every cell. :meth:`set_epoch` moves the head to the radius of an
+                epoch, a checkpoint keeps the radius it was saved with.
             aggregation: Builds the deformable aggregation of one decoder block from its keyword
                 arguments.
             yaw_free_classes: Classes without a heading, such as traffic cones, whose yaw
@@ -2163,6 +2203,9 @@ class Sparse4DHead(SparseQueryHead):
                 f"local_attention masks the cells of bev_attention, got lidar_sampling "
                 f"{lidar_sampling}."
             )
+        self.local_attention_radii = (
+            _local_attention_radii(local_attention_radii) if local_attention else None
+        )
         num_bev_sources = int(bev is not None) + int(bev_cell_size is not None)
         if num_bev_sources != int(lidar_sampling != "sparse"):
             raise ValueError(
@@ -2311,12 +2354,29 @@ class Sparse4DHead(SparseQueryHead):
                 position_embedding=position_embedding,
                 dropout=dropout,
                 attn_drop=attn_drop,
-                local_radius=local_attention_radius if local_attention else None,
+                # A block that follows the epochs holds its radius, infinite for every cell
+                local_radius=None if self.local_attention_radii is None else math.inf,
             ),
         )
         self.loss_cls = SigmoidFocalLoss()
         self.loss_yns = GaussianFocalLoss()
         self._export_mode = False
+        self.set_epoch(0)
+
+    def set_epoch(self, epoch: int) -> None:
+        """Move the local attention to the radius of a training epoch.
+
+        The model calls it as every training epoch starts. A head without local attention
+        attends to every cell in every epoch.
+
+        Args:
+            epoch: Training epoch, from 0.
+        """
+        if self.local_attention_radii is None:
+            return
+        radius = [radius for start, radius in self.local_attention_radii if start <= epoch][-1]
+        for block in self.deformable:
+            block.set_local_radius(radius)
 
     def forward(
         self,

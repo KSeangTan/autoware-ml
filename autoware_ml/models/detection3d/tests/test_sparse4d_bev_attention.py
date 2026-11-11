@@ -248,7 +248,8 @@ def test_a_local_block_changes_nothing_with_the_whole_map_in_the_radius() -> Non
     embedding = _embedding()
     block = _block(embedding).eval()
     local = _local_block(100.0).eval()
-    local.load_state_dict(block.state_dict())
+    # The weights of a block of every cell carry no radius, the local block keeps its own
+    local.load_state_dict(block.state_dict(), strict=False)
     level = _level(8, 1.0, 0)
     instance_feature = torch.randn(1, 3, EMBED_DIMS)
     anchor = torch.zeros(1, 3, 10)
@@ -280,23 +281,103 @@ def test_a_query_out_of_the_map_keeps_its_nearest_cell() -> None:
 def test_the_local_radius_must_be_positive() -> None:
     with pytest.raises(ValueError, match="local_radius"):
         _local_block(0.0)
+    with pytest.raises(ValueError, match="local_radius"):
+        _local_block(2.0).set_local_radius(-1.0)
+
+
+def test_a_block_of_every_cell_takes_no_radius() -> None:
+    block = _block(_embedding())
+
+    assert "local_radius" not in block.state_dict()
+    with pytest.raises(ValueError, match="every cell"):
+        block.set_local_radius(2.0)
+
+
+def test_a_local_block_follows_its_radius_and_keeps_it_in_the_checkpoint() -> None:
+    torch.manual_seed(0)
+    block = _local_block(2.0).eval()
+    level = _level(8, 1.0, 0)
+    instance_feature = torch.randn(1, 1, EMBED_DIMS)
+    anchor = torch.zeros(1, 1, 10)
+    anchor[..., :2] = torch.tensor([2.0, 2.0])
+
+    def cells_read() -> int:
+        level.feat.grad = None
+        block(instance_feature, anchor, instance_feature, [], [level]).sum().backward()
+        return int((level.feat.grad.abs().sum(dim=(0, 1)) > 0).sum())
+
+    within_2m = cells_read()
+    block.set_local_radius(4.0)
+    within_4m = cells_read()
+    block.set_local_radius(None)
+    every_cell = cells_read()
+    assert within_2m < within_4m < every_cell == 64
+
+    # A block of another epoch reads the map as the checkpoint did
+    block.set_local_radius(4.0)
+    restored = _local_block(2.0)
+    restored.load_state_dict(block.state_dict())
+    assert float(restored.local_radius) == 4.0
+
+
+def _local_head(tmp_path: Path, **overrides: object) -> Sparse4DHead:
+    return build_sparse4d_head(
+        make_anchor_file(tmp_path),
+        lidar_sampling="bev_attention",
+        bev_cell_size=1.0,
+        bev_channels=BEV_CHANNELS,
+        **overrides,
+    )
+
+
+def _radii(head: Sparse4DHead) -> set[float | None]:
+    return {
+        None if block.local_radius is None else float(block.local_radius)
+        for block in head.deformable
+    }
 
 
 def test_the_head_attends_to_every_cell_unless_local_attention_is_set(tmp_path: Path) -> None:
-    def radii(**overrides: object) -> set[float | None]:
-        head = build_sparse4d_head(
-            make_anchor_file(tmp_path),
-            lidar_sampling="bev_attention",
-            bev_cell_size=1.0,
-            bev_channels=BEV_CHANNELS,
-            **overrides,
-        )
-        return {block.local_radius for block in head.deformable}
+    head = _local_head(tmp_path, local_attention_radii=[[0, 3.0]])
+    assert _radii(head) == {None}
+    head.set_epoch(5)
+    assert _radii(head) == {None}
 
-    assert radii() == {None}
-    assert radii(local_attention_radius=3.0) == {None}
-    assert radii(local_attention=True) == {30.0}
-    assert radii(local_attention=True, local_attention_radius=3.0) == {3.0}
+    assert _radii(_local_head(tmp_path, local_attention=True)) == {30.0}
+
+
+def test_the_local_radius_of_the_head_follows_the_epoch(tmp_path: Path) -> None:
+    head = _local_head(
+        tmp_path,
+        local_attention=True,
+        local_attention_radii=[[0, 3.0], [2, 5.0], [5, None]],
+    )
+
+    radii = []
+    for epoch in range(7):
+        head.set_epoch(epoch)
+        radii.append(_radii(head))
+
+    infinity = float("inf")
+    assert radii == [{3.0}, {3.0}, {5.0}, {5.0}, {5.0}, {infinity}, {infinity}]
+    # The whole map again: an epoch of every cell builds no mask
+    bev_map = torch.randn(1, BEV_CHANNELS, 8, 8)
+    every_cell = _local_head(tmp_path)
+    every_cell.load_state_dict(head.state_dict(), strict=False)
+    with torch.no_grad():
+        outputs = head.eval()(bev_map)
+        expected = every_cell.eval()(bev_map)
+    assert torch.allclose(outputs.prediction, expected.prediction, atol=1e-5)
+
+
+@pytest.mark.parametrize(
+    "radii", [[], [[1, 3.0]], [[0, 3.0], [0, 5.0]], [[0, 3.0], [4, 5.0], [2, 6.0]], [[0, 0.0]]]
+)
+def test_the_local_radii_rise_from_epoch_0_with_positive_radii(
+    tmp_path: Path, radii: list[list[float]]
+) -> None:
+    with pytest.raises(ValueError, match="local_attention_radii"):
+        _local_head(tmp_path, local_attention=True, local_attention_radii=radii)
 
 
 def test_local_attention_needs_the_attention_head(tmp_path: Path) -> None:

@@ -9,3 +9,13 @@ model:
     # most of its features constant over the map and collapsed to one vector in training.
     position_scale: 32.0
     position_temperature: 64.0
+    # With local_attention a query attends only to the cells within a radius of its anchor
+    # center, which keeps the attention near the query while the embedding learns the position.
+    # The radius opens by the epoch, [first epoch, meters], and null attends to every cell, as
+    # the inference of the trained model does.
+    local_attention: false
+    local_attention_radii:
+      - [0, 50.0]
+      - [4, 90.0]
+      - [6, 120.0]
+      - [8, null]

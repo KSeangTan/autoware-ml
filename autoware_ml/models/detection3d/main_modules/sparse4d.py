@@ -111,6 +111,11 @@ class Sparse4DDetectionModel(ModuleBaseModel):
         self.camera_network = camera_network
         self.bbox_head = bbox_head
 
+    def on_train_epoch_start(self) -> None:
+        """Move the head to the training epoch, its local attention follows the epochs."""
+        super().on_train_epoch_start()
+        self.bbox_head.set_epoch(self.current_epoch)
+
     def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
         """Run the lidar branch and the Sparse4D head on one batch of frames.
 

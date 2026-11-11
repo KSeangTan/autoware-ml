@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -89,6 +90,32 @@ def test_camera_network_is_not_supported_yet(tmp_path: Path) -> None:
             bbox_head=_build_head(tmp_path),
             log_dict_configs=LogDictConfigs(prog_bar=False),
         )
+
+
+def test_the_local_attention_of_the_head_follows_the_training_epoch(tmp_path: Path) -> None:
+    torch.manual_seed(0)
+    head = build_sparse4d_head(
+        make_anchor_file(tmp_path),
+        lidar_sampling="bev_attention",
+        bev_cell_size=1.0,
+        bev_channels=NECK_CHANNELS,
+        local_attention=True,
+        local_attention_radii=[[0, 3.0], [2, None]],
+    )
+    model = Sparse4DDetectionModel(
+        data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
+        lidar_network=build_lidar_network(),
+        camera_network=None,
+        bbox_head=head,
+        log_dict_configs=LogDictConfigs(prog_bar=False),
+    )
+
+    def radius_at(epoch: int) -> float:
+        model._trainer = SimpleNamespace(current_epoch=epoch)
+        model.on_train_epoch_start()
+        return float(head.deformable[0].local_radius)
+
+    assert [radius_at(epoch) for epoch in range(4)] == [3.0, 3.0, float("inf"), float("inf")]
 
 
 def test_temporal_detector_trains_on_a_stream_and_reaches_every_parameter(
