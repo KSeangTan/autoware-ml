@@ -96,6 +96,83 @@ def test_a_query_and_the_cell_under_it_share_one_embedding() -> None:
     assert not torch.allclose(query[0], cells[0])
 
 
+def test_the_scale_takes_the_constant_part_out_of_the_sincos_features() -> None:
+    # The grid of the 122 m lidar range, where the embedding of CMT collapsed to one vector
+    point_cloud_range = (-122.4, -122.4, -3.0, 122.4, 122.4, 5.0)
+    level = BEVLevel(torch.zeros(1, BEV_CHANNELS, 180, 180), (-122.4, -122.4), 1.36)
+
+    def sincos_features(temperature: float, scale: float) -> torch.Tensor:
+        embedding = CMTPositionEmbedding(256, point_cloud_range, temperature, scale)
+        embedding.mlp = torch.nn.Identity()
+        return embedding.cells(level).reshape(180, 180, -1)
+
+    def constant_and_varying(features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        cells = features.flatten(end_dim=1)
+        return cells.mean(dim=0).norm(), cells.var(dim=0).sum().sqrt()
+
+    def similarity_4_cells_apart(features: torch.Tensor) -> torch.Tensor:
+        return torch.cosine_similarity(features[:, :-4], features[:, 4:], dim=-1).mean()
+
+    cmt = sincos_features(10000.0, 1.0)
+    scaled = sincos_features(64.0, 32.0)
+
+    # Most features of CMT hold one value over the map, cells 5 m apart get one embedding
+    constant, varying = constant_and_varying(cmt)
+    assert constant > 2.0 * varying
+    assert similarity_4_cells_apart(cmt) > 0.999
+    constant, varying = constant_and_varying(scaled)
+    assert varying > 4.0 * constant
+    assert similarity_4_cells_apart(scaled) < 0.8
+
+
+def test_the_scale_keeps_the_period_of_the_fastest_wave_in_meters() -> None:
+    # The range is 8 m wide, with 4 turns the fastest wave repeats every 2 m
+    embedding = CMTPositionEmbedding(EMBED_DIMS, POINT_CLOUD_RANGE, temperature=16.0, scale=4.0)
+    embedding.mlp = torch.nn.Identity()
+
+    features = embedding(torch.tensor([[1.0, 3.0], [3.0, 3.0], [1.5, 3.0]]))
+
+    # The x features follow the y features, the first pair of each axis is the fastest wave
+    fastest_x = features[:, EMBED_DIMS : EMBED_DIMS + 2]
+    assert torch.allclose(fastest_x[0], fastest_x[1], atol=1e-5)
+    assert not torch.allclose(fastest_x[0], fastest_x[2], atol=1e-2)
+    # The slower waves still tell the two positions apart
+    assert not torch.allclose(features[0], features[1], atol=1e-2)
+
+
+def test_the_slowest_wave_may_not_repeat_within_the_range() -> None:
+    with pytest.raises(ValueError, match="slowest wave"):
+        CMTPositionEmbedding(256, POINT_CLOUD_RANGE, temperature=16.0, scale=32.0)
+
+
+def test_the_head_passes_the_scale_and_the_temperature_to_the_embedding(tmp_path: Path) -> None:
+    head = build_sparse4d_head(
+        make_anchor_file(tmp_path),
+        lidar_sampling="bev_attention",
+        bev_cell_size=1.0,
+        bev_channels=BEV_CHANNELS,
+        position_temperature=64.0,
+        position_scale=32.0,
+    )
+
+    embedding = head.deformable[0].position_embedding
+    assert (embedding.temperature, embedding.scale) == (64.0, 32.0)
+
+
+def test_the_embedding_norm_does_not_follow_the_mlp_weights() -> None:
+    embedding = _embedding()
+    position = torch.tensor([[3.0, 5.0], [-20.0, 11.0]])
+    before = embedding(position).norm(dim=-1)
+
+    # Training grew the spectral norm of the MLP layers, the logits with its output squared
+    with torch.no_grad():
+        embedding.mlp[0].weight.mul_(10.0)
+        embedding.mlp[2].weight.mul_(10.0)
+
+    assert torch.allclose(embedding(position).norm(dim=-1), before, rtol=1e-3)
+    assert torch.allclose(before, torch.full_like(before, EMBED_DIMS**0.5), rtol=1e-3)
+
+
 def test_the_block_attends_to_every_cell_of_every_level() -> None:
     embedding = _embedding()
     block = _block(embedding)
@@ -110,6 +187,121 @@ def test_the_block_attends_to_every_cell_of_every_level() -> None:
     assert output.shape == (1, 3, EMBED_DIMS)
     assert all(level.feat.grad is not None and level.feat.grad.abs().sum() > 0 for level in levels)
     assert all(parameter.grad is not None for parameter in embedding.parameters())
+
+
+def test_one_outlier_cell_does_not_take_the_attention() -> None:
+    torch.manual_seed(0)
+    block = _block(_embedding())
+    level = _level(4, 2.0, 0)
+    # The neck output of the diverged runs: one cell a thousand times the norm of the others
+    with torch.no_grad():
+        level.feat[0, :, 3, 3] *= 1000.0
+    instance_feature = torch.zeros(1, 3, EMBED_DIMS)
+    anchor = torch.zeros(1, 3, 10)
+    anchor[..., :2] = torch.tensor([[1.0, 1.0], [7.0, 7.0], [4.0, 4.0]])
+
+    tokens = block.bev_norm(level.feat.flatten(2).transpose(1, 2))
+    output = block(instance_feature, anchor, instance_feature, [], [level])
+    output.sum().backward()
+
+    # Every token keeps the unit scale of the layer norm, the outlier included
+    norms = tokens.norm(dim=-1)
+    assert torch.allclose(norms, torch.full_like(norms, BEV_CHANNELS**0.5), rtol=1e-2)
+    grad = level.feat.grad.norm(dim=0)[0]
+    assert torch.isfinite(output).all()
+    # The input gradient of the outlier cell shrinks by its scale instead of growing with it
+    assert grad[3, 3] < grad.median()
+
+
+def _local_block(local_radius: float) -> BEVCrossAttention:
+    return BEVCrossAttention(
+        embed_dims=EMBED_DIMS,
+        bev_channels=BEV_CHANNELS,
+        num_heads=2,
+        position_embedding=_embedding(),
+        local_radius=local_radius,
+    )
+
+
+def test_a_local_block_reads_only_the_cells_within_the_radius_of_the_anchor() -> None:
+    torch.manual_seed(0)
+    block = _local_block(2.0).eval()
+    # 8 by 8 cells of 1 m, the query sits on the corner shared by the cells of rows and columns
+    # 1 and 2, whose centers are 0.71 m away
+    level = _level(8, 1.0, 0)
+    instance_feature = torch.randn(1, 1, EMBED_DIMS)
+    anchor = torch.zeros(1, 1, 10)
+    anchor[..., :2] = torch.tensor([2.0, 2.0])
+
+    output = block(instance_feature, anchor, instance_feature, [], [level])
+    output.sum().backward()
+
+    read = level.feat.grad.abs().sum(dim=(0, 1)) > 0
+    ys, xs = torch.meshgrid(torch.arange(8) + 0.5, torch.arange(8) + 0.5, indexing="ij")
+    within = (xs - 2.0) ** 2 + (ys - 2.0) ** 2 <= 2.0**2
+    assert torch.equal(read, within)
+    assert 0 < within.sum() < 64
+
+
+def test_a_local_block_changes_nothing_with_the_whole_map_in_the_radius() -> None:
+    torch.manual_seed(0)
+    embedding = _embedding()
+    block = _block(embedding).eval()
+    local = _local_block(100.0).eval()
+    local.load_state_dict(block.state_dict())
+    level = _level(8, 1.0, 0)
+    instance_feature = torch.randn(1, 3, EMBED_DIMS)
+    anchor = torch.zeros(1, 3, 10)
+    anchor[..., :2] = torch.tensor([[1.0, 1.0], [7.0, 7.0], [4.0, 4.0]])
+
+    with torch.no_grad():
+        expected = block(instance_feature, anchor, instance_feature, [], [level])
+        output = local(instance_feature, anchor, instance_feature, [], [level])
+
+    assert torch.allclose(output, expected, atol=1e-6)
+
+
+def test_a_query_out_of_the_map_keeps_its_nearest_cell() -> None:
+    block = _local_block(2.0).eval()
+    level = _level(8, 1.0, 0)
+    instance_feature = torch.zeros(1, 1, EMBED_DIMS)
+    anchor = torch.zeros(1, 1, 10)
+    anchor[..., :2] = torch.tensor([-50.0, 3.2])
+
+    output = block(instance_feature, anchor, instance_feature, [], [level])
+    output.sum().backward()
+
+    # No cell lies within 2 m, the query reads the cell of row 3 at the edge it left through
+    read = level.feat.grad.abs().sum(dim=(0, 1)) > 0
+    assert torch.isfinite(output).all()
+    assert read.nonzero().tolist() == [[3, 0]]
+
+
+def test_the_local_radius_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="local_radius"):
+        _local_block(0.0)
+
+
+def test_the_head_attends_to_every_cell_unless_local_attention_is_set(tmp_path: Path) -> None:
+    def radii(**overrides: object) -> set[float | None]:
+        head = build_sparse4d_head(
+            make_anchor_file(tmp_path),
+            lidar_sampling="bev_attention",
+            bev_cell_size=1.0,
+            bev_channels=BEV_CHANNELS,
+            **overrides,
+        )
+        return {block.local_radius for block in head.deformable}
+
+    assert radii() == {None}
+    assert radii(local_attention_radius=3.0) == {None}
+    assert radii(local_attention=True) == {30.0}
+    assert radii(local_attention=True, local_attention_radius=3.0) == {3.0}
+
+
+def test_local_attention_needs_the_attention_head(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="local_attention"):
+        build_sparse4d_head(make_anchor_file(tmp_path), local_attention=True)
 
 
 def test_the_block_needs_bev_maps_and_reads_no_context() -> None:

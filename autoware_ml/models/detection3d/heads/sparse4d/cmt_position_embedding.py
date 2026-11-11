@@ -28,13 +28,13 @@ from autoware_ml.ops.deformable_aggregation.bev_deformable_aggregation import BE
 def sincos_position_embedding(
     position: torch.Tensor, num_feats: int, temperature: float = 10000.0
 ) -> torch.Tensor:
-    """Sine and cosine embedding of unit range ``(x, y)`` positions, the ``pos2embed`` of CMT.
+    """Sine and cosine embedding of ``(x, y)`` positions, the ``pos2embed`` of CMT.
 
     Every axis gets ``num_feats`` features over the wavelengths of the transformer embedding,
     the sine and the cosine of every wavelength alternating. The y features come first.
 
     Args:
-        position: Positions ``(..., 2)`` in the unit range.
+        position: Positions ``(..., 2)``, the fastest wave turns once per unit.
         num_feats: Features per axis, even.
         temperature: Base of the wavelength progression.
 
@@ -58,12 +58,23 @@ class CMTPositionEmbedding(nn.Module):
 
     CMT (arXiv 2301.01283) puts the queries and the BEV map in one positional space: the
     position, normalized to the unit range over the point cloud range, becomes a sine and cosine
-    embedding that one MLP maps to the feature dimension. A query reads it at its anchor center,
+    embedding that one MLP maps to the feature dimension, a layer norm keeps it at the scale of
+    the features. A query reads it at its anchor center,
     a BEV cell at its center, so a query and the cell under it share one embedding.
+
+    CMT turns its fastest wave once over the range and its slowest ``1 / temperature`` times, so
+    most of the sine and cosine features stay constant over the map and positions a few meters
+    apart get nearly one embedding. The MLP then settles on the constant features and the
+    embedding loses the position. ``scale`` turns every wave that many times more: the fastest
+    wave repeats every ``extent / scale`` meters and no feature stays constant.
     """
 
     def __init__(
-        self, embed_dims: int, point_cloud_range: Sequence[float], temperature: float = 10000.0
+        self,
+        embed_dims: int,
+        point_cloud_range: Sequence[float],
+        temperature: float = 10000.0,
+        scale: float = 1.0,
     ) -> None:
         """Initialize the shared embedding.
 
@@ -71,16 +82,26 @@ class CMTPositionEmbedding(nn.Module):
             embed_dims: Feature dimension of the embedding, even.
             point_cloud_range: Metric range ``(x_min, y_min, z_min, x_max, y_max, z_max)`` that
                 normalizes the positions.
-            temperature: Base of the wavelength progression of the sine and cosine embedding.
+            temperature: Base of the wavelength progression of the sine and cosine embedding,
+                the slowest wave is about ``temperature`` times longer than the fastest.
+            scale: Turns of the fastest wave over the range, 1 for the embedding of CMT.
 
         Raises:
-            ValueError: If the feature dimension is odd.
+            ValueError: If the feature dimension is odd, or if the slowest wave repeats within
+                the range, which lets two positions share one embedding.
         """
         super().__init__()
         if embed_dims % 2 != 0:
             raise ValueError(f"The sine and cosine embedding needs even dims, got {embed_dims}.")
+        slowest_turns = scale / temperature ** ((embed_dims - 2) / embed_dims)
+        if slowest_turns > 1.0:
+            raise ValueError(
+                f"The slowest wave turns {slowest_turns:.2f} times over the range with scale "
+                f"{scale} and temperature {temperature}, raise the temperature to keep it unique."
+            )
         self.embed_dims = embed_dims
         self.temperature = temperature
+        self.scale = scale
         self.register_buffer(
             "origin",
             torch.tensor([float(point_cloud_range[0]), float(point_cloud_range[1])]),
@@ -96,22 +117,32 @@ class CMTPositionEmbedding(nn.Module):
             ),
             persistent=False,
         )
+        # The embedding sits on both sides of the attention logits, so they grow with its norm
+        # squared. Unbounded, the shared MLP outgrows the features: the attention saturates on
+        # far cells and the head collapses. The norm keeps it at the scale of the features.
         self.mlp = nn.Sequential(
             nn.Linear(embed_dims * 2, embed_dims),
             nn.ReLU(inplace=True),
             nn.Linear(embed_dims, embed_dims),
+            nn.LayerNorm(embed_dims),
         )
 
     def forward(self, position: torch.Tensor) -> torch.Tensor:
         """Embed metric ``(x, y)`` positions ``(..., 2)`` into ``(..., C)``."""
         unit = (position - self.origin) / self.extent
-        return self.mlp(sincos_position_embedding(unit, self.embed_dims, self.temperature))
+        return self.mlp(
+            sincos_position_embedding(unit * self.scale, self.embed_dims, self.temperature)
+        )
 
-    def cells(self, level: BEVLevel) -> torch.Tensor:
-        """Embed the cell centers of a BEV level ``(H * W, C)``, row major like its flattened map."""
+    def cell_centers(self, level: BEVLevel) -> torch.Tensor:
+        """Metric ``(x, y)`` cell centers of a BEV level ``(H * W, 2)``, row major like its map."""
         height, width = level.feat.shape[-2:]
         origin = self.origin.new_tensor(level.grid_origin)
         xs = (torch.arange(width, device=origin.device) + 0.5) * level.cell_size + origin[0]
         ys = (torch.arange(height, device=origin.device) + 0.5) * level.cell_size + origin[1]
         grid_y, grid_x = torch.meshgrid(ys, xs, indexing="ij")
-        return self(torch.stack([grid_x, grid_y], dim=-1).reshape(-1, 2))
+        return torch.stack([grid_x, grid_y], dim=-1).reshape(-1, 2)
+
+    def cells(self, level: BEVLevel) -> torch.Tensor:
+        """Embed the cell centers of a BEV level ``(H * W, C)``, row major like its flattened map."""
+        return self(self.cell_centers(level))

@@ -4,3 +4,8 @@
 model:
   bbox_head:
     lidar_sampling: bev_attention
+    # The fastest wave of the positional embedding repeats every 1 / 32 of the range and the
+    # slowest about every 2 ranges. The embedding of CMT, scale 1 with temperature 10000, keeps
+    # most of its features constant over the map and collapsed to one vector in training.
+    position_scale: 32.0
+    position_temperature: 64.0

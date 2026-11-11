@@ -1075,6 +1075,16 @@ class BEVCrossAttention(nn.Module):
     next to features, and the values are the cell features alone. The block takes the inputs of
     :class:`SparseDeformableAggregation` and reads no keypoints and no sparse voxels. The anchor
     embedding of Sparse4D stays with the instance attention and the refinement.
+
+    Every cell token is layer normalized before the projection. The neck ends in batch norm, which
+    bounds each channel over the whole map but not a single cell, and a few cells reach norms
+    hundreds of times the median. Unnormalized, such a cell takes the whole softmax over the map,
+    drowns the position term of its key and sends an exploding gradient back to the backbone.
+
+    With ``local_radius`` a query attends only to the cells whose centers lie within that
+    distance of its anchor center. Nothing but the learned embedding keeps the attention over
+    the whole map near the query, and training gave that up for one read of the map shared by
+    all queries. The mask leaves a query its own neighborhood alone.
     """
 
     def __init__(
@@ -1086,6 +1096,7 @@ class BEVCrossAttention(nn.Module):
         position_embedding: CMTPositionEmbedding,
         dropout: float = 0.0,
         attn_drop: float = 0.0,
+        local_radius: float | None = None,
     ) -> None:
         """Initialize the cross attention block.
 
@@ -1096,17 +1107,24 @@ class BEVCrossAttention(nn.Module):
             position_embedding: Embedding shared by the queries, the cells and the other blocks.
             dropout: Dropout on the attended features.
             attn_drop: Dropout on the attention weights in training.
+            local_radius: Metric distance from the anchor center within which a query attends
+                to the cells, in training and in inference. None attends to every cell.
 
         Raises:
-            ValueError: If the feature dimension does not split into the heads.
+            ValueError: If the feature dimension does not split into the heads, or if the
+                radius is not positive.
         """
         super().__init__()
         if embed_dims % num_heads != 0:
             raise ValueError(f"embed_dims {embed_dims} not divisible by num_heads {num_heads}.")
+        if local_radius is not None and local_radius <= 0.0:
+            raise ValueError(f"local_radius must be positive, got {local_radius}.")
+        self.local_radius = local_radius
         self.embed_dims = embed_dims
         self.num_heads = num_heads
         self.attn_drop = attn_drop
         self.position_embedding = position_embedding
+        self.bev_norm = nn.LayerNorm(bev_channels)
         self.input_proj = nn.Linear(bev_channels, embed_dims)
         self.q_proj = nn.Linear(embed_dims, embed_dims)
         self.k_proj = nn.Linear(embed_dims, embed_dims)
@@ -1143,15 +1161,41 @@ class BEVCrossAttention(nn.Module):
             raise ValueError("The BEV attention block reads no frame context.")
         if len(bev_levels) == 0:
             raise ValueError("The BEV attention block needs BEV maps.")
-        query = instance_feature + self.position_embedding(anchor[..., _X : _Y + 1])
+        position = anchor[..., _X : _Y + 1].detach()
+        query = instance_feature + self.position_embedding(position)
         value = torch.cat(
-            [self.input_proj(level.feat.flatten(2).transpose(1, 2)) for level in bev_levels], dim=1
+            [
+                self.input_proj(self.bev_norm(level.feat.flatten(2).transpose(1, 2)))
+                for level in bev_levels
+            ],
+            dim=1,
         )
         key = value + torch.cat([self.position_embedding.cells(level) for level in bev_levels])
-        return instance_feature + self.proj_drop(self._attend(query, key, value))
+        mask = None if self.local_radius is None else self._local_mask(position, bev_levels)
+        return instance_feature + self.proj_drop(self._attend(query, key, value, mask))
 
-    def _attend(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
-        """Multi-head scaled dot product attention over the cells, ``(B, N, C)``."""
+    def _local_mask(self, position: torch.Tensor, bev_levels: Sequence[BEVLevel]) -> torch.Tensor:
+        """Cells every query attends to ``(B, N, L)``, those within the radius of its anchor.
+
+        The cell nearest to a query stays with it at any distance: a softmax without a cell is
+        NaN, and an anchor refined out of the map has no cell within the radius.
+        """
+        centers = torch.cat([self.position_embedding.cell_centers(level) for level in bev_levels])
+        distance = torch.cdist(position.float(), centers.float().expand(len(position), -1, -1))
+        mask = distance <= self.local_radius
+        return mask.scatter(-1, distance.argmin(dim=-1, keepdim=True), True)
+
+    def _attend(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Multi-head scaled dot product attention over the cells, ``(B, N, C)``.
+
+        ``mask`` marks the cells ``(B, N, L)`` every query attends to, None for all of them.
+        """
         batch_size = query.shape[0]
         head_dims = self.embed_dims // self.num_heads
 
@@ -1162,6 +1206,7 @@ class BEVCrossAttention(nn.Module):
             split_heads(self.q_proj(query)),
             split_heads(self.k_proj(key)),
             split_heads(self.v_proj(value)),
+            attn_mask=None if mask is None else mask[:, None],
             dropout_p=self.attn_drop if self.training else 0.0,
         )
         return self.out_proj(attended.transpose(1, 2).reshape(batch_size, -1, self.embed_dims))
@@ -2016,6 +2061,10 @@ class Sparse4DHead(SparseQueryHead):
         bev: nn.Module | None = None,
         bev_cell_size: float | None = None,
         bev_channels: int = 0,
+        position_temperature: float = 10000.0,
+        position_scale: float = 1.0,
+        local_attention: bool = False,
+        local_attention_radius: float = 30.0,
         aggregation: Callable[..., SparseDeformableAggregation] = SparseDeformableAggregation,
         yaw_free_classes: Sequence[str] = (),
         yaw_reversible_classes: Sequence[str] = (),
@@ -2087,6 +2136,13 @@ class Sparse4DHead(SparseQueryHead):
             bev_cell_size: Metric cell size of the BEV map the head gets as its lidar features
                 in place of the stages, placed on the grid of ``point_cloud_range``.
             bev_channels: Feature dimension of the BEV maps.
+            position_temperature: Base of the wavelength progression of the positional
+                embedding of ``bev_attention``.
+            position_scale: Turns of the fastest wave of that embedding over the point cloud
+                range, 1 for the embedding of CMT.
+            local_attention: A query of ``bev_attention`` attends only to the cells within
+                ``local_attention_radius`` of its anchor center, in training and in inference.
+            local_attention_radius: Metric radius of the cells a query attends to.
             aggregation: Builds the deformable aggregation of one decoder block from its keyword
                 arguments.
             yaw_free_classes: Classes without a heading, such as traffic cones, whose yaw
@@ -2100,6 +2156,11 @@ class Sparse4DHead(SparseQueryHead):
         if lidar_sampling not in {"sparse", "sparse_bev", "bev", "bev_attention"}:
             raise ValueError(
                 "lidar_sampling must be sparse, sparse_bev, bev or bev_attention, got "
+                f"{lidar_sampling}."
+            )
+        if local_attention and lidar_sampling != "bev_attention":
+            raise ValueError(
+                f"local_attention masks the cells of bev_attention, got lidar_sampling "
                 f"{lidar_sampling}."
             )
         num_bev_sources = int(bev is not None) + int(bev_cell_size is not None)
@@ -2200,7 +2261,9 @@ class Sparse4DHead(SparseQueryHead):
             )
         # CMT shares one positional embedding between the queries, the cells and the blocks
         position_embedding = (
-            CMTPositionEmbedding(embed_dims, point_cloud_range)
+            CMTPositionEmbedding(
+                embed_dims, point_cloud_range, position_temperature, position_scale
+            )
             if lidar_sampling == "bev_attention"
             else None
         )
@@ -2248,6 +2311,7 @@ class Sparse4DHead(SparseQueryHead):
                 position_embedding=position_embedding,
                 dropout=dropout,
                 attn_drop=attn_drop,
+                local_radius=local_attention_radius if local_attention else None,
             ),
         )
         self.loss_cls = SigmoidFocalLoss()
