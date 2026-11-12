@@ -19,3 +19,9 @@ model:
       - [4, 90.0]
       - [6, 120.0]
       - [8, null]
+    # With cosine_attention the logits are the cosine of the query and the key times a learned
+    # scale per head, at most attention_scale_max, so a query spreads them by at most twice the
+    # maximum. The logits of the scaled dot product grew until a query attended to one cell
+    # and the head lost its objects.
+    cosine_attention: false
+    attention_scale_max: 30.0

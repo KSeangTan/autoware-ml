@@ -385,6 +385,149 @@ def test_local_attention_needs_the_attention_head(tmp_path: Path) -> None:
         build_sparse4d_head(make_anchor_file(tmp_path), local_attention=True)
 
 
+def _cosine_block(logit_scale_max: float = 30.0) -> BEVCrossAttention:
+    return BEVCrossAttention(
+        embed_dims=EMBED_DIMS,
+        bev_channels=BEV_CHANNELS,
+        num_heads=2,
+        position_embedding=_embedding(),
+        logit_scale_max=logit_scale_max,
+    )
+
+
+def _attention_logits(block: BEVCrossAttention, queries: int, cells: int) -> torch.Tensor:
+    """Logits of every head ``(heads, queries, cells)``, read back from the attention weights.
+
+    With the identity as the value and output projection of a block of ``cells`` dims, the
+    block returns the attention weights of a query over the cells, one head after the other.
+    """
+    generator = torch.Generator().manual_seed(0)
+    query = torch.randn((1, queries, EMBED_DIMS), generator=generator)
+    key = torch.randn((1, cells, EMBED_DIMS), generator=generator)
+    head_dims = EMBED_DIMS // block.num_heads
+    assert cells == head_dims
+    value = torch.eye(cells).repeat(1, 1, block.num_heads)
+    with torch.no_grad():
+        block.v_proj.weight.copy_(torch.eye(EMBED_DIMS))
+        block.v_proj.bias.zero_()
+        block.out_proj.weight.copy_(torch.eye(EMBED_DIMS))
+        block.out_proj.bias.zero_()
+        weights = block.eval()._attend(query, key, value)
+    return weights.reshape(queries, block.num_heads, cells).transpose(0, 1).log()
+
+
+def test_the_cosine_attention_bounds_the_logits_whatever_the_projections() -> None:
+    torch.manual_seed(0)
+    block, plain = _cosine_block(logit_scale_max=30.0), _block(_embedding())
+    plain.load_state_dict(block.state_dict(), strict=False)
+
+    def spread(attention: BEVCrossAttention, gain: float) -> float:
+        with torch.no_grad():
+            attention.q_proj.weight.mul_(gain)
+            attention.k_proj.weight.mul_(gain)
+        logits = _attention_logits(attention, queries=5, cells=4)
+        return float((logits.max(dim=-1).values - logits.min(dim=-1).values).max())
+
+    # The softmax keeps the differences of the logits: at most twice the starting scale of 10
+    assert spread(block, 1.0) <= 2.0 * BEVCrossAttention.LOGIT_SCALE_INIT + 1e-4
+    grown = spread(block, 100.0)
+    assert grown <= 2.0 * BEVCrossAttention.LOGIT_SCALE_INIT + 1e-4
+    # The dot product follows the projections, a hundred times each side saturates it
+    assert spread(plain, 100.0) > 10.0 * grown
+
+
+def test_the_cosine_attention_is_the_softmax_of_the_scaled_cosine() -> None:
+    torch.manual_seed(0)
+    block = _cosine_block()
+    with torch.no_grad():
+        block.log_scale.copy_(torch.tensor([2.0, 12.0]).log())
+    generator = torch.Generator().manual_seed(1)
+    query = torch.randn((1, 3, EMBED_DIMS), generator=generator)
+    key = torch.randn((1, 6, EMBED_DIMS), generator=generator)
+    value = torch.randn((1, 6, EMBED_DIMS), generator=generator)
+
+    def heads(tokens: torch.Tensor) -> torch.Tensor:
+        return tokens.reshape(1, -1, 2, EMBED_DIMS // 2).transpose(1, 2)
+
+    with torch.no_grad():
+        cosine = torch.nn.functional.cosine_similarity(
+            heads(block.q_proj(query))[:, :, :, None], heads(block.k_proj(key))[:, :, None], dim=-1
+        )
+        weights = (cosine * torch.tensor([2.0, 12.0]).reshape(1, 2, 1, 1)).softmax(dim=-1)
+        expected = block.out_proj(
+            (weights @ heads(block.v_proj(value))).transpose(1, 2).reshape(1, 3, EMBED_DIMS)
+        )
+        attended = block.eval()._attend(query, key, value)
+
+    assert torch.allclose(attended, expected, atol=1e-5)
+
+
+def test_the_scale_of_a_head_is_learned_up_to_its_maximum() -> None:
+    block = _cosine_block(logit_scale_max=30.0)
+    assert torch.allclose(block.logit_scale(), torch.full((2,), 10.0))
+    # A maximum below the starting scale starts from the maximum
+    assert torch.allclose(_cosine_block(logit_scale_max=4.0).logit_scale(), torch.full((2,), 4.0))
+
+    level = _level(4, 2.0, 0)
+    instance_feature = torch.randn(1, 3, EMBED_DIMS)
+    anchor = torch.zeros(1, 3, 10)
+    block(instance_feature, anchor, instance_feature, [], [level]).square().sum().backward()
+    assert block.log_scale.grad is not None and block.log_scale.grad.abs().sum() > 0
+
+    with torch.no_grad():
+        block.log_scale.copy_(torch.tensor([1000.0, 20.0]).log())
+    assert torch.allclose(block.logit_scale(), torch.tensor([30.0, 20.0]))
+
+
+def test_a_block_of_the_dot_product_has_no_scale() -> None:
+    block = _block(_embedding())
+    assert block.logit_scale() is None
+    assert "log_scale" not in block.state_dict()
+    with pytest.raises(ValueError, match="logit_scale_max"):
+        _cosine_block(logit_scale_max=0.0)
+
+
+def test_the_head_reports_the_scales_of_the_cosine_attention(tmp_path: Path) -> None:
+    head = _local_head(tmp_path, cosine_attention=True, attention_scale_max=20.0)
+    with torch.no_grad():
+        head.deformable[1].log_scale.fill_(torch.tensor(50.0).log())
+    bev_map = torch.randn(1, BEV_CHANNELS, 8, 8)
+    gt_boxes = [torch.tensor([[4.0, 4.0, 0.0, 4.5, 1.9, 1.7, 0.4, 0.0, 0.0]])]
+
+    def losses_of(attention_head: Sparse4DHead) -> dict[str, torch.Tensor]:
+        return attention_head.loss(
+            attention_head(bev_map), gt_boxes, [torch.tensor([1])], [torch.tensor([0])], [0]
+        )
+
+    losses = losses_of(head)
+    scales = {name: float(value) for name, value in losses.items() if "attention_scale" in name}
+    blocks = len(head.deformable)
+    assert set(scales) == {f"attention_scale_{index}" for index in range(blocks)} | {
+        "attention_scale_max"
+    }
+    # Block 1 sits at the maximum, the others at the starting scale
+    assert scales["attention_scale_1"] == pytest.approx(20.0, rel=1e-5)
+    assert scales["attention_scale_0"] == pytest.approx(10.0, rel=1e-5)
+    assert scales["attention_scale_max"] == pytest.approx(20.0, rel=1e-5)
+    # The scales are reported, not trained on: the loss sums the losses alone
+    assert float(losses["loss"].detach()) == pytest.approx(
+        sum(
+            float(value.detach())
+            for name, value in losses.items()
+            if "loss" in name and name != "loss"
+        ),
+        rel=1e-5,
+    )
+
+    plain = losses_of(_local_head(tmp_path))
+    assert not any("attention_scale" in name for name in plain)
+
+
+def test_cosine_attention_needs_the_attention_head(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="cosine_attention"):
+        build_sparse4d_head(make_anchor_file(tmp_path), cosine_attention=True)
+
+
 def test_the_block_needs_bev_maps_and_reads_no_context() -> None:
     block = _block(_embedding())
     instance_feature = torch.zeros(1, 2, EMBED_DIMS)
@@ -425,8 +568,11 @@ def test_an_attention_head_trains_every_parameter_and_samples_no_voxels(tmp_path
     assert all(block.position_embedding is shared for block in head.deformable)
 
 
-def test_an_attention_head_exports_the_training_forward(tmp_path: Path) -> None:
-    head = _attention_head(tmp_path).eval()
+@pytest.mark.parametrize("cosine_attention", [False, True])
+def test_an_attention_head_exports_the_training_forward(
+    tmp_path: Path, cosine_attention: bool
+) -> None:
+    head = _local_head(tmp_path, cosine_attention=cosine_attention).eval()
     export_head = head.prepare_for_export()
     bev_map = torch.randn(1, BEV_CHANNELS, 8, 8)
 

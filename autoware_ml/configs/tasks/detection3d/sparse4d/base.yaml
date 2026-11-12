@@ -43,6 +43,9 @@ trainer:
   precision: 32-true
   gradient_clip_val: 5.0
   gradient_clip_algorithm: norm
+  # Every rank streams the frames of a few scenes, the batch statistics of one rank follow
+  # those scenes. The lidar network normalizes over the frames of all ranks instead.
+  sync_batchnorm: true
 
 # A summary forward pass would feed one frame out of its stream to the instance bank, so the
 # model summary lists the modules without FLOPs.

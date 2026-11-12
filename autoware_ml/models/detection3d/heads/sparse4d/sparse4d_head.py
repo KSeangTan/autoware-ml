@@ -1086,7 +1086,17 @@ class BEVCrossAttention(nn.Module):
     the whole map near the query, and training gave that up for one read of the map shared by
     all queries. The mask leaves a query its own neighborhood alone. The radius is a buffer of
     the block, so that a checkpoint reads the map as the epoch it was saved in did.
+
+    With ``logit_scale_max`` the logits are the scaled cosine attention of Swin Transformer V2
+    (arXiv 2111.09883): the cosine of the projected query and key of a head times the learned
+    scale of that head, which stays at or below the maximum. The dot product has no bound, its
+    logits grew through the projections until the softmax of a query held one cell, and the
+    queries lost their objects. The cosine lies in ``[-1, 1]``, so the logits of a query spread
+    by at most twice the scale whatever the projections learn.
     """
+
+    # Scale the heads start from, as Swin Transformer V2 does
+    LOGIT_SCALE_INIT = 10.0
 
     def __init__(
         self,
@@ -1098,6 +1108,7 @@ class BEVCrossAttention(nn.Module):
         dropout: float = 0.0,
         attn_drop: float = 0.0,
         local_radius: float | None = None,
+        logit_scale_max: float | None = None,
     ) -> None:
         """Initialize the cross attention block.
 
@@ -1111,16 +1122,20 @@ class BEVCrossAttention(nn.Module):
             local_radius: Metric distance from the anchor center within which a query attends
                 to the cells, in training and in inference, changed by
                 :meth:`set_local_radius`. None attends to every cell and fixes that.
+            logit_scale_max: Maximum of the learned scale of the cosine attention, one scale
+                per head. None keeps the scaled dot product.
 
         Raises:
             ValueError: If the feature dimension does not split into the heads, or if the
-                radius is not positive.
+                radius or the maximum scale is not positive.
         """
         super().__init__()
         if embed_dims % num_heads != 0:
             raise ValueError(f"embed_dims {embed_dims} not divisible by num_heads {num_heads}.")
         if local_radius is not None and local_radius <= 0.0:
             raise ValueError(f"local_radius must be positive, got {local_radius}.")
+        if logit_scale_max is not None and logit_scale_max <= 0.0:
+            raise ValueError(f"logit_scale_max must be positive, got {logit_scale_max}.")
         self.register_buffer(
             "local_radius", None if local_radius is None else torch.tensor(float(local_radius))
         )
@@ -1135,6 +1150,21 @@ class BEVCrossAttention(nn.Module):
         self.v_proj = nn.Linear(embed_dims, embed_dims)
         self.out_proj = nn.Linear(embed_dims, embed_dims)
         self.proj_drop = nn.Dropout(dropout)
+        self.logit_scale_max = logit_scale_max
+        # The scale is kept as its logarithm: it stays positive and a step changes it by a ratio
+        self.log_scale = (
+            None
+            if logit_scale_max is None
+            else nn.Parameter(
+                torch.full((num_heads,), math.log(min(self.LOGIT_SCALE_INIT, logit_scale_max)))
+            )
+        )
+
+    def logit_scale(self) -> torch.Tensor | None:
+        """Scale of the cosine attention of every head ``(num_heads,)``, None without one."""
+        if self.log_scale is None:
+            return None
+        return self.log_scale.clamp(max=math.log(self.logit_scale_max)).exp()
 
     def forward(
         self,
@@ -1212,8 +1242,9 @@ class BEVCrossAttention(nn.Module):
         value: torch.Tensor,
         mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Multi-head scaled dot product attention over the cells, ``(B, N, C)``.
+        """Multi-head attention over the cells, ``(B, N, C)``.
 
+        The logits are the scaled dot product, or the scaled cosine with a ``logit_scale_max``.
         ``mask`` marks the cells ``(B, N, L)`` every query attends to, None for all of them.
         """
         batch_size = query.shape[0]
@@ -1222,9 +1253,19 @@ class BEVCrossAttention(nn.Module):
         def split_heads(tokens: torch.Tensor) -> torch.Tensor:
             return tokens.reshape(batch_size, -1, self.num_heads, head_dims).transpose(1, 2)
 
+        head_query = split_heads(self.q_proj(query))
+        head_key = split_heads(self.k_proj(key))
+        scale = self.logit_scale()
+        if scale is not None:
+            # The attention below divides the product by sqrt(head_dims), the query carries
+            # that factor with the scale and the logits come out as scale * cosine
+            head_query = F.normalize(head_query, dim=-1) * (scale * math.sqrt(head_dims)).reshape(
+                1, -1, 1, 1
+            )
+            head_key = F.normalize(head_key, dim=-1)
         attended = F.scaled_dot_product_attention(
-            split_heads(self.q_proj(query)),
-            split_heads(self.k_proj(key)),
+            head_query,
+            head_key,
             split_heads(self.v_proj(value)),
             attn_mask=None if mask is None else mask[:, None],
             dropout_p=self.attn_drop if self.training else 0.0,
@@ -2030,7 +2071,9 @@ def _local_attention_radii(
     Raises:
         ValueError: If the epochs do not rise from 0, or if a radius is not positive.
     """
-    pairs = tuple((int(epoch), None if radius is None else float(radius)) for epoch, radius in radii)
+    pairs = tuple(
+        (int(epoch), None if radius is None else float(radius)) for epoch, radius in radii
+    )
     epochs = [epoch for epoch, _ in pairs]
     if not pairs or epochs[0] != 0 or any(a >= b for a, b in zip(epochs, epochs[1:])):
         raise ValueError(f"local_attention_radii needs rising epochs from 0, got {epochs}.")
@@ -2102,6 +2145,8 @@ class Sparse4DHead(SparseQueryHead):
         position_scale: float = 1.0,
         local_attention: bool = False,
         local_attention_radii: Sequence[Sequence[float | None]] = ((0, 30.0),),
+        cosine_attention: bool = False,
+        attention_scale_max: float = 30.0,
         aggregation: Callable[..., SparseDeformableAggregation] = SparseDeformableAggregation,
         yaw_free_classes: Sequence[str] = (),
         yaw_reversible_classes: Sequence[str] = (),
@@ -2183,6 +2228,11 @@ class Sparse4DHead(SparseQueryHead):
                 within from that epoch on, by rising epoch and from epoch 0. A radius of None
                 attends to every cell. :meth:`set_epoch` moves the head to the radius of an
                 epoch, a checkpoint keeps the radius it was saved with.
+            cosine_attention: The logits of ``bev_attention`` are the cosine of the query and
+                the key times a learned scale per head, which bounds them, in place of the
+                scaled dot product. The loss reports the scales.
+            attention_scale_max: Maximum of that scale, the logits of a query spread by at most
+                twice of it.
             aggregation: Builds the deformable aggregation of one decoder block from its keyword
                 arguments.
             yaw_free_classes: Classes without a heading, such as traffic cones, whose yaw
@@ -2206,6 +2256,11 @@ class Sparse4DHead(SparseQueryHead):
         self.local_attention_radii = (
             _local_attention_radii(local_attention_radii) if local_attention else None
         )
+        if cosine_attention and lidar_sampling != "bev_attention":
+            raise ValueError(
+                f"cosine_attention bounds the logits of bev_attention, got lidar_sampling "
+                f"{lidar_sampling}."
+            )
         num_bev_sources = int(bev is not None) + int(bev_cell_size is not None)
         if num_bev_sources != int(lidar_sampling != "sparse"):
             raise ValueError(
@@ -2356,6 +2411,7 @@ class Sparse4DHead(SparseQueryHead):
                 attn_drop=attn_drop,
                 # A block that follows the epochs holds its radius, infinite for every cell
                 local_radius=None if self.local_attention_radii is None else math.inf,
+                logit_scale_max=attention_scale_max if cosine_attention else None,
             ),
         )
         self.loss_cls = SigmoidFocalLoss()
@@ -2768,6 +2824,7 @@ class Sparse4DHead(SparseQueryHead):
                 float((self.tracker.slot_owners(lanes) >= 0).sum())
             )
         loss_dict["num_pos"] = outputs.classification.new_tensor(total_pos / max(num_layers, 1))
+        loss_dict.update(self._attention_scales())
         if outputs.denoising is not None:
             loss_dict.update(self._denoising_losses(outputs.denoising))
         loss_dict["loss"] = sum(value for key, value in loss_dict.items() if "loss" in key)
@@ -2839,6 +2896,23 @@ class Sparse4DHead(SparseQueryHead):
         """
         targets = self.assign(outputs, gt_boxes, gt_labels, gt_instance_ids, lanes)
         return self.loss_from_targets(outputs, targets, lanes)
+
+    def _attention_scales(self) -> dict[str, torch.Tensor]:
+        """Scales of the cosine attention to report, empty for a head without it.
+
+        Every block reports the mean scale of its heads, and the head the largest scale of all
+        of them: a scale at its maximum is a head asking for sharper logits than the bound.
+        """
+        scales = [
+            block.logit_scale().detach()
+            for block in self.deformable
+            if isinstance(block, BEVCrossAttention) and block.log_scale is not None
+        ]
+        if not scales:
+            return {}
+        reported = {f"attention_scale_{index}": scale.mean() for index, scale in enumerate(scales)}
+        reported["attention_scale_max"] = torch.stack(scales).max()
+        return reported
 
     def _denoising_losses(self, denoising: Sparse4DDenoisingOutputs) -> dict[str, torch.Tensor]:
         """Compute the classification and regression losses of the denoising queries.
