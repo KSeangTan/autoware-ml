@@ -2168,6 +2168,7 @@ class Sparse4DHead(SparseQueryHead):
         norm_momentum: float = 0.01,
         position_temperature: float = 10000.0,
         position_scale: float = 1.0,
+        position_norm: bool = True,
         local_attention: bool = False,
         local_attention_radii: Sequence[Sequence[float | None]] = ((0, 30.0),),
         cosine_attention: bool = False,
@@ -2253,6 +2254,7 @@ class Sparse4DHead(SparseQueryHead):
                 embedding of ``bev_attention``.
             position_scale: Turns of the fastest wave of that embedding over the point cloud
                 range, 1 for the embedding of CMT.
+            position_norm: Whether a layer norm ends the MLP of that embedding.
             local_attention: A query of ``bev_attention`` attends only to the cells within a
                 radius of its anchor center, in training and in inference.
             local_attention_radii: Pairs of an epoch and the metric radius the queries attend
@@ -2403,7 +2405,11 @@ class Sparse4DHead(SparseQueryHead):
         # CMT shares one positional embedding between the queries, the cells and the blocks
         position_embedding = (
             CMTPositionEmbedding(
-                embed_dims, point_cloud_range, position_temperature, position_scale
+                embed_dims,
+                point_cloud_range,
+                position_temperature,
+                position_scale,
+                position_norm,
             )
             if lidar_sampling == "bev_attention"
             else None

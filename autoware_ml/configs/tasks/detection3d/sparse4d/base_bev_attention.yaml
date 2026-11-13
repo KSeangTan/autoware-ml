@@ -29,6 +29,9 @@ model:
     # of the map reach norms hundreds of times the median, and unnormalized they took the
     # softmax of the dot product and sent an exploding gradient to the backbone.
     bev_norm: true
+    # A layer norm ends the MLP of the positional embedding. Unbounded, the embedding outgrew
+    # the features and saturated the scaled dot product, the cosine logits do not grow with it.
+    position_norm: true
 
 # Every query attends to every cell of the map, an (N, H * W) attention per head. In float16
 # without a mask it runs on the flash attention kernel, which never stores those logits. The
