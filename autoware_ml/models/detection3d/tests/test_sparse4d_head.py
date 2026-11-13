@@ -466,6 +466,29 @@ def test_instance_bank_warps_static_object_across_frames(tmp_path) -> None:
     assert torch.allclose(temp_anchor[0, 0, :3], expected, atol=1e-4)
 
 
+def test_instance_bank_warps_in_float32_under_autocast(tmp_path) -> None:
+    """A far object in a map of kilometers keeps its place when the head runs under autocast."""
+    bank = _make_bank(tmp_path)
+    # The ego 65 km from the map origin, the static object 100 m ahead of it
+    global_point = torch.tensor([65560.2, 705.7, 716.4, 1.0], dtype=torch.float64)
+    pose1 = _pose(yaw=0.3, translation=(65460.2, 675.7, 715.4))
+    pose2 = _pose(yaw=0.32, translation=(65461.6, 676.2, 715.4))
+    timestamp1 = torch.tensor([100.0], dtype=torch.float64)
+    timestamp2 = torch.tensor([100.1], dtype=torch.float64)
+
+    anchor1 = torch.zeros((1, BANK_ANCHORS, ANCHOR_DIM))
+    anchor1[0, :, :3] = (pose1[0].inverse() @ global_point)[:3].float()
+    anchor1[0, :, 7] = 1.0
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        _cache_frame(bank, anchor1, timestamp1, pose1, "scene")
+        _, _, _, _, temp_anchor = bank.get(1, timestamp2, pose2, ["scene"])
+
+    expected = (pose2[0].inverse() @ global_point)[:3].float()
+    assert temp_anchor.dtype == torch.float32
+    # bfloat16 holds a coordinate of 100 m to half a meter
+    assert torch.allclose(temp_anchor[0, 0, :3], expected, atol=1e-3)
+
+
 def test_instance_bank_warp_advances_by_instance_velocity(tmp_path) -> None:
     bank = _make_bank(tmp_path)
     pose = _pose(yaw=0.0, translation=(0.0, 0.0, 0.0))

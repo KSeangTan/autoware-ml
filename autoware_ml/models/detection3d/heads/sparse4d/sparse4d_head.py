@@ -295,6 +295,10 @@ class InstanceBank(nn.Module):
     ) -> torch.Tensor:
         """Warp cached anchors into the current frame.
 
+        The warp computes in float32 whatever the autocast of the caller. Autocast runs a matrix
+        product in half precision, which holds a center 100 m out only to 6 cm, so every frame
+        would shift the cached anchors of far objects by centimeters.
+
         Args:
             anchor: Cached anchors ``(B, K, 10)``.
             time_interval: Frame gaps ``(B,)`` in seconds.
@@ -303,24 +307,29 @@ class InstanceBank(nn.Module):
         Returns:
             Warped anchors ``(B, K, 10)``.
         """
-        linear = transform[:, :3, :3]
-        translation = transform[:, :3, 3]
+        with torch.autocast(device_type=anchor.device.type, enabled=False):
+            anchor = anchor.float()
+            time_interval = time_interval.float()
+            linear = transform[:, :3, :3].float()
+            translation = transform[:, :3, 3].float()
 
-        velocity = anchor[..., _VX : _VY + 1]
-        advanced_xy = anchor[..., _X : _Y + 1] + velocity * time_interval[:, None, None]
-        center = torch.cat([advanced_xy, anchor[..., _Z : _Z + 1]], dim=-1)
-        center = center @ linear.transpose(-1, -2) + translation[:, None, :]
+            velocity = anchor[..., _VX : _VY + 1]
+            advanced_xy = anchor[..., _X : _Y + 1] + velocity * time_interval[:, None, None]
+            center = torch.cat([advanced_xy, anchor[..., _Z : _Z + 1]], dim=-1)
+            center = center @ linear.transpose(-1, -2) + translation[:, None, :]
 
-        heading = torch.stack([anchor[..., _COS_YAW], anchor[..., _SIN_YAW]], dim=-1)
-        heading = heading @ linear[:, :2, :2].transpose(-1, -2)
-        heading = F.normalize(heading, dim=-1, eps=1e-6)
+            heading = torch.stack([anchor[..., _COS_YAW], anchor[..., _SIN_YAW]], dim=-1)
+            heading = heading @ linear[:, :2, :2].transpose(-1, -2)
+            heading = F.normalize(heading, dim=-1, eps=1e-6)
 
-        velocity = velocity @ linear[:, :2, :2].transpose(-1, -2)
+            velocity = velocity @ linear[:, :2, :2].transpose(-1, -2)
 
-        scale = _det3x3(linear).abs().clamp(min=1e-6) ** (1.0 / 3.0)
-        sizes = anchor[..., _LN_L : _LN_H + 1] + scale.log()[:, None, None]
+            scale = _det3x3(linear).abs().clamp(min=1e-6) ** (1.0 / 3.0)
+            sizes = anchor[..., _LN_L : _LN_H + 1] + scale.log()[:, None, None]
 
-        return torch.cat([center, sizes, heading[..., 1:2], heading[..., 0:1], velocity], dim=-1)
+            return torch.cat(
+                [center, sizes, heading[..., 1:2], heading[..., 0:1], velocity], dim=-1
+            )
 
     def get(
         self,
@@ -390,6 +399,8 @@ class InstanceBank(nn.Module):
             valid, time_gap, torch.full_like(time_gap, self.default_time_interval)
         ).to(dtype=torch.float32)
 
+        # The poses hold global coordinates of kilometers, so the transform from the last frame
+        # to this one is solved in float64 and only that relative transform is cast down.
         transform = torch.linalg.solve(lidar2global, self._cached_pose).to(dtype=torch.float32)
         warped_anchor = self._project_anchor(self._cached_anchor, time_interval, transform)
 
