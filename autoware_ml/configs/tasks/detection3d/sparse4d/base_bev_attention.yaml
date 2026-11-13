@@ -25,3 +25,10 @@ model:
     # and the head lost its objects.
     cosine_attention: false
     attention_scale_max: 30.0
+    # Every cell of the neck map is layer normalized before the blocks project it. A few cells
+    # of the map reach norms hundreds of times the median, and unnormalized they took the
+    # softmax of the dot product and sent an exploding gradient to the backbone.
+    bev_norm: true
+    # A layer norm ends the MLP of the positional embedding. Unbounded, the embedding outgrew
+    # the features and saturated the scaled dot product, the cosine logits do not grow with it.
+    position_norm: true

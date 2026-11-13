@@ -528,6 +528,34 @@ def test_cosine_attention_needs_the_attention_head(tmp_path: Path) -> None:
         build_sparse4d_head(make_anchor_file(tmp_path), cosine_attention=True)
 
 
+def test_a_block_without_the_norm_projects_the_cells_as_they_come() -> None:
+    block = BEVCrossAttention(
+        embed_dims=EMBED_DIMS,
+        bev_channels=BEV_CHANNELS,
+        num_heads=4,
+        position_embedding=_embedding(),
+        bev_norm=False,
+    )
+    tokens = torch.randn(1, 16, BEV_CHANNELS)
+
+    assert block.bev_norm(tokens) is tokens
+    assert not any(name.startswith("bev_norm") for name, _ in block.named_parameters())
+
+
+def test_the_head_passes_the_norm_of_the_cells_to_its_blocks(tmp_path: Path) -> None:
+    head = build_sparse4d_head(
+        make_anchor_file(tmp_path),
+        lidar_sampling="bev_attention",
+        bev_cell_size=2.0,
+        bev_channels=BEV_CHANNELS,
+        bev_norm=False,
+    )
+
+    assert all(isinstance(block.bev_norm, torch.nn.Identity) for block in head.deformable)
+    with pytest.raises(ValueError, match="bev_norm"):
+        build_sparse4d_head(make_anchor_file(tmp_path), bev_norm=False)
+
+
 def test_the_block_needs_bev_maps_and_reads_no_context() -> None:
     block = _block(_embedding())
     instance_feature = torch.zeros(1, 2, EMBED_DIMS)

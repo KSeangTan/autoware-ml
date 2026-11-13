@@ -75,6 +75,7 @@ class CMTPositionEmbedding(nn.Module):
         point_cloud_range: Sequence[float],
         temperature: float = 10000.0,
         scale: float = 1.0,
+        norm: bool = True,
     ) -> None:
         """Initialize the shared embedding.
 
@@ -85,6 +86,8 @@ class CMTPositionEmbedding(nn.Module):
             temperature: Base of the wavelength progression of the sine and cosine embedding,
                 the slowest wave is about ``temperature`` times longer than the fastest.
             scale: Turns of the fastest wave over the range, 1 for the embedding of CMT.
+            norm: Whether a layer norm ends the MLP. Without it nothing bounds the norm of the
+                embedding, for an attention that bounds its logits itself, as the cosine does.
 
         Raises:
             ValueError: If the feature dimension is odd, or if the slowest wave repeats within
@@ -124,7 +127,7 @@ class CMTPositionEmbedding(nn.Module):
             nn.Linear(embed_dims * 2, embed_dims),
             nn.ReLU(inplace=True),
             nn.Linear(embed_dims, embed_dims),
-            nn.LayerNorm(embed_dims),
+            nn.LayerNorm(embed_dims) if norm else nn.Identity(),
         )
 
     def forward(self, position: torch.Tensor) -> torch.Tensor:
