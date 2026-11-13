@@ -163,6 +163,9 @@ model:
     lidar_sampling: bev
     bev_cell_size: ${bev_cell_size}
     bev_channels: 256
+    # One 3x3 convolution, batch normalization and ReLU refine the neck map before the decoder
+    # blocks read it, the shared block of the TransFusion head.
+    use_shared_block: false
     num_decoder: 6
     num_heads: 8
     num_groups: 8

@@ -1,0 +1,18 @@
+# @package _global_
+# The BEV attention of 6 decoders with the cosine logits, reading the neck map through the shared
+# block in place of the layer norm of every cell.
+defaults:
+  - base_bev_attention
+  - _self_
+
+model:
+  bbox_head:
+    num_decoder: 6
+    # The scale of one head sat on the maximum of 30 while the others stayed near 10
+    cosine_attention: true
+    attention_scale_max: 50.0
+    # The 3x3 convolution mixes the two stages the neck concatenates once for all decoders, and
+    # the blocks project its map as it comes. The cosine bounds the logits of an outlier cell,
+    # its value is not bounded.
+    use_shared_block: true
+    bev_norm: false

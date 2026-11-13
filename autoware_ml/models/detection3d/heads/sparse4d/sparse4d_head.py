@@ -1080,6 +1080,8 @@ class BEVCrossAttention(nn.Module):
     bounds each channel over the whole map but not a single cell, and a few cells reach norms
     hundreds of times the median. Unnormalized, such a cell takes the whole softmax over the map,
     drowns the position term of its key and sends an exploding gradient back to the backbone.
+    Without ``bev_norm`` the block projects the cells as they come, for a map that something
+    before the block already bounds per cell.
 
     With ``local_radius`` a query attends only to the cells whose centers lie within that
     distance of its anchor center. Nothing but the learned embedding keeps the attention over
@@ -1109,6 +1111,7 @@ class BEVCrossAttention(nn.Module):
         attn_drop: float = 0.0,
         local_radius: float | None = None,
         logit_scale_max: float | None = None,
+        bev_norm: bool = True,
     ) -> None:
         """Initialize the cross attention block.
 
@@ -1124,6 +1127,7 @@ class BEVCrossAttention(nn.Module):
                 :meth:`set_local_radius`. None attends to every cell and fixes that.
             logit_scale_max: Maximum of the learned scale of the cosine attention, one scale
                 per head. None keeps the scaled dot product.
+            bev_norm: Whether every cell token is layer normalized before the projection.
 
         Raises:
             ValueError: If the feature dimension does not split into the heads, or if the
@@ -1143,7 +1147,7 @@ class BEVCrossAttention(nn.Module):
         self.num_heads = num_heads
         self.attn_drop = attn_drop
         self.position_embedding = position_embedding
-        self.bev_norm = nn.LayerNorm(bev_channels)
+        self.bev_norm = nn.LayerNorm(bev_channels) if bev_norm else nn.Identity()
         self.input_proj = nn.Linear(bev_channels, embed_dims)
         self.q_proj = nn.Linear(embed_dims, embed_dims)
         self.k_proj = nn.Linear(embed_dims, embed_dims)
@@ -1263,10 +1267,14 @@ class BEVCrossAttention(nn.Module):
                 1, -1, 1, 1
             )
             head_key = F.normalize(head_key, dim=-1)
+        head_value = split_heads(self.v_proj(value))
+        # Under autocast the normalization and the float32 scale return float32 while the
+        # projections return float16. The attention takes one dtype, and the flash kernel only
+        # a half precision one, so the query and the key follow the value.
         attended = F.scaled_dot_product_attention(
-            head_query,
-            head_key,
-            split_heads(self.v_proj(value)),
+            head_query.to(head_value.dtype),
+            head_key.to(head_value.dtype),
+            head_value,
             attn_mask=None if mask is None else mask[:, None],
             dropout_p=self.attn_drop if self.training else 0.0,
         )
@@ -1326,11 +1334,18 @@ class DecoupledInstanceAttention(nn.Module):
         else:
             key_tokens = torch.cat([key_feature, key_embed], dim=-1)
             value = self.fc_value(key_feature)
+        # Without the averaged weights the attention runs on the fused scaled dot product
+        # kernels, flash attention for half precision inputs without a mask.
         if attn_mask is None and key_padding_mask is None:
-            attended = self.attn(tokens, key_tokens, value)[0]
+            attended = self.attn(tokens, key_tokens, value, need_weights=False)[0]
         else:
             attended = self.attn(
-                tokens, key_tokens, value, attn_mask=attn_mask, key_padding_mask=key_padding_mask
+                tokens,
+                key_tokens,
+                value,
+                attn_mask=attn_mask,
+                key_padding_mask=key_padding_mask,
+                need_weights=False,
             )[0]
         return self.fc_out(tokens + self.dropout(attended))
 
@@ -1669,6 +1684,7 @@ class SparseQueryHead(nn.Module):
         sample_sparse: bool = True,
         aggregation: Callable[..., SparseDeformableAggregation] = SparseDeformableAggregation,
         bev_attention: Callable[[], BEVCrossAttention] | None = None,
+        bev_shared_block: nn.Module | None = None,
     ) -> None:
         """Create the decoder blocks.
 
@@ -1698,9 +1714,12 @@ class SparseQueryHead(nn.Module):
                 arguments.
             bev_attention: Builds the BEV cross attention of one block, which then takes the
                 place of its deformable aggregation. None for the aggregation.
+            bev_shared_block: Refines the BEV map the head gets as its lidar features once per
+                frame, before the blocks read it. None reads the map as it is.
         """
         self.num_decoder = num_decoder
         self.bev = bev
+        self.shared_block = bev_shared_block
         self.bev_cell_size = None if bev_cell_size is None else float(bev_cell_size)
         self.bev_grid_origin = (float(point_cloud_range[0]), float(point_cloud_range[1]))
         self.sample_sparse = sample_sparse
@@ -1801,7 +1820,8 @@ class SparseQueryHead(nn.Module):
         """Build the BEV levels of the frame once, none for a head without them.
 
         The levels come from the ``bev`` module over the stages, or the lidar features are one
-        BEV map placed on the voxel grid with ``bev_cell_size``.
+        BEV map placed on the voxel grid with ``bev_cell_size``. The shared block of the head
+        refines that map first, so every decoder block reads the same refined map.
 
         Raises:
             ValueError: If a head placing a BEV map gets the sparse stages.
@@ -1812,6 +1832,8 @@ class SparseQueryHead(nn.Module):
             return []
         if not isinstance(lidar_features, torch.Tensor):
             raise ValueError("A head sampling a BEV map needs the map as its lidar features.")
+        if self.shared_block is not None:
+            lidar_features = self.shared_block(lidar_features)
         return [BEVLevel(lidar_features, self.bev_grid_origin, self.bev_cell_size)]
 
     @staticmethod
@@ -2141,12 +2163,16 @@ class Sparse4DHead(SparseQueryHead):
         bev: nn.Module | None = None,
         bev_cell_size: float | None = None,
         bev_channels: int = 0,
+        use_shared_block: bool = False,
+        norm_eps: float = 1e-3,
+        norm_momentum: float = 0.01,
         position_temperature: float = 10000.0,
         position_scale: float = 1.0,
         local_attention: bool = False,
         local_attention_radii: Sequence[Sequence[float | None]] = ((0, 30.0),),
         cosine_attention: bool = False,
         attention_scale_max: float = 30.0,
+        bev_norm: bool = True,
         aggregation: Callable[..., SparseDeformableAggregation] = SparseDeformableAggregation,
         yaw_free_classes: Sequence[str] = (),
         yaw_reversible_classes: Sequence[str] = (),
@@ -2218,6 +2244,11 @@ class Sparse4DHead(SparseQueryHead):
             bev_cell_size: Metric cell size of the BEV map the head gets as its lidar features
                 in place of the stages, placed on the grid of ``point_cloud_range``.
             bev_channels: Feature dimension of the BEV maps.
+            use_shared_block: Refine the BEV map of ``bev_cell_size`` with one 3x3 convolution,
+                batch normalization and ReLU before the decoder blocks read it, the shared
+                block of the TransFusion head. It keeps the ``bev_channels`` of the map.
+            norm_eps: Epsilon of the batch normalization of the shared block.
+            norm_momentum: Momentum of the batch normalization of the shared block.
             position_temperature: Base of the wavelength progression of the positional
                 embedding of ``bev_attention``.
             position_scale: Turns of the fastest wave of that embedding over the point cloud
@@ -2233,6 +2264,8 @@ class Sparse4DHead(SparseQueryHead):
                 scaled dot product. The loss reports the scales.
             attention_scale_max: Maximum of that scale, the logits of a query spread by at most
                 twice of it.
+            bev_norm: Whether the blocks of ``bev_attention`` layer normalize every cell of the
+                BEV maps before they project it.
             aggregation: Builds the deformable aggregation of one decoder block from its keyword
                 arguments.
             yaw_free_classes: Classes without a heading, such as traffic cones, whose yaw
@@ -2261,11 +2294,21 @@ class Sparse4DHead(SparseQueryHead):
                 f"cosine_attention bounds the logits of bev_attention, got lidar_sampling "
                 f"{lidar_sampling}."
             )
+        if not bev_norm and lidar_sampling != "bev_attention":
+            raise ValueError(
+                f"bev_norm normalizes the cells of bev_attention, got lidar_sampling "
+                f"{lidar_sampling}."
+            )
         num_bev_sources = int(bev is not None) + int(bev_cell_size is not None)
         if num_bev_sources != int(lidar_sampling != "sparse"):
             raise ValueError(
                 f"lidar_sampling {lidar_sampling} samples BEV maps with exactly one of bev and "
                 "bev_cell_size, and none without."
+            )
+        if use_shared_block and bev_cell_size is None:
+            raise ValueError(
+                "use_shared_block refines the BEV map of bev_cell_size, a head without that map "
+                "has none to refine."
             )
         if len(reg_weights) != ANCHOR_DIM or len(match_reg_weights) != ANCHOR_DIM:
             raise ValueError(
@@ -2412,7 +2455,15 @@ class Sparse4DHead(SparseQueryHead):
                 # A block that follows the epochs holds its radius, infinite for every cell
                 local_radius=None if self.local_attention_radii is None else math.inf,
                 logit_scale_max=attention_scale_max if cosine_attention else None,
+                bev_norm=bev_norm,
             ),
+            bev_shared_block=nn.Sequential(
+                nn.Conv2d(bev_channels, bev_channels, kernel_size=3, padding=1, bias=False),
+                nn.BatchNorm2d(bev_channels, eps=norm_eps, momentum=norm_momentum),
+                nn.ReLU(inplace=True),
+            )
+            if use_shared_block
+            else None,
         )
         self.loss_cls = SigmoidFocalLoss()
         self.loss_yns = GaussianFocalLoss()

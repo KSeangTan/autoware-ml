@@ -85,6 +85,7 @@ class ExportableMultiheadAttention(nn.Module):
         value: Float32[torch.Tensor, "B H*W channels"],
         attn_mask: torch.Tensor | None = None,
         key_padding_mask: torch.Tensor | None = None,
+        need_weights: bool = False,
     ) -> tuple[torch.Tensor, None]:
         """
         Run explicit scaled dot-product attention with a PyTorch-compatible return.
@@ -101,6 +102,8 @@ class ExportableMultiheadAttention(nn.Module):
             value: Value tokens.
             attn_mask: Optional boolean mask ``(L, S)``, True blocks a query from a key.
             key_padding_mask: Optional boolean mask ``(B, S)``, True hides a key from its row.
+            need_weights: Taken for the call of ``nn.MultiheadAttention``, the module never
+                returns the attention weights.
         """
         q = self._project(self.q_proj, query)
         k = self._project(self.k_proj, key)

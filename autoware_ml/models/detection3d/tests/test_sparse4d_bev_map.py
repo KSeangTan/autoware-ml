@@ -60,3 +60,34 @@ def test_a_map_placing_head_refuses_the_sparse_stages(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="BEV map"):
         head.bev_levels([stage])
+
+
+def test_the_shared_block_refines_the_map_once_for_every_block(tmp_path: Path) -> None:
+    head = build_sparse4d_head(
+        make_anchor_file(tmp_path),
+        lidar_sampling="bev",
+        bev_cell_size=2.0,
+        bev_channels=32,
+        use_shared_block=True,
+    ).eval()
+    bev_map = torch.randn(2, 32, 4, 4)
+
+    levels = head.bev_levels(bev_map)
+
+    assert len(levels) == 1
+    assert levels[0].feat.shape == bev_map.shape
+    assert torch.equal(levels[0].feat, head.shared_block(bev_map))
+    assert not torch.equal(levels[0].feat, bev_map)
+
+
+def test_a_head_reads_the_map_as_it_is_without_the_shared_block(tmp_path: Path) -> None:
+    head = build_sparse4d_head(
+        make_anchor_file(tmp_path), lidar_sampling="bev", bev_cell_size=2.0, bev_channels=32
+    )
+
+    assert head.shared_block is None
+
+
+def test_the_shared_block_needs_the_map_of_bev_cell_size(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="use_shared_block"):
+        build_sparse4d_head(make_anchor_file(tmp_path), use_shared_block=True)
