@@ -1,0 +1,39 @@
+# @package _global_
+# Camera branch of Sparse4D next to its lidar branch. The image backbone and neck keep one map
+# per stride, and every decoder block of the head has an image block after its lidar block: it
+# projects keypoints of its own into every camera and samples every stride there, the
+# deformable aggregation of Sparse4D.
+#
+# The lidar and the image features stay apart. The lidar branch gives the head its BEV map,
+# read as `model.bbox_head.lidar_sampling` says (`bev` for the deformable aggregation,
+# `bev_attention` for the dense attention), and the camera branch gives it the image pyramid,
+# read by `model.bbox_head.image_strides`. Neither setting changes the blocks of the other.
+# A camera only detector sets `model.lidar_network: null` and `lidar_sampling: none`.
+#
+# The datamodule of the experiment has to load the camera images with their calibration, the
+# lidar configs of this directory load none.
+
+# Strides of the neck maps against the images, from the finest
+image_strides: [4, 8, 16, 32]
+image_channels: 256
+
+model:
+  camera_network:
+    _target_: autoware_ml.models.detection3d.main_modules.sparse4ds.sparse4d_camera.Sparse4DCamera
+    img_backbone:
+      _target_: autoware_ml.models.common.backbones.resnet.ResNet50MultiScale
+      in_channels: 3
+      out_indices: [0, 1, 2, 3]
+      weights: IMAGENET1K_V1
+    img_neck:
+      _target_: autoware_ml.models.common.necks.fpn.FPN
+      in_channels: [256, 512, 1024, 2048]
+      out_channels: ${image_channels}
+      num_outs: 4
+    feature_strides: ${image_strides}
+
+  bbox_head:
+    image_strides: ${image_strides}
+    image_channels: ${image_channels}
+    # The sampling weights of a camera read an embedding of its projection
+    image_camera_embed: true

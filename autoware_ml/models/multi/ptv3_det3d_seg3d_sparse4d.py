@@ -36,14 +36,18 @@ from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
+from autoware_ml.models.detection3d.heads.sparse4d.lidar_aggregation import (
+    SparseStage,
+)
 from autoware_ml.models.detection3d.heads.sparse4d.sparse4d_head import (
+    Sparse4DHead,
+    Sparse4DTargets,
+)
+from autoware_ml.models.detection3d.heads.sparse4d.sparse_query_head import (
     TEMPORAL_QUERY_INDEX_OUTPUT_NAME,
     TEMPORAL_STATE_INPUT_NAMES,
     TEMPORAL_STATE_OUTPUT_NAMES,
-    Sparse4DHead,
-    Sparse4DTargets,
     SparseQueryHead,
-    SparseStage,
 )
 from autoware_ml.models.detection3d.ptv3 import (
     PTv3Det3DFeaturePyramid,

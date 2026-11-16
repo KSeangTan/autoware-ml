@@ -18,10 +18,9 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Sequence
-from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 import numpy as np
 import torch
@@ -41,9 +40,15 @@ from autoware_ml.losses.detection3d.gaussian_focal import GaussianFocalLoss
 from autoware_ml.models.detection3d.heads.sparse4d.cmt_position_embedding import (
     CMTPositionEmbedding,
 )
-from autoware_ml.models.detection3d.heads.transfusions.exportable_multi_head_attention import (
-    ExportableMultiheadAttention,
+from autoware_ml.models.detection3d.heads.sparse4d.image_aggregation import (
+    ImageDeformableAggregation,
 )
+from autoware_ml.models.detection3d.heads.sparse4d.lidar_aggregation import (
+    BEVDeformableAggregation,
+    LidarFeatures,
+    SparseDeformableAggregation,
+)
+from autoware_ml.models.detection3d.heads.sparse4d.sparse_query_head import SparseQueryHead
 from autoware_ml.models.detection3d.task_modules.nms_groups import (
     NMSGroupConfig,
     filter_nms_groups,
@@ -51,36 +56,16 @@ from autoware_ml.models.detection3d.task_modules.nms_groups import (
 )
 from autoware_ml.ops.deformable_aggregation.bev_deformable_aggregation import (
     BEVLevel,
-    bev_deformable_aggregation,
 )
+from autoware_ml.ops.deformable_aggregation.image_deformable_aggregation import ImageFeatures
 from autoware_ml.ops.deformable_aggregation.sparse_deformable_aggregation import (
-    EMPTY_ROW,
     SparseLevel,
-    sparse_deformable_aggregation,
 )
-from autoware_ml.utils.point_cloud.batching import offset_to_batch
 
 ANCHOR_DIM = 10
 _X, _Y, _Z, _LN_L, _LN_W, _LN_H, _SIN_YAW, _COS_YAW, _VX, _VY = range(ANCHOR_DIM)
 # Columns of the quality estimate
 _CNS, _YNS = range(2)
-
-# Instance bank state at the temporal export graph boundary
-TEMPORAL_STATE_INPUT_NAMES = (
-    "temp_instance_feature",
-    "temp_anchor",
-    "temp_confidence",
-    "temp_valid",
-    "time_interval",
-    "prev2current",
-)
-TEMPORAL_STATE_OUTPUT_NAMES = (
-    "temp_instance_feature_out",
-    "temp_anchor_out",
-    "temp_confidence_out",
-)
-# Query every state slot was selected from, the runtime carries its track ids into the slots
-TEMPORAL_QUERY_INDEX_OUTPUT_NAME = "temp_query_index_out"
 
 
 def _det3x3(matrix: torch.Tensor) -> torch.Tensor:
@@ -753,16 +738,6 @@ class SparseBox3DEncoder(nn.Module):
         return self.output_fc(pos_feat + size_feat + yaw_feat + vel_feat)
 
 
-class KeyPointsGenerator(Protocol):
-    """What the deformable aggregation needs from a keypoint generator."""
-
-    num_pts: int
-
-    def __call__(self, anchor: torch.Tensor, instance_feature: torch.Tensor) -> torch.Tensor:
-        """Keypoints ``(B, N, num_pts, 3)`` of anchors ``(B, N, D)``."""
-        ...
-
-
 class SparseBox3DKeyPointsGenerator(nn.Module):
     """Generate 3D keypoints from anchors in the shared metric frame."""
 
@@ -814,268 +789,6 @@ class SparseBox3DKeyPointsGenerator(nn.Module):
         rotation[..., 2, 2] = 1.0
         key_points = torch.matmul(rotation[:, :, None], key_points[..., None]).squeeze(-1)
         return key_points + anchor[..., None, _X : _Z + 1]
-
-
-# Features, voxel coordinates and batch offsets of one sparse encoder stage
-SparseStage = tuple[torch.Tensor, torch.Tensor, torch.Tensor]
-# The lidar features a head samples: the sparse stages, or the dense BEV map of a BEV only head
-LidarFeatures = Sequence[SparseStage] | torch.Tensor
-# Below this occupied weight the aggregated features fade to zero instead of amplifying a sliver
-MIN_OCCUPANCY = 0.05
-
-
-class SparseLevelGrid(nn.Module):
-    """Dense voxel grid of one sparse encoder stage, it builds the lookup of the stage voxels."""
-
-    def __init__(self, point_cloud_range: Sequence[float], grid_size: float, feature_stride: int):
-        """Initialize the stage grid.
-
-        Args:
-            point_cloud_range: Metric range of the voxel grid.
-            grid_size: Metric size of the input voxel grid.
-            feature_stride: Total pooling stride of the stage.
-
-        Raises:
-            ValueError: If the range or the stride is invalid.
-        """
-        super().__init__()
-        if feature_stride < 1:
-            raise ValueError(f"feature_stride must be positive, got {feature_stride}.")
-        pc_range = [float(value) for value in point_cloud_range]
-        if len(pc_range) != 6:
-            raise ValueError(f"point_cloud_range must have 6 values, got {pc_range}.")
-        base_cells = [round((pc_range[axis + 3] - pc_range[axis]) / grid_size) for axis in range(3)]
-        self.grid_dims = tuple(math.ceil(cells / feature_stride) for cells in base_cells)
-        self.num_cells = self.grid_dims[0] * self.grid_dims[1] * self.grid_dims[2]
-        self.voxel_size = grid_size * feature_stride
-        self.grid_origin = (pc_range[0], pc_range[1], pc_range[2])
-
-    def forward(
-        self, feat: torch.Tensor, grid_coord: torch.Tensor, offset: torch.Tensor
-    ) -> SparseLevel:
-        """Look up the stage voxels in the dense grid of every sample.
-
-        Args:
-            feat: Stage features ``(V, C)``.
-            grid_coord: Stage voxel coordinates ``(V, 3)`` as ``(x, y, z)``.
-            offset: Cumulative voxel offsets of the samples ``(B,)``.
-
-        Returns:
-            The stage with its voxel lookup.
-        """
-        size_x, size_y, size_z = self.grid_dims
-        batch_index = offset_to_batch(offset, grid_coord)
-        flat_cells = (
-            (batch_index * size_z + grid_coord[:, 2].long()) * size_y + grid_coord[:, 1].long()
-        ) * size_x + grid_coord[:, 0].long()
-        index_grid = torch.full(
-            (offset.shape[0] * self.num_cells,),
-            EMPTY_ROW,
-            dtype=torch.long,
-            device=feat.device,
-        )
-        index_grid[flat_cells] = torch.arange(1, feat.shape[0] + 1, device=feat.device)
-        padded = torch.cat([feat.new_zeros((1, feat.shape[1])), feat])
-        return SparseLevel(padded, index_grid, self.grid_dims, self.grid_origin, self.voxel_size)
-
-
-class SparseDeformableAggregation(nn.Module):
-    """Sample sparse voxel features at anchor keypoints with learned weights.
-
-    Keypoints interpolate trilinearly over every sampled stage, the weights normalize over the
-    stages and the keypoints of every feature group. Keypoints in empty space read zeros, so the
-    weighted sum is divided by the weight that landed on occupied voxels. A BEV branch samples
-    dense BEV maps at the same keypoints and adds to the voxel features, or replaces them. A
-    subclass joins the features of its frame context, see :meth:`join_context`.
-    """
-
-    def __init__(
-        self,
-        *,
-        embed_dims: int,
-        num_groups: int,
-        num_levels: int,
-        kps_generator: KeyPointsGenerator,
-        proj_drop: float = 0.0,
-        attn_drop: float = 0.0,
-        bev_aggregation: BEVDeformableAggregation | None = None,
-        sample_sparse: bool = True,
-    ) -> None:
-        """Initialize the sparse deformable aggregation branch.
-
-        Args:
-            embed_dims: Instance and voxel feature dimension.
-            num_groups: Number of feature groups sharing one weight.
-            num_levels: Number of sampled encoder stages.
-            kps_generator: Shared keypoint generator.
-            proj_drop: Dropout on the output projection.
-            attn_drop: Probability of dropping whole keypoints in training.
-            bev_aggregation: BEV map sampling at the same keypoints, None without BEV maps.
-            sample_sparse: Whether the block samples the sparse voxels.
-
-        Raises:
-            ValueError: If the block samples no lidar features.
-        """
-        super().__init__()
-        if embed_dims % num_groups != 0:
-            raise ValueError(f"embed_dims {embed_dims} not divisible by num_groups {num_groups}.")
-        if not sample_sparse and bev_aggregation is None:
-            raise ValueError("The block samples the sparse voxels, BEV maps or both.")
-        self.embed_dims = embed_dims
-        self.num_groups = num_groups
-        self.num_levels = num_levels
-        self.kps_generator = kps_generator
-        self.num_pts = kps_generator.num_pts
-        self.attn_drop = attn_drop
-        self.sample_sparse = sample_sparse
-        # A BEV only block has no voxel weights, every parameter must train under DDP
-        self.weights_fc = (
-            nn.Linear(embed_dims, num_groups * num_levels * self.num_pts) if sample_sparse else None
-        )
-        self.output_proj = nn.Linear(embed_dims, embed_dims) if sample_sparse else None
-        self.proj_drop = nn.Dropout(proj_drop)
-        self.bev_aggregation = bev_aggregation
-        if self.weights_fc is not None:
-            nn.init.zeros_(self.weights_fc.weight)
-            nn.init.zeros_(self.weights_fc.bias)
-
-    def forward(
-        self,
-        instance_feature: torch.Tensor,
-        anchor: torch.Tensor,
-        anchor_embed: torch.Tensor,
-        levels: Sequence[SparseLevel],
-        bev_levels: Sequence[BEVLevel] = (),
-        context: Any = None,
-    ) -> torch.Tensor:
-        """Aggregate sparse voxel features into the instance features.
-
-        Args:
-            instance_feature: Instance features ``(B, N, C)``.
-            anchor: Anchor states ``(B, N, 10)``.
-            anchor_embed: Anchor embeddings ``(B, N, C)``.
-            levels: Sampled encoder stages with their voxel lookup.
-            bev_levels: Dense BEV maps of the BEV branch.
-            context: Frame context of a subclass block, None for the lidar block.
-
-        Returns:
-            Updated instance features ``(B, N, C)``.
-        """
-        key_points = self.kps_generator(anchor, instance_feature)
-        query = instance_feature + anchor_embed
-        bev = (
-            None
-            if self.bev_aggregation is None
-            else self.bev_aggregation(query, key_points, bev_levels)
-        )
-        if self.sample_sparse:
-            weights = keypoint_dropout(
-                _group_softmax(self.weights_fc(query), self.num_levels * self.num_pts),
-                self.attn_drop,
-                self.training,
-            )
-            features = sparse_deformable_aggregation(key_points, weights, levels, MIN_OCCUPANCY)
-            output = self.output_proj(features) if bev is None else self.output_proj(features) + bev
-        else:
-            output = bev
-        output = self.join_context(output, query, key_points, context)
-        return instance_feature + self.proj_drop(output)
-
-    def join_context(
-        self, output: torch.Tensor, query: torch.Tensor, key_points: torch.Tensor, context: Any
-    ) -> torch.Tensor:
-        """Join the features of the frame context to the lidar features ``(B, N, C)``.
-
-        Args:
-            output: Lidar features of every instance ``(B, N, C)``.
-            query: Instance features with the anchor embedding ``(B, N, C)``.
-            key_points: Metric keypoints ``(B, N, P, 3)``.
-            context: Frame context of the block.
-
-        Returns:
-            The lidar features, the lidar block reads no context.
-
-        Raises:
-            ValueError: If the lidar block gets a context.
-        """
-        if context is not None:
-            raise ValueError("The lidar aggregation block reads no frame context.")
-        return output
-
-
-def _group_softmax(logits: torch.Tensor, num_samples: int) -> torch.Tensor:
-    """Softmax over the samples of every feature group, ``(B, N, S * G)`` to ``(B, N, S, G)``."""
-    batch_size, num_anchor = logits.shape[:2]
-    return logits.reshape(batch_size, num_anchor, num_samples, -1).softmax(dim=-2)
-
-
-def keypoint_dropout(weights: torch.Tensor, drop: float, training: bool) -> torch.Tensor:
-    """Drop whole samples of the aggregation weights in training and rescale the rest."""
-    if not training or drop == 0.0:
-        return weights
-    mask = torch.rand_like(weights[..., :1]) > drop
-    return weights * mask / (1.0 - drop)
-
-
-class BEVDeformableAggregation(nn.Module):
-    """Sample dense BEV maps at the keypoints' (x, y) with learned weights per level and point."""
-
-    def __init__(
-        self,
-        *,
-        embed_dims: int,
-        bev_channels: int,
-        num_groups: int,
-        num_levels: int,
-        num_points: int,
-        attn_drop: float = 0.0,
-    ) -> None:
-        """Initialize the BEV branch.
-
-        Args:
-            embed_dims: Instance feature dimension.
-            bev_channels: Feature dimension of the BEV maps.
-            num_groups: Number of feature groups sharing one weight.
-            num_levels: Number of sampled BEV levels.
-            num_points: Keypoints per instance.
-            attn_drop: Probability of dropping whole samples in training.
-
-        Raises:
-            ValueError: If the BEV channels do not split into the groups.
-        """
-        super().__init__()
-        if bev_channels % num_groups != 0:
-            raise ValueError(f"bev_channels {bev_channels} not divisible by {num_groups} groups.")
-        self.num_levels = num_levels
-        self.num_samples = num_levels * num_points
-        self.attn_drop = attn_drop
-        self.weights_fc = nn.Linear(embed_dims, num_groups * self.num_samples)
-        self.output_proj = nn.Linear(bev_channels, embed_dims)
-        nn.init.zeros_(self.weights_fc.weight)
-        nn.init.zeros_(self.weights_fc.bias)
-
-    def forward(
-        self, query: torch.Tensor, key_points: torch.Tensor, levels: Sequence[BEVLevel]
-    ) -> torch.Tensor:
-        """Aggregate the BEV samples of the keypoints into instance features.
-
-        Args:
-            query: Instance features with the anchor embedding ``(B, N, C)``.
-            key_points: Metric keypoints ``(B, N, P, 3)``.
-            levels: BEV levels, finest first.
-
-        Returns:
-            BEV features of the instances ``(B, N, C)``.
-
-        Raises:
-            ValueError: If the number of levels does not match the branch.
-        """
-        if len(levels) != self.num_levels:
-            raise ValueError(f"The BEV branch samples {self.num_levels} levels, got {len(levels)}.")
-        weights = keypoint_dropout(
-            _group_softmax(self.weights_fc(query), self.num_samples), self.attn_drop, self.training
-        )
-        return self.output_proj(bev_deformable_aggregation(key_points, weights, levels))
 
 
 class BEVCrossAttention(nn.Module):
@@ -1290,75 +1003,6 @@ class BEVCrossAttention(nn.Module):
             dropout_p=self.attn_drop if self.training else 0.0,
         )
         return self.out_proj(attended.transpose(1, 2).reshape(batch_size, -1, self.embed_dims))
-
-
-class DecoupledInstanceAttention(nn.Module):
-    """Instance attention with decoupled (concatenated) anchor embeddings.
-
-    With key inputs it reads the temporal memory.
-    """
-
-    def __init__(self, embed_dims: int, num_heads: int, dropout: float) -> None:
-        """Initialize the decoupled attention block.
-
-        Args:
-            embed_dims: Instance feature dimension.
-            num_heads: Number of attention heads.
-            dropout: Attention and residual dropout probability.
-        """
-        super().__init__()
-        self.attn = nn.MultiheadAttention(
-            embed_dims * 2, num_heads, dropout=dropout, batch_first=True
-        )
-        self.fc_value = nn.Linear(embed_dims, embed_dims * 2, bias=False)
-        self.fc_out = nn.Linear(embed_dims * 2, embed_dims, bias=False)
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(
-        self,
-        instance_feature: torch.Tensor,
-        anchor_embed: torch.Tensor,
-        key_feature: torch.Tensor | None = None,
-        key_embed: torch.Tensor | None = None,
-        attn_mask: torch.Tensor | None = None,
-        key_padding_mask: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Attend with anchor position aware queries and keys.
-
-        Args:
-            instance_feature: Query instance features ``(B, N, C)``.
-            anchor_embed: Query anchor embeddings ``(B, N, C)``.
-            key_feature: Optional key and value instance features ``(B, K, C)``.
-            key_embed: Optional key anchor embeddings ``(B, K, C)``.
-            attn_mask: Optional boolean mask ``(N, K)`` where ``True`` blocks
-                attention, the denoising isolation mask of training steps.
-            key_padding_mask: Optional boolean mask ``(B, K)`` where ``True`` hides a key from
-                every query of its row.
-
-        Returns:
-            Updated instance features ``(B, N, C)``.
-        """
-        tokens = torch.cat([instance_feature, anchor_embed], dim=-1)
-        if key_feature is None:
-            key_tokens = tokens
-            value = self.fc_value(instance_feature)
-        else:
-            key_tokens = torch.cat([key_feature, key_embed], dim=-1)
-            value = self.fc_value(key_feature)
-        # Without the averaged weights the attention runs on the fused scaled dot product
-        # kernels, flash attention for half precision inputs without a mask.
-        if attn_mask is None and key_padding_mask is None:
-            attended = self.attn(tokens, key_tokens, value, need_weights=False)[0]
-        else:
-            attended = self.attn(
-                tokens,
-                key_tokens,
-                value,
-                attn_mask=attn_mask,
-                key_padding_mask=key_padding_mask,
-                need_weights=False,
-            )[0]
-        return self.fc_out(tokens + self.dropout(attended))
 
 
 class SparseBox3DRefinementModule(nn.Module):
@@ -1643,459 +1287,6 @@ def build_denoising_queries(
     )
 
 
-@dataclass
-class _DecoderOutputs:
-    """Per layer outputs of the decoder and its final state.
-
-    Attributes:
-        classification: Class logits of every layer ``(B, N + D, num_classes)``.
-        prediction: Anchor states of every layer ``(B, N + D, 10)``.
-        quality: Quality logits of every layer ``(B, N + D, 2)``.
-        instance_feature: Final instance features of the regular queries ``(B, N, C)``.
-        anchor: Final anchors of the regular queries ``(B, N, 10)``.
-        cls_logits: Final class logits of the regular queries ``(B, N, num_classes)``.
-    """
-
-    classification: list[torch.Tensor]
-    prediction: list[torch.Tensor]
-    quality: list[torch.Tensor]
-    instance_feature: torch.Tensor
-    anchor: torch.Tensor
-    cls_logits: torch.Tensor
-
-
-class SparseQueryHead(nn.Module):
-    """Decoder of instance queries over sparse encoder stages, as in Sparse4D.
-
-    Every block attends to the temporal memory and to the other queries, samples the stages at
-    keypoints of its anchors, runs an FFN and refines the anchors. A subclass sets the anchor
-    encoding, the keypoints and the refinement of its anchor kind.
-    """
-
-    def _build_decoder(
-        self,
-        *,
-        embed_dims: int,
-        num_decoder: int,
-        num_heads: int,
-        num_groups: int,
-        feedforward_channels: int,
-        dropout: float,
-        attn_drop: float,
-        temporal: bool,
-        point_cloud_range: Sequence[float],
-        grid_size: float,
-        feature_strides: Sequence[int],
-        anchor_encoder: nn.Module,
-        kps_generator: Callable[[], KeyPointsGenerator],
-        refine: Callable[[], nn.Module],
-        bev: nn.Module | None = None,
-        bev_cell_size: float | None = None,
-        bev_aggregation: Callable[[], BEVDeformableAggregation | None] = lambda: None,
-        sample_sparse: bool = True,
-        aggregation: Callable[..., SparseDeformableAggregation] = SparseDeformableAggregation,
-        bev_attention: Callable[[], BEVCrossAttention] | None = None,
-        bev_shared_block: nn.Module | None = None,
-    ) -> None:
-        """Create the decoder blocks.
-
-        Args:
-            embed_dims: Instance feature dimension.
-            num_decoder: Number of decoder blocks.
-            num_heads: Attention heads of the instance attention.
-            num_groups: Feature groups of the deformable aggregation.
-            feedforward_channels: Hidden width of the FFN blocks.
-            dropout: Dropout probability in the attention and FFN blocks.
-            attn_drop: Keypoint dropout of the aggregation, or the attention dropout of the BEV
-                attention, in training.
-            temporal: Whether the blocks attend to a temporal memory.
-            point_cloud_range: Metric range of the voxel grid.
-            grid_size: Metric size of the input voxel grid.
-            feature_strides: Total pooling strides of the sampled stages.
-            anchor_encoder: Embedding of the anchors.
-            kps_generator: Builds the keypoint generator of one block.
-            refine: Builds the refinement of one block.
-            bev: Builds the BEV levels of a frame from the stages, None without one.
-            bev_cell_size: Metric cell size of the BEV map the head gets as its lidar features,
-                which it places on the grid of ``point_cloud_range`` as its one BEV level. None
-                without one.
-            bev_aggregation: Builds the BEV sampling of one block, None without BEV maps.
-            sample_sparse: Whether the blocks sample the sparse voxels.
-            aggregation: Builds the deformable aggregation of one block from its keyword
-                arguments.
-            bev_attention: Builds the BEV cross attention of one block, which then takes the
-                place of its deformable aggregation. None for the aggregation.
-            bev_shared_block: Refines the BEV map the head gets as its lidar features once per
-                frame, before the blocks read it. None reads the map as it is.
-        """
-        self.num_decoder = num_decoder
-        self.bev = bev
-        self.shared_block = bev_shared_block
-        self.bev_cell_size = None if bev_cell_size is None else float(bev_cell_size)
-        self.bev_grid_origin = (float(point_cloud_range[0]), float(point_cloud_range[1]))
-        self.sample_sparse = sample_sparse
-        self.anchor_encoder = anchor_encoder
-        self.gnn = nn.ModuleList(
-            [
-                DecoupledInstanceAttention(embed_dims, num_heads, dropout)
-                for _ in range(num_decoder - 1)
-            ]
-        )
-        self.gnn_norm = nn.ModuleList([nn.LayerNorm(embed_dims) for _ in range(num_decoder - 1)])
-        if temporal:
-            self.temp_gnn = nn.ModuleList(
-                [
-                    DecoupledInstanceAttention(embed_dims, num_heads, dropout)
-                    for _ in range(num_decoder - 1)
-                ]
-            )
-            self.temp_gnn_norm = nn.ModuleList(
-                [nn.LayerNorm(embed_dims) for _ in range(num_decoder - 1)]
-            )
-        self.level_grids = nn.ModuleList(
-            [SparseLevelGrid(point_cloud_range, grid_size, stride) for stride in feature_strides]
-        )
-        # The lidar block of every decoder, the deformable aggregation or the BEV attention
-        self.deformable = nn.ModuleList(
-            [
-                aggregation(
-                    embed_dims=embed_dims,
-                    num_groups=num_groups,
-                    num_levels=len(feature_strides),
-                    kps_generator=kps_generator(),
-                    proj_drop=dropout,
-                    attn_drop=attn_drop,
-                    bev_aggregation=bev_aggregation(),
-                    sample_sparse=sample_sparse,
-                )
-                if bev_attention is None
-                else bev_attention()
-                for _ in range(num_decoder)
-            ]
-        )
-        self.deformable_norm = nn.ModuleList([nn.LayerNorm(embed_dims) for _ in range(num_decoder)])
-        self.ffn = nn.ModuleList(
-            [
-                nn.Sequential(
-                    nn.Linear(embed_dims, feedforward_channels),
-                    nn.ReLU(inplace=True),
-                    nn.Dropout(dropout),
-                    nn.Linear(feedforward_channels, embed_dims),
-                    nn.Dropout(dropout),
-                )
-                for _ in range(num_decoder)
-            ]
-        )
-        self.ffn_norm = nn.ModuleList([nn.LayerNorm(embed_dims) for _ in range(num_decoder)])
-        self.refine = nn.ModuleList([refine() for _ in range(num_decoder)])
-
-    def _refine(
-        self,
-        block_index: int,
-        instance_feature: torch.Tensor,
-        anchor: torch.Tensor,
-        anchor_embed: torch.Tensor,
-        time_interval: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
-        """Refine the anchors of one block and classify the queries.
-
-        Args:
-            block_index: Index of the decoder block.
-            instance_feature: Instance features ``(B, N, C)``.
-            anchor: Anchors ``(B, N, D)``.
-            anchor_embed: Anchor embeddings ``(B, N, C)``.
-            time_interval: Frame gaps ``(B,)`` in seconds.
-
-        Returns:
-            Refined anchors, class logits and quality logits, None for a head without quality.
-        """
-        raise NotImplementedError
-
-    def _block_context(self, anchor: torch.Tensor, context: Any) -> Any:
-        """Frame context the blocks read for the current anchors, the head context as given."""
-        return context
-
-    def levels(self, lidar_features: LidarFeatures) -> list[SparseLevel]:
-        """Look up the voxels of every sampled stage once per frame, none for a BEV only head.
-
-        Raises:
-            ValueError: If a head sampling the sparse voxels gets a BEV map.
-        """
-        if not self.sample_sparse:
-            return []
-        if isinstance(lidar_features, torch.Tensor):
-            raise ValueError("A head sampling the sparse voxels needs the sparse stages.")
-        return [grid(*stage) for grid, stage in zip(self.level_grids, lidar_features, strict=True)]
-
-    def bev_levels(self, lidar_features: LidarFeatures) -> list[BEVLevel]:
-        """Build the BEV levels of the frame once, none for a head without them.
-
-        The levels come from the ``bev`` module over the stages, or the lidar features are one
-        BEV map placed on the voxel grid with ``bev_cell_size``. The shared block of the head
-        refines that map first, so every decoder block reads the same refined map.
-
-        Raises:
-            ValueError: If a head placing a BEV map gets the sparse stages.
-        """
-        if self.bev is not None:
-            return self.bev(lidar_features)
-        if self.bev_cell_size is None:
-            return []
-        if not isinstance(lidar_features, torch.Tensor):
-            raise ValueError("A head sampling a BEV map needs the map as its lidar features.")
-        if self.shared_block is not None:
-            lidar_features = self.shared_block(lidar_features)
-        return [BEVLevel(lidar_features, self.bev_grid_origin, self.bev_cell_size)]
-
-    @staticmethod
-    def _batch_size(lidar_features: LidarFeatures) -> int:
-        """Batch size of the lidar features, from the BEV map or the offsets of the first stage."""
-        if isinstance(lidar_features, torch.Tensor):
-            return lidar_features.shape[0]
-        return lidar_features[0][2].shape[0]
-
-    def _decode(
-        self,
-        levels: Sequence[SparseLevel],
-        instance_feature: torch.Tensor,
-        anchor: torch.Tensor,
-        time_interval: torch.Tensor,
-        temp_feature: torch.Tensor | None,
-        temp_anchor: torch.Tensor | None,
-        merge: Callable[
-            [torch.Tensor, torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor]
-        ]
-        | None,
-        denoising: DenoisingQueries | None = None,
-        context: Any = None,
-        bev_levels: Sequence[BEVLevel] = (),
-    ) -> _DecoderOutputs:
-        """Run the decoder blocks over the sampled sparse encoder stages.
-
-        Denoising queries ride at the tail and never reach the merge or the final state.
-
-        Args:
-            levels: Sampled stages with their voxel lookup.
-            instance_feature: Fresh instance features ``(B, N, C)``.
-            anchor: Fresh anchors ``(B, N, D)``.
-            time_interval: Frame gaps of the slots ``(B,)`` in seconds.
-            temp_feature: Gated temporal instance features ``(B, K, C)``, or
-                ``None`` in single frame mode.
-            temp_anchor: Warped temporal anchors ``(B, K, D)``.
-            merge: Temporal merge applied after block 0, or ``None``.
-            denoising: Optional denoising queries appended at the tail with
-                zero features and the isolation mask on the instance attention.
-            context: Frame context of a subclass head, None for the lidar head.
-            bev_levels: BEV maps of a head with a BEV branch.
-
-        Returns:
-            The per layer outputs over the regular and the denoising queries
-            and the final state of the regular queries.
-        """
-        num_query = instance_feature.shape[1]
-        attn_mask = None
-        if denoising is not None:
-            dn_feature = instance_feature.new_zeros(
-                (instance_feature.shape[0], denoising.anchor.shape[1], instance_feature.shape[-1])
-            )
-            instance_feature = torch.cat([instance_feature, dn_feature], dim=1)
-            anchor = torch.cat([anchor, denoising.anchor], dim=1)
-            attn_mask = denoising.attn_mask
-        anchor_embed = self.anchor_encoder(anchor)
-        temp_anchor_embed = None if temp_anchor is None else self.anchor_encoder(temp_anchor)
-        block_context = self._block_context(anchor, context)
-        classification: list[torch.Tensor] = []
-        prediction: list[torch.Tensor] = []
-        quality: list[torch.Tensor] = []
-        for block_index in range(self.num_decoder):
-            if block_index > 0:
-                if temp_feature is not None:
-                    instance_feature = self.temp_gnn[block_index - 1](
-                        instance_feature, anchor_embed, temp_feature, temp_anchor_embed
-                    )
-                    instance_feature = self.temp_gnn_norm[block_index - 1](instance_feature)
-                instance_feature = self.gnn[block_index - 1](
-                    instance_feature, anchor_embed, attn_mask=attn_mask
-                )
-                instance_feature = self.gnn_norm[block_index - 1](instance_feature)
-            instance_feature = self.deformable[block_index](
-                instance_feature, anchor, anchor_embed, levels, bev_levels, block_context
-            )
-            instance_feature = self.deformable_norm[block_index](instance_feature)
-            instance_feature = self.ffn_norm[block_index](
-                instance_feature + self.ffn[block_index](instance_feature)
-            )
-            anchor, cls_logits, quality_logits = self._refine(
-                block_index, instance_feature, anchor, anchor_embed, time_interval
-            )
-            classification.append(cls_logits)
-            prediction.append(anchor)
-            if quality_logits is not None:
-                quality.append(quality_logits)
-            if block_index == 0 and merge is not None:
-                merged_feature, merged_anchor = merge(
-                    instance_feature[:, :num_query],
-                    anchor[:, :num_query],
-                    cls_logits[:, :num_query],
-                )
-                instance_feature = torch.cat(
-                    [merged_feature, instance_feature[:, num_query:]], dim=1
-                )
-                anchor = torch.cat([merged_anchor, anchor[:, num_query:]], dim=1)
-                # The merge brings in the temporal instances, the context follows the new set
-                block_context = self._block_context(anchor, context)
-            if block_index != self.num_decoder - 1:
-                anchor_embed = self.anchor_encoder(anchor)
-                # Read the temporal memory at the refined anchors
-                if block_index > 0 and temp_anchor_embed is not None:
-                    temp_anchor_embed = anchor_embed[:, : temp_anchor_embed.shape[1]]
-        return _DecoderOutputs(
-            classification=classification,
-            prediction=prediction,
-            quality=quality,
-            instance_feature=instance_feature[:, :num_query],
-            anchor=anchor[:, :num_query],
-            cls_logits=cls_logits[:, :num_query],
-        )
-
-    def forward_temporal_export(
-        self,
-        lidar_features: LidarFeatures,
-        temp_instance_feature: torch.Tensor,
-        temp_anchor: torch.Tensor,
-        temp_confidence: torch.Tensor,
-        temp_valid: torch.Tensor,
-        time_interval: torch.Tensor,
-        prev2current: torch.Tensor,
-        context: Any = None,
-    ) -> dict[str, torch.Tensor]:
-        """Run the temporal decoder with the bank state at the graph boundary.
-
-        A frame's ``*_out`` state feeds the next one, a reset feeds zeros and ``temp_valid = 0``.
-        The query index of every state slot lets the runtime carry its track ids into the slots.
-
-        Args:
-            lidar_features: Features, voxel coordinates and batch offsets of the sampled stages,
-                from the finest to the coarsest, or the dense BEV map of a BEV only head.
-            temp_instance_feature: Cached instance features ``(B, K, C)``.
-            temp_anchor: Cached anchors ``(B, K, D)`` in the previous frame.
-            temp_confidence: Cached instance confidences ``(B, K)``.
-            temp_valid: Continuity gates of the slots ``(B,)`` in ``{0, 1}``.
-            time_interval: Frame gaps ``(B,)`` in seconds.
-            prev2current: Transforms from the previous into the current frame ``(B, 4, 4)``.
-            context: Frame context of a subclass head, None for the lidar head.
-
-        Returns:
-            Last layer ``classification``, ``prediction``, ``instance_feature`` and, for a head
-            with quality, ``quality``, the state of the next frame, ``temp_instance_feature_out``, ``temp_anchor_out`` and
-            ``temp_confidence_out``, and the query of every state slot, ``temp_query_index_out``.
-
-        Raises:
-            ValueError: If the head has no temporal memory.
-        """
-        bank = self.instance_bank
-        if bank.num_temp_instances == 0:
-            raise ValueError(
-                "forward_temporal_export needs a temporal head (num_temp_instances > 0)."
-            )
-        batch_size = self._batch_size(lidar_features)
-        instance_feature = bank.instance_feature[None].expand(batch_size, -1, -1)
-        anchor = bank.anchor[None].expand(batch_size, -1, -1)
-
-        gate = temp_valid[:, None, None]
-        warped_anchor = bank._project_anchor(temp_anchor, time_interval, prev2current)
-        temp_feature = temp_instance_feature * gate
-        temp_anchor = warped_anchor * gate
-        prev_confidence = temp_confidence * temp_valid[:, None]
-
-        def merge(
-            feature: torch.Tensor, anchor_state: torch.Tensor, cls_logits: torch.Tensor
-        ) -> tuple[torch.Tensor, torch.Tensor]:
-            return bank.merge_temporal(
-                feature,
-                anchor_state,
-                cls_logits,
-                temp_feature,
-                temp_anchor,
-                gate,
-                bank.num_temp_instances,
-            )
-
-        decoded = self._decode(
-            self.levels(lidar_features),
-            instance_feature,
-            anchor,
-            time_interval,
-            temp_feature,
-            temp_anchor,
-            merge,
-            context=context,
-            bev_levels=self.bev_levels(lidar_features),
-        )
-        state_feature, state_anchor, state_confidence, query_index = bank.select_temporal_state(
-            decoded.instance_feature,
-            decoded.anchor,
-            decoded.cls_logits,
-            prev_confidence,
-            bank.confidence_decay,
-            time_interval,
-            bank.num_temp_instances,
-            bank.anchor_dim,
-        )
-        outputs = {
-            "classification": decoded.classification[-1],
-            "prediction": decoded.prediction[-1],
-            "instance_feature": decoded.instance_feature,
-            "temp_instance_feature_out": state_feature,
-            "temp_anchor_out": state_anchor,
-            "temp_confidence_out": state_confidence,
-            TEMPORAL_QUERY_INDEX_OUTPUT_NAME: query_index,
-        }
-        if decoded.quality:
-            outputs["quality"] = decoded.quality[-1]
-        return outputs
-
-    @property
-    def is_temporal(self) -> bool:
-        """Whether the head propagates instances across frames."""
-        return self.instance_bank.num_temp_instances > 0
-
-    def temporal_state_export_inputs(self, device: torch.device) -> tuple[torch.Tensor, ...]:
-        """Return reset state sample inputs for tracing the temporal export.
-
-        Raises:
-            ValueError: If the head has no temporal memory.
-        """
-        bank = self.instance_bank
-        if bank.num_temp_instances == 0:
-            raise ValueError(
-                "Temporal export inputs need a temporal head (num_temp_instances > 0)."
-            )
-        num_temp = bank.num_temp_instances
-        return (
-            torch.zeros(1, num_temp, self.embed_dims, device=device),
-            torch.zeros(1, num_temp, bank.anchor_dim, device=device),
-            torch.zeros(1, num_temp, device=device),
-            torch.zeros(1, device=device),
-            torch.full((1,), bank.default_time_interval, device=device),
-            torch.eye(4, device=device).unsqueeze(0),
-        )
-
-    def prepare_for_export(self) -> "SparseQueryHead":
-        """Return an export ready copy that emits the last layer only.
-
-        Temporal heads export through :meth:`forward_temporal_export`.
-        """
-        head = deepcopy(self)
-        head._export_mode = True
-        for attention_block in head.gnn:
-            attention_block.attn = ExportableMultiheadAttention(attention_block.attn)
-        if head.is_temporal:
-            for attention_block in head.temp_gnn:
-                attention_block.attn = ExportableMultiheadAttention(attention_block.attn)
-        return head.eval()
-
-
 def _local_attention_radii(
     radii: Sequence[Sequence[float | None]],
 ) -> tuple[tuple[int, float | None], ...]:
@@ -2116,7 +1307,14 @@ def _local_attention_radii(
 
 
 class Sparse4DHead(SparseQueryHead):
-    """Sparse4D query head sampling the sparse stages or the BEV map of a lidar branch."""
+    """Sparse4D query head over the features of a lidar branch, a camera branch or both.
+
+    The lidar features are the sparse stages or the BEV map of the lidar branch, which the
+    lidar blocks sample at keypoints or attend to densely (``lidar_sampling``). The image
+    features are the pyramid of the camera branch over several strides, which the image blocks
+    sample at keypoints projected into every camera (``image_strides``). The head takes the two
+    as separate inputs and reads them with separate blocks.
+    """
 
     def __init__(
         self,
@@ -2185,6 +1383,9 @@ class Sparse4DHead(SparseQueryHead):
         cosine_attention: bool = False,
         attention_scale_max: float = 30.0,
         bev_norm: bool = True,
+        image_strides: Sequence[int] = (),
+        image_channels: int | None = None,
+        image_camera_embed: bool = True,
         aggregation: Callable[..., SparseDeformableAggregation] = SparseDeformableAggregation,
         yaw_free_classes: Sequence[str] = (),
         yaw_reversible_classes: Sequence[str] = (),
@@ -2247,10 +1448,13 @@ class Sparse4DHead(SparseQueryHead):
             dn_noise_size: Half range of the uniform log size jitter.
             dn_noise_yaw: Half range of the uniform heading rotation in radians.
             dn_noise_velocity: Half range of the uniform velocity jitter in m/s.
-            lidar_sampling: ``sparse`` samples the sparse voxels, ``sparse_bev`` adds the BEV
-                maps and ``bev`` samples the BEV maps alone. ``bev_attention`` attends from
-                every query to every cell of the BEV maps with the shared CMT positional
-                embedding of :class:`BEVCrossAttention` in place of the deformable aggregation.
+            lidar_sampling: How the lidar block of a decoder block reads the lidar features.
+                ``sparse`` samples the sparse voxels, ``sparse_bev`` adds the BEV maps and
+                ``bev`` samples the BEV maps alone, the deformable aggregation at the keypoints.
+                ``bev_attention`` attends from every query to every cell of the BEV maps with
+                the shared CMT positional embedding of :class:`BEVCrossAttention` in place of
+                the deformable aggregation. ``none`` builds no lidar block, for a camera only
+                head. The image block of ``image_strides`` goes with any of them.
             bev: Builds the BEV levels of a frame from the stages. BEV sampling takes exactly
                 one of ``bev`` and ``bev_cell_size``.
             bev_cell_size: Metric cell size of the BEV map the head gets as its lidar features
@@ -2279,6 +1483,14 @@ class Sparse4DHead(SparseQueryHead):
                 twice of it.
             bev_norm: Whether the blocks of ``bev_attention`` layer normalize every cell of the
                 BEV maps before they project it.
+            image_strides: Strides of the image pyramid the head gets as its image features,
+                from the finest. With them every decoder block has an image block after its
+                lidar block, the deformable aggregation of
+                :class:`ImageDeformableAggregation` over every camera and stride at keypoints
+                of its own. Empty for a head without image features.
+            image_channels: Feature dimension of the image pyramid, ``embed_dims`` when None.
+            image_camera_embed: Whether the sampling weights of a camera read an embedding of
+                its projection.
             aggregation: Builds the deformable aggregation of one decoder block from its keyword
                 arguments.
             yaw_free_classes: Classes without a heading, such as traffic cones, whose yaw
@@ -2289,10 +1501,19 @@ class Sparse4DHead(SparseQueryHead):
                 ranks instead of the count of each rank.
         """
         super().__init__()
-        if lidar_sampling not in {"sparse", "sparse_bev", "bev", "bev_attention"}:
+        if lidar_sampling not in {"sparse", "sparse_bev", "bev", "bev_attention", "none"}:
             raise ValueError(
-                "lidar_sampling must be sparse, sparse_bev, bev or bev_attention, got "
+                "lidar_sampling must be sparse, sparse_bev, bev, bev_attention or none, got "
                 f"{lidar_sampling}."
+            )
+        if lidar_sampling == "none" and len(image_strides) == 0:
+            raise ValueError(
+                "lidar_sampling none leaves the head the image features alone, set image_strides."
+            )
+        if (image_channels is not None or not image_camera_embed) and len(image_strides) == 0:
+            raise ValueError(
+                "image_channels and image_camera_embed set the image blocks of image_strides, "
+                "a head without the strides has none."
             )
         if local_attention and lidar_sampling != "bev_attention":
             raise ValueError(
@@ -2313,7 +1534,7 @@ class Sparse4DHead(SparseQueryHead):
                 f"{lidar_sampling}."
             )
         num_bev_sources = int(bev is not None) + int(bev_cell_size is not None)
-        if num_bev_sources != int(lidar_sampling != "sparse"):
+        if num_bev_sources != int(lidar_sampling not in {"sparse", "none"}):
             raise ValueError(
                 f"lidar_sampling {lidar_sampling} samples BEV maps with exactly one of bev and "
                 "bev_cell_size, and none without."
@@ -2449,7 +1670,7 @@ class Sparse4DHead(SparseQueryHead):
             bev=bev,
             bev_cell_size=bev_cell_size,
             bev_aggregation=lambda: None
-            if lidar_sampling in {"sparse", "bev_attention"}
+            if lidar_sampling in {"sparse", "bev_attention", "none"}
             else BEVDeformableAggregation(
                 embed_dims=embed_dims,
                 bev_channels=bev_channels,
@@ -2481,6 +1702,25 @@ class Sparse4DHead(SparseQueryHead):
             )
             if use_shared_block
             else None,
+            read_lidar=lidar_sampling != "none",
+            # Keypoints of its own, the image block shares none with the lidar block
+            image_aggregation=None
+            if len(image_strides) == 0
+            else lambda: ImageDeformableAggregation(
+                embed_dims=embed_dims,
+                image_channels=embed_dims if image_channels is None else image_channels,
+                num_groups=num_groups,
+                num_levels=len(image_strides),
+                kps_generator=SparseBox3DKeyPointsGenerator(
+                    embed_dims=embed_dims,
+                    fix_scale=fix_scale,
+                    num_learnable_pts=num_learnable_pts,
+                ),
+                proj_drop=dropout,
+                attn_drop=attn_drop,
+                camera_embed=image_camera_embed,
+            ),
+            image_strides=image_strides,
         )
         self.loss_cls = SigmoidFocalLoss()
         self.loss_yns = GaussianFocalLoss()
@@ -2504,7 +1744,7 @@ class Sparse4DHead(SparseQueryHead):
 
     def forward(
         self,
-        lidar_features: LidarFeatures,
+        lidar_features: LidarFeatures | None,
         timestamps_seconds: torch.Tensor | None = None,
         lidar2global: torch.Tensor | None = None,
         scene_tokens: Sequence[str] | None = None,
@@ -2513,15 +1753,17 @@ class Sparse4DHead(SparseQueryHead):
         gt_instance_ids: Sequence[torch.Tensor] | None = None,
         gt_num_points: Sequence[torch.Tensor] | None = None,
         context: Any = None,
+        image_features: ImageFeatures | None = None,
     ) -> Sparse4DHeadOutputs:
-        """Run the decoder over the sampled lidar features.
+        """Run the decoder over the lidar and the image features of a batch of frames.
 
         A temporal head also advances its tracks. With the ground truth it records which boxes
         were observed in the stream so far, only those feed the denoising queries and the loss.
 
         Args:
             lidar_features: Features, voxel coordinates and batch offsets of the sampled stages,
-                from the finest to the coarsest, or the dense BEV map of a BEV only head.
+                from the finest to the coarsest, or the dense BEV map of a BEV only head. None
+                for a camera only head.
             timestamps_seconds: Frame timestamps ``(B,)`` in seconds, temporal
                 mode only.
             lidar2global: Poses ``(B, 4, 4)`` with the augmentations folded in,
@@ -2533,6 +1775,8 @@ class Sparse4DHead(SparseQueryHead):
             gt_instance_ids: Instance id ``(M,)`` of every ground truth box, temporal mode only.
             gt_num_points: Point count ``(M,)`` of every ground truth box, temporal mode only.
             context: Frame context of a subclass head, None for the lidar head.
+            image_features: Pyramid and projection of the cameras, read by the image blocks
+                alone. None for a head without them.
 
         Returns:
             Per layer outputs of the regular queries and, in training steps
@@ -2540,9 +1784,11 @@ class Sparse4DHead(SparseQueryHead):
             last layer.
 
         Raises:
-            ValueError: If a denoising training step misses the ground truth.
+            ValueError: If a denoising training step misses the ground truth, or if the
+                features do not match the modalities the head reads.
         """
-        batch_size = self._batch_size(lidar_features)
+        self._check_modalities(lidar_features, image_features)
+        batch_size = self._batch_size(lidar_features, image_features)
         instance_feature, anchor, time_interval, temp_feature, temp_anchor = self.instance_bank.get(
             batch_size, timestamps_seconds, lidar2global, scene_tokens
         )
@@ -2586,6 +1832,7 @@ class Sparse4DHead(SparseQueryHead):
             denoising,
             context,
             self.bev_levels(lidar_features),
+            image_features,
         )
         if temp_feature is not None:
             self.instance_bank.cache(

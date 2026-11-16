@@ -27,14 +27,18 @@ from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     Detection3DHeadOutputs,
     Sparse4DHeadOutputs,
 )
+from autoware_ml.models.detection3d.heads.sparse4d.lidar_aggregation import (
+    SparseDeformableAggregation,
+)
+from autoware_ml.models.detection3d.heads.sparse4d.lidar_aggregation import (
+    SparseLevelGrid,
+)
 from autoware_ml.models.detection3d.heads.sparse4d.sparse4d_head import (
     ANCHOR_DIM,
     InstanceBank,
     InstanceTracker,
     Sparse4DHead,
     SparseBox3DKeyPointsGenerator,
-    SparseDeformableAggregation,
-    SparseLevelGrid,
     decode_anchor_space_to_boxes,
     encode_boxes_to_anchor_space,
     encode_ground_truth,

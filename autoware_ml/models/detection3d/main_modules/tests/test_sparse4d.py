@@ -24,10 +24,15 @@ import torch
 import torch.nn as nn
 
 from autoware_ml.models.detection3d.heads.sparse4d.sparse4d_head import (
-    TEMPORAL_STATE_INPUT_NAMES,
     Sparse4DHead,
 )
+from autoware_ml.models.detection3d.heads.sparse4d.sparse_query_head import (
+    TEMPORAL_STATE_INPUT_NAMES,
+)
+from autoware_ml.dataclasses.geometry.images import ImageGTBatch
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.models.detection3d.main_modules.sparse4d import Sparse4DDetectionModel
+from autoware_ml.models.detection3d.main_modules.sparse4ds.sparse4d_camera import Sparse4DCamera
 from autoware_ml.models.detection3d.main_modules.sparse4ds.tests.lidar_fixtures import (
     NECK_CHANNELS,
     build_lidar_network,
@@ -36,6 +41,12 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import build
 from autoware_ml.models.detection3d.tests.sparse4d_fixtures import (
     build_sparse4d_head,
     make_anchor_file,
+)
+from autoware_ml.models.detection3d.tests.sparse4d_image_fixtures import (
+    IMAGE_CHANNELS,
+    IMAGE_SIZE,
+    IMAGE_STRIDES,
+    lidar2image,
 )
 from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.multi.tests.test_ptv3_det3d_seg3d_sparse4d import frame_inputs
@@ -70,8 +81,8 @@ def _build_model(
     )
 
 
-def test_lidar_network_is_required(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="lidar_network"):
+def test_a_branch_is_required(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="lidar_network, a camera_network or both"):
         Sparse4DDetectionModel(
             data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
             lidar_network=None,
@@ -81,15 +92,128 @@ def test_lidar_network_is_required(tmp_path: Path) -> None:
         )
 
 
-def test_camera_network_is_not_supported_yet(tmp_path: Path) -> None:
-    with pytest.raises(NotImplementedError, match="camera_network"):
-        Sparse4DDetectionModel(
-            data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
-            lidar_network=build_lidar_network(),
-            camera_network=nn.Identity(),
-            bbox_head=_build_head(tmp_path),
-            log_dict_configs=LogDictConfigs(prog_bar=False),
+class _StubImageBackbone(nn.Module):
+    """One stride 4 convolution over the images."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.conv = nn.Conv2d(3, IMAGE_CHANNELS, kernel_size=4, stride=4)
+
+    def forward(self, images: torch.Tensor) -> torch.Tensor:
+        return self.conv(images)
+
+
+class _StubImageNeck(nn.Module):
+    """The backbone map and a stride 2 convolution of it, the strides 4 and 8."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.down = nn.Conv2d(IMAGE_CHANNELS, IMAGE_CHANNELS, kernel_size=2, stride=2)
+
+    def forward(self, features: tuple[torch.Tensor, ...]) -> tuple[torch.Tensor, ...]:
+        return features[0], self.down(features[0])
+
+
+def _camera_network() -> Sparse4DCamera:
+    return Sparse4DCamera(_StubImageBackbone(), _StubImageNeck(), IMAGE_STRIDES)
+
+
+def _with_images(batch: ModelBatchInputs) -> ModelBatchInputs:
+    """Add the front and the rear camera of the image fixtures to a batch of one frame."""
+    projection = torch.stack([lidar2image(1.0), lidar2image(-1.0)])[None]
+    identity = torch.eye(4).expand(1, 2, 4, 4)
+    return batch.replace(
+        image_data=ImageGTBatch(
+            images=torch.randn(1, 2, 3, *IMAGE_SIZE),
+            depth_maps=None,
+            camera_intrinsics=torch.eye(3).expand(1, 2, 3, 3),
+            image_augmentation_matrices=identity,
+            lidar2images=projection,
+            lidar2cams=identity,
+            calibration_statuses=None,
         )
+    )
+
+
+@pytest.mark.parametrize("lidar_sampling", ["bev", "bev_attention", "none"])
+def test_detector_trains_on_the_images_and_reaches_every_parameter(
+    tmp_path: Path, lidar_sampling: str
+) -> None:
+    torch.manual_seed(0)
+    with_lidar = lidar_sampling != "none"
+    lidar_settings = {"bev_cell_size": 1.0, "bev_channels": NECK_CHANNELS} if with_lidar else {}
+    model = Sparse4DDetectionModel(
+        data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
+        lidar_network=build_lidar_network() if with_lidar else None,
+        camera_network=_camera_network(),
+        bbox_head=build_sparse4d_head(
+            make_anchor_file(tmp_path),
+            lidar_sampling=lidar_sampling,
+            image_strides=IMAGE_STRIDES,
+            image_channels=IMAGE_CHANNELS,
+            num_temp_instances=4,
+            dn_query_budget=8,
+            **lidar_settings,
+        ),
+        log_dict_configs=LogDictConfigs(prog_bar=False),
+    )
+
+    for frame_index in range(2):
+        model.zero_grad()
+        batch = _with_images(frame_inputs(torch.device("cpu"), 100.0 + 0.1 * frame_index))
+        outputs = model(batch)
+        metrics = model.compute_metrics(batch, outputs)
+        metrics["loss"].backward()
+
+        assert torch.isfinite(metrics["loss"])
+        missing = [
+            name
+            for name, parameter in model.named_parameters()
+            if parameter.requires_grad and parameter.grad is None
+        ]
+        assert missing == []
+
+    assert model.bbox_head.instance_bank._slot_valid.tolist() == [True]
+
+
+def test_camera_branch_needs_the_images(tmp_path: Path) -> None:
+    model = Sparse4DDetectionModel(
+        data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
+        lidar_network=None,
+        camera_network=_camera_network(),
+        bbox_head=build_sparse4d_head(
+            make_anchor_file(tmp_path),
+            lidar_sampling="none",
+            image_strides=IMAGE_STRIDES,
+            image_channels=IMAGE_CHANNELS,
+        ),
+        log_dict_configs=LogDictConfigs(prog_bar=False),
+    )
+
+    with pytest.raises(ValueError, match="needs the images"):
+        model(frame_inputs(torch.device("cpu"), 100.0))
+
+
+def test_camera_branch_checks_the_maps_of_its_neck() -> None:
+    camera_network = Sparse4DCamera(_StubImageBackbone(), _StubImageNeck(), (4,))
+
+    with pytest.raises(ValueError, match="returned 2 maps"):
+        camera_network(torch.zeros(1, 2, 3, *IMAGE_SIZE), torch.eye(4).expand(1, 2, 4, 4))
+    with pytest.raises(ValueError, match="needs the strides"):
+        Sparse4DCamera(_StubImageBackbone(), _StubImageNeck(), ())
+
+
+def test_export_covers_the_lidar_only_detector(tmp_path: Path) -> None:
+    model = Sparse4DDetectionModel(
+        data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
+        lidar_network=build_lidar_network(),
+        camera_network=_camera_network(),
+        bbox_head=_build_head(tmp_path),
+        log_dict_configs=LogDictConfigs(prog_bar=False),
+    )
+
+    with pytest.raises(NotImplementedError, match="camera"):
+        model.build_export_specs(frame_inputs(torch.device("cpu"), 100.0))
 
 
 def test_the_local_attention_of_the_head_follows_the_training_epoch(tmp_path: Path) -> None:

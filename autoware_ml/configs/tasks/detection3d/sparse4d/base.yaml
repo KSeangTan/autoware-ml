@@ -144,7 +144,7 @@ model:
       upsample_strides: [1, 2]
       activation_checkpointing: false
 
-  # Camera branch is not supported yet.
+  # No camera branch by default, base_image.yaml adds one with the image blocks of the head.
   camera_network: null
 
   bbox_head:

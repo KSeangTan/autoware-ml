@@ -1,0 +1,26 @@
+# @package _global_
+# Camera only Sparse4D: the camera branch of base_image.yaml without the lidar branch. The head
+# has no lidar block, every decoder block reads the image pyramid alone. Composed after the
+# lidar base of an experiment, it takes the lidar network, the voxelizer and the lidar export
+# out of it.
+defaults:
+  - base_image
+  - _self_
+
+# The images are served in [0, 1], these are the ImageNet statistics in that range
+data_preprocessor:
+  preprocessor_modules:
+    - _target_: autoware_ml.preprocessing.camera.normalize.BatchNormalizeImages
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
+
+model:
+  lidar_network: null
+  bbox_head:
+    lidar_sampling: none
+    bev_cell_size: null
+
+# The export graph of the camera branch is not written yet
+deploy:
+  onnx:
+    enabled: false

@@ -18,6 +18,8 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
 )
 from autoware_ml.models.detection3d.heads.sparse4d.sparse4d_head import (
     ANCHOR_DIM,
+)
+from autoware_ml.models.detection3d.heads.sparse4d.sparse_query_head import (
     TEMPORAL_STATE_INPUT_NAMES,
 )
 from autoware_ml.models.detection3d.tests.sparse4d_fixtures import (

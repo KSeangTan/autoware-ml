@@ -18,9 +18,23 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Protocol
 
 import torch
 import torch.nn.functional as F
+
+
+class KeyPointLevel(Protocol):
+    """Dense features that metric keypoints sample, what the aggregation reads of a level.
+
+    A level places the keypoints on its own map: :class:`BEVLevel` by their ``(x, y)`` on the
+    BEV grid, and the image level of a camera by their projection into its image.
+    """
+
+    feat: torch.Tensor
+
+    def sample(self, key_points: torch.Tensor) -> torch.Tensor:
+        """Features ``(B, N, P, C)`` at the keypoints ``(B, N, P, 3)``, zeros off the map."""
 
 
 @dataclass(frozen=True)
@@ -57,16 +71,18 @@ class BEVLevel:
 
 
 def bev_deformable_aggregation(
-    key_points: torch.Tensor, weights: torch.Tensor, levels: Sequence[BEVLevel]
+    key_points: torch.Tensor, weights: torch.Tensor, levels: Sequence[KeyPointLevel]
 ) -> torch.Tensor:
-    """Sum the BEV samples of every level and keypoint with their weights per feature group.
+    """Sum the samples of every level and keypoint with their weights per feature group.
 
-    Exports as one ONNX ``GridSample`` per level and plain arithmetic.
+    The aggregation of the lidar and of the image blocks: the levels are the BEV maps of the
+    lidar branch, or the map of every camera and stride of the camera branch. Exports as one
+    ONNX ``GridSample`` per level and plain arithmetic.
 
     Args:
         key_points: Metric keypoints ``(B, N, P, 3)``.
-        weights: Softmaxed sampling weights ``(B, N, L * P, G)``, level major.
-        levels: Sampled BEV levels, finest first.
+        weights: Sampling weights ``(B, N, L * P, G)``, level major.
+        levels: Sampled levels with the same channels, in the order of the weights.
 
     Returns:
         Aggregated features ``(B, N, C)``.

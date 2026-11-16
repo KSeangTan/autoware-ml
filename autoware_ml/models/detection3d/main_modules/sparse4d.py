@@ -26,7 +26,6 @@ from copy import deepcopy
 from typing import Any
 
 import torch
-import torch.nn as nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
@@ -44,8 +43,10 @@ from autoware_ml.models.detection3d.heads.sparse4d.sparse4d_head import Sparse4D
 from autoware_ml.models.detection3d.main_modules.sparse4ds.export_wrappers import (
     build_sparse4d_lidar_export_spec,
 )
+from autoware_ml.models.detection3d.main_modules.sparse4ds.sparse4d_camera import Sparse4DCamera
 from autoware_ml.models.detection3d.main_modules.sparse4ds.sparse4d_lidar import Sparse4DLidar
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
+from autoware_ml.ops.deformable_aggregation.image_deformable_aggregation import ImageFeatures
 from autoware_ml.models.multi.ptv3_det3d_seg3d import (
     detection3d_frame_mask,
     detection3d_gt_batch,
@@ -58,16 +59,17 @@ from autoware_ml.utils.deploy import ExportSpec
 class Sparse4DDetectionModel(ModuleBaseModel):
     """Compose a Sparse4D detector with lidar and camera branches.
 
-    The head samples the BEV map of the lidar branch at keypoints around its anchors and carries
-    the most confident instances from one frame of a scenario to the next. Only the lidar branch
-    exists so far, the camera branch is a placeholder of the signature.
+    The head reads the BEV map of the lidar branch and the image pyramid of the camera branch
+    with separate blocks, and carries the most confident instances from one frame of a scenario
+    to the next. The two branches are complete on their own and meet in the instance features of
+    the head alone, so a detector runs with the lidar branch, the camera branch or both.
     """
 
     def __init__(
         self,
         data_preprocessor: DataPreprocessor,
         lidar_network: Sparse4DLidar | None,
-        camera_network: nn.Module | None,
+        camera_network: Sparse4DCamera | None,
         bbox_head: Sparse4DHead,
         log_dict_configs: LogDictConfigs,
         optimizer: Callable[..., Optimizer] | None = None,
@@ -80,8 +82,10 @@ class Sparse4DDetectionModel(ModuleBaseModel):
 
         Args:
             data_preprocessor: Preprocessor for the model inputs.
-            lidar_network: Lidar branch returning the BEV map the head samples.
-            camera_network: Camera branch, not supported yet.
+            lidar_network: Lidar branch returning the BEV map the lidar blocks of the head read,
+                None for a camera only detector.
+            camera_network: Camera branch returning the image pyramid the image blocks of the
+                head read, None for a lidar only detector.
             bbox_head: Sparse4D query head.
             log_dict_configs: Logging configuration for training and validation.
             optimizer: Optimizer factory.
@@ -91,8 +95,7 @@ class Sparse4DDetectionModel(ModuleBaseModel):
             metrics: Detection metrics accumulated during validation and test.
 
         Raises:
-            ValueError: If no lidar branch is given.
-            NotImplementedError: If a camera branch is given.
+            ValueError: If neither branch is given.
         """
         super().__init__(
             data_preprocessor=data_preprocessor,
@@ -103,10 +106,8 @@ class Sparse4DDetectionModel(ModuleBaseModel):
             metrics=metrics,
             log_dict_configs=log_dict_configs,
         )
-        if lidar_network is None:
-            raise ValueError("Sparse4D needs a lidar_network, the head samples its BEV map.")
-        if camera_network is not None:
-            raise NotImplementedError("Sparse4D supports no camera_network yet, set it to null.")
+        if lidar_network is None and camera_network is None:
+            raise ValueError("Sparse4D needs a lidar_network, a camera_network or both.")
         self.lidar_network = lidar_network
         self.camera_network = camera_network
         self.bbox_head = bbox_head
@@ -117,21 +118,25 @@ class Sparse4DDetectionModel(ModuleBaseModel):
         self.bbox_head.set_epoch(self.current_epoch)
 
     def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
-        """Run the lidar branch and the Sparse4D head on one batch of frames.
+        """Run the branches and the Sparse4D head on one batch of frames.
 
         Args:
-            multi_task_batch_inputs: Model inputs with the voxels, the frame metadata and the
-                detection ground truth.
+            multi_task_batch_inputs: Model inputs with the voxels, the images, the frame
+                metadata and the detection ground truth.
 
         Returns:
             The Sparse4D head outputs.
 
         Raises:
-            ValueError: If the batch carries no frame metadata or no voxels.
+            ValueError: If the batch carries no frame metadata, or misses the voxels or the
+                images of a branch.
         """
         frame_meta = self._frame_meta(multi_task_batch_inputs)
-        bev_map = self._lidar_bev(multi_task_batch_inputs)
-        det3d_outputs = self._run_head(bev_map, multi_task_batch_inputs, frame_meta)
+        bev_map = None if self.lidar_network is None else self._lidar_bev(multi_task_batch_inputs)
+        image_features = (
+            None if self.camera_network is None else self._image_features(multi_task_batch_inputs)
+        )
+        det3d_outputs = self._run_head(bev_map, multi_task_batch_inputs, frame_meta, image_features)
         return ModelOutputs(
             detection3d_head_outputs=Detection3DHeadOutputs(
                 center_head_outputs=None,
@@ -183,21 +188,42 @@ class Sparse4DDetectionModel(ModuleBaseModel):
             batch_size=multi_task_batch_inputs.multi_task_gt_batch.batch_size,
         )
 
+    def _image_features(self, multi_task_batch_inputs: ModelBatchInputs) -> ImageFeatures:
+        """Run the camera branch on the images of the batch.
+
+        Args:
+            multi_task_batch_inputs: Model inputs with the images and their calibration.
+
+        Returns:
+            The image pyramid the head samples, with the projection of every camera.
+
+        Raises:
+            ValueError: If the batch carries no images.
+        """
+        image_data = multi_task_batch_inputs.image_data
+        if image_data is None:
+            raise ValueError("The Sparse4D camera branch needs the images in the model inputs.")
+        return self.camera_network(
+            image_batch=image_data.images, lidar2images=image_data.lidar2images
+        )
+
     def _run_head(
         self,
-        bev_map: torch.Tensor,
+        bev_map: torch.Tensor | None,
         multi_task_batch_inputs: ModelBatchInputs,
         frame_meta: FrameMetaBatch,
+        image_features: ImageFeatures | None = None,
     ) -> Sparse4DHeadOutputs:
-        """Run the head over the BEV map of a batch.
+        """Run the head over the lidar and the image features of a batch.
 
         The frame metadata places every frame of a stream for the temporal head, the boxes feed
         the denoising queries and their instance ids and point counts the tracks.
 
         Args:
-            bev_map: BEV map of the lidar branch the head samples.
+            bev_map: BEV map of the lidar branch the head samples, None without the branch.
             multi_task_batch_inputs: Model inputs with the detection ground truth.
             frame_meta: Frame metadata of every sample, see :meth:`_frame_meta`.
+            image_features: Image pyramid of the camera branch, None without the branch.
 
         Returns:
             The head outputs.
@@ -213,10 +239,11 @@ class Sparse4DDetectionModel(ModuleBaseModel):
             gt_instance_ids=gt_detections.valid_bboxes_instance_ids(),
             gt_num_points=gt_detections.valid_bboxes_num_points(),
             context=self.head_context(multi_task_batch_inputs),
+            image_features=image_features,
         )
 
     def head_context(self, multi_task_batch_inputs: ModelBatchInputs) -> Any:
-        """Frame context of the head, none without a camera branch."""
+        """Frame context of the head of a subclass detector, none for this one."""
         return None
 
     def compute_metrics(
@@ -342,7 +369,15 @@ class Sparse4DDetectionModel(ModuleBaseModel):
 
         Returns:
             Ordered mapping of module name to export specification.
+
+        Raises:
+            NotImplementedError: If the detector has a camera branch, or no lidar branch.
         """
+        if self.camera_network is not None or self.lidar_network is None:
+            raise NotImplementedError(
+                "The Sparse4D export covers the lidar only detector, the graph of the camera "
+                "branch is not written yet."
+            )
         export_model = deepcopy(self).eval()
         export_model.lidar_network.prepare_for_export()
         bbox_head = export_model.bbox_head.prepare_for_export()
