@@ -57,8 +57,9 @@ model:
         nms_radius: 0.5
         max_size: ${model.bbox_head.num_output}
 
-# Mild augmentation and no min-points filter, the instance bank carries occluded boxes. The point
-# counts of the served frame decide when an instance is observed.
+# Mild augmentation. In training a box holding too few points of the served frame is no target
+# of that frame, the evaluation keeps every box. The point counts of the served frame decide
+# when an instance is observed.
 datasets:
   train:
     transforms:
@@ -125,6 +126,24 @@ datasets:
           _convert_: all
 
           point_cloud_range: ${point_cloud_range}
+
+        # Order matters, it first filters bboxes within the default meters with less than 2 points.
+        # Then it filters bboxes within 60 meters with less than 3 points
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesMinPointsFilter
+          _convert_: all
+
+          min_points: 2
+          bev_range:
+            - ${point_cloud_range.0}
+            - ${point_cloud_range.1}
+            - ${point_cloud_range.3}
+            - ${point_cloud_range.4}
+
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesMinPointsFilter
+          _convert_: all
+
+          min_points: 3
+          bev_range: [-60.0, -60.0, 60.0, 60.0]
 
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesPointCount
 
