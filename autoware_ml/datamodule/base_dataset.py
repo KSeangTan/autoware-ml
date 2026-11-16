@@ -17,7 +17,7 @@ from torch.utils.data import Dataset
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch, ModelGTSample
 from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.base import TransformsCompose, stream_augmentation
 
 
 class PaddingSlot(int):
@@ -35,6 +35,43 @@ class PaddingSlot(int):
     def __repr__(self) -> str:
         """Show the index as a padding slot."""
         return f"PaddingSlot({int(self)})"
+
+
+class StreamSlot(int):
+    """Sample index of a frame of a stream, with the seed its stream is augmented by.
+
+    The streaming sampler hands every frame of a stream the same seed, and a dataset draws
+    the augmentation of the frame from it, so the frames a temporal model reads one after
+    another are rotated, resized, cropped and flipped alike. As an ``int`` with one attribute,
+    the index passes through the dataloader workers unchanged.
+
+    Attributes:
+        augmentation_seed: Seed of the stream of the frame.
+    """
+
+    augmentation_seed: int
+
+    def __new__(cls, index: int, augmentation_seed: int) -> "StreamSlot":
+        """Create the index of a frame with the seed of its stream."""
+        slot = super().__new__(cls, index)
+        slot.augmentation_seed = int(augmentation_seed)
+        return slot
+
+    def __reduce__(self) -> tuple[type, tuple[int, int]]:
+        """Pickle the index together with its seed, a plain ``int`` would drop it."""
+        return type(self), (int(self), self.augmentation_seed)
+
+    def at(self, index: int) -> "StreamSlot":
+        """The same slot on another index, for a dataset serving it from one of its sources."""
+        return type(self)(index, self.augmentation_seed)
+
+    def __repr__(self) -> str:
+        """Show the index with the seed of its stream."""
+        return f"{type(self).__name__}({int(self)}, augmentation_seed={self.augmentation_seed})"
+
+
+class StreamPaddingSlot(StreamSlot, PaddingSlot):
+    """Padding slot of a stream, it repeats the last frame under the augmentation of the stream."""
 
 
 class BaseDataset(Dataset):
@@ -193,7 +230,9 @@ class BaseDataset(Dataset):
         """Load and transform one dataset sample.
 
         Args:
-            index: Sample index, a ``PaddingSlot`` for a padding slot of a streaming lane.
+            index: Sample index, a ``PaddingSlot`` for a padding slot of a streaming lane. A
+                ``StreamSlot`` draws the augmentation of its stream, see
+                :func:`stream_augmentation`.
 
         Returns:
             Transformed ModelGTSample instance, stamped with its loading time and whether it
@@ -201,7 +240,11 @@ class BaseDataset(Dataset):
         """
         start_time = time.perf_counter()
         model_gt_sample = self.get_data_sample(int(index))
-        transformed_gt_sample = self.apply_transforms(model_gt_sample)
+        if isinstance(index, StreamSlot):
+            with stream_augmentation(index.augmentation_seed):
+                transformed_gt_sample = self.apply_transforms(model_gt_sample)
+        else:
+            transformed_gt_sample = self.apply_transforms(model_gt_sample)
         return transformed_gt_sample._replace(
             io_processing_time=time.perf_counter() - start_time,
             is_padding=isinstance(index, PaddingSlot),
@@ -358,7 +401,9 @@ class ConcatDataset(Dataset):
             Transformed ModelGTSample instance, flagged as padding for a padding slot.
         """
         source_index, sample_index = self.locate(index)
-        if isinstance(index, PaddingSlot):
+        if isinstance(index, StreamSlot):
+            sample_index = index.at(sample_index)
+        elif isinstance(index, PaddingSlot):
             sample_index = PaddingSlot(sample_index)
         return self.datasets[source_index][sample_index]
 

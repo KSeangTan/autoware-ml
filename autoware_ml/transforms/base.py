@@ -19,11 +19,43 @@ pipelines and provides sequential composition helpers.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 
 import numpy as np
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+
+
+# Seed of the stream whose sample the pipeline is transforming, None outside a stream
+_stream_seed: int | None = None
+
+
+@contextmanager
+def stream_augmentation(seed: int) -> Iterator[None]:
+    """Draw the augmentation of a stream for the sample transformed inside the block.
+
+    A temporal model reads the frames of a stream one after another. Inside the block every
+    transform of a :class:`TransformsCompose` draws from NumPy seeded by ``seed`` and its
+    position in the pipeline, so every frame transformed under the same seed gets the same
+    rotation, resize, crop and flip, whatever an earlier transform drew. The random state of
+    NumPy is restored on the way out.
+
+    Only the draws from ``np.random`` follow the stream, which the geometric and the image
+    transforms use. The draws from ``torch``, the jitter and the dropout of the points, stay
+    independent per frame.
+
+    Args:
+        seed: Seed of the stream, the same for every frame of it.
+    """
+    global _stream_seed
+    previous_seed, state = _stream_seed, np.random.get_state()
+    _stream_seed = int(seed) % 2**32
+    try:
+        yield
+    finally:
+        _stream_seed = previous_seed
+        np.random.set_state(state)
 
 
 class BaseTransform(ABC):
@@ -146,7 +178,10 @@ class TransformsCompose:
         Returns:
             Transformed ModelGTSample instance after all pipeline stages have been applied.
         """
-        for transform in self.pipeline:
+        for position, transform in enumerate(self.pipeline):
+            if _stream_seed is not None:
+                # See stream_augmentation, the draws of a transform follow the stream
+                np.random.seed([_stream_seed, position])
             model_gt_sample = transform(model_gt_sample)
 
         return model_gt_sample

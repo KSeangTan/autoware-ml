@@ -18,14 +18,23 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 import unittest
+from unittest import mock
 
+import numpy as np
 import polars as pl
 import torch
 
 from autoware_ml.dataclasses.batch.detection2d import Detection2DGTSample
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
-from autoware_ml.datamodule.base_dataset import BaseDataset, ConcatDataset
+from autoware_ml.datamodule.base_dataset import (
+    BaseDataset,
+    ConcatDataset,
+    PaddingSlot,
+    StreamPaddingSlot,
+    StreamSlot,
+)
 from autoware_ml.datamodule.t4dataset.dataset import T4Dataset
+from autoware_ml.transforms.base import BaseTransform, TransformsCompose
 from autoware_ml.types.geometry import Box2DFieldIndex
 
 
@@ -124,3 +133,65 @@ class TestMaxNum2DGtBboxes(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _Rotate(BaseTransform):
+    """Record one random draw of every sample, as a rotation reads its angle."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.draws: list[float] = []
+
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        self.draws.append(float(np.random.uniform()))
+        return model_gt_sample
+
+
+class _AugmentedDataset(_Dataset):
+    """The two record dataset behind a pipeline of one random transform."""
+
+    def __init__(self) -> None:
+        super().__init__(max_num_2d_gt_bboxes=1)
+        self.rotate = _Rotate()
+        self.transforms = TransformsCompose([self.rotate])
+
+    def draw(self, index: int) -> float:
+        """The draw the pipeline makes for one index."""
+        self[index]
+        return self.rotate.draws[-1]
+
+
+def test_frames_of_a_stream_are_augmented_alike_and_other_frames_on_their_own() -> None:
+    dataset = _AugmentedDataset()
+
+    in_stream = [dataset.draw(StreamSlot(index, 7)) for index in (0, 1, 0)]
+    other_stream = dataset.draw(StreamSlot(0, 8))
+    on_their_own = [dataset.draw(0), dataset.draw(0)]
+
+    assert len(set(in_stream)) == 1
+    assert other_stream != in_stream[0]
+    assert on_their_own[0] != on_their_own[1]
+
+
+def test_a_stream_slot_is_served_as_the_frame_or_the_padding_it_stands_for() -> None:
+    dataset = _AugmentedDataset()
+
+    assert dataset[StreamSlot(1, 7)].is_padding is False
+    assert dataset[StreamPaddingSlot(1, 7)].is_padding is True
+
+
+def test_a_concatenated_split_hands_its_sources_the_seed_and_the_padding_of_a_slot() -> None:
+    first, second = _AugmentedDataset(), _AugmentedDataset()
+    split = ConcatDataset([first, second], repeats=[1, 1])
+
+    split[StreamSlot(0, 7)]
+    split[StreamSlot(3, 7)]
+    assert first.rotate.draws == second.rotate.draws
+
+    served: list[int] = []
+    with mock.patch.object(_Dataset, "__getitem__", lambda self, index: served.append(index)):
+        split[StreamPaddingSlot(3, 7)]
+        split[PaddingSlot(3)]
+    assert isinstance(served[0], StreamPaddingSlot) and served[0].augmentation_seed == 7
+    assert served[0] == 1
+    assert type(served[1]) is PaddingSlot

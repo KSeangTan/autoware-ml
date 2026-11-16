@@ -30,6 +30,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 import torch
 import torch.distributed as dist
 from torch.utils.data import Dataset
@@ -38,7 +39,13 @@ from torch.utils.data.distributed import DistributedSampler
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDatasetSchema
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.taxonomy import LabelTaxonomy
-from autoware_ml.datamodule.base_dataset import BaseDataset, ConcatDataset, PaddingSlot
+from autoware_ml.datamodule.base_dataset import (
+    BaseDataset,
+    ConcatDataset,
+    PaddingSlot,
+    StreamPaddingSlot,
+    StreamSlot,
+)
 from autoware_ml.transforms.boxes3d.filters import parse_exclusion_rules
 from autoware_ml.types.geometry import Box3DFieldIndex
 
@@ -332,6 +339,10 @@ class GroupStreamingSampler(DistributedSampler):
     ``num_lanes`` slots of an epoch are padding, and no frame is dropped or served twice as a
     real sample, in training, evaluation and prediction alike.
 
+    With ``consistent_augmentation`` every frame is a ``StreamSlot`` carrying a seed drawn
+    from ``seed``, the epoch and its scene, so a dataset augments every frame of a scene alike
+    and the scene anew in the next epoch, as Sparse4D keeps the augmentation of a sequence.
+
     As a ``DistributedSampler`` it is never wrapped by Lightning, whose wrapper would keep
     only every ``num_replicas``-th index of each rank and make its lanes skip frames.
     """
@@ -344,6 +355,7 @@ class GroupStreamingSampler(DistributedSampler):
         shuffle: bool,
         seed: int,
         max_group_length: int | None = None,
+        consistent_augmentation: bool = False,
     ) -> None:
         """Initialize the streaming sampler.
 
@@ -356,6 +368,8 @@ class GroupStreamingSampler(DistributedSampler):
             seed: Base seed for the per-epoch scene shuffle, the experiment seed.
             max_group_length: Longest stream in frames, longer scenes are cut into consecutive
                 chunks. None streams whole scenes.
+            consistent_augmentation: Whether every frame of a scene carries the same
+                augmentation seed, redrawn every epoch.
 
         Raises:
             ValueError: If ``max_group_length`` is not positive.
@@ -374,6 +388,7 @@ class GroupStreamingSampler(DistributedSampler):
         if not self.scene_groups:
             raise ValueError("GroupStreamingSampler requires at least one scene group.")
         self.batch_size = batch_size
+        self.consistent_augmentation = consistent_augmentation
         self.total_frames = sum(len(group) for group in self.scene_groups)
         self._validate_lanes()
 
@@ -404,16 +419,33 @@ class GroupStreamingSampler(DistributedSampler):
         generator.manual_seed(self.seed + epoch)
         return torch.randperm(len(self.scene_groups), generator=generator).tolist()
 
-    def _cut_lanes(self, scene_order: Sequence[int]) -> Sequence[Sequence[int]]:
+    def _scene_frames(self, scene_index: int, epoch: int) -> Sequence[int]:
+        """Frames of one scene for an epoch, stream slots of one seed with the augmentation."""
+        frames = self.scene_groups[scene_index]
+        if not self.consistent_augmentation:
+            return frames
+        entropy = [self.seed, epoch, scene_index]
+        augmentation_seed = int(np.random.SeedSequence(entropy).generate_state(1)[0])
+        return [StreamSlot(index, augmentation_seed) for index in frames]
+
+    def _cut_lanes(self, scene_order: Sequence[int], epoch: int = 0) -> Sequence[Sequence[int]]:
         """Cut the joined frames of the epoch into ``num_lanes`` lanes of (almost) equal length."""
-        frames = [index for scene_index in scene_order for index in self.scene_groups[scene_index]]
+        frames = [
+            index for scene_index in scene_order for index in self._scene_frames(scene_index, epoch)
+        ]
         bounds = [lane * len(frames) // self.num_lanes for lane in range(self.num_lanes + 1)]
         return [frames[start:end] for start, end in zip(bounds[:-1], bounds[1:])]
 
     @staticmethod
     def _pad_lane(lane: Sequence[int], rounds: int) -> Sequence[int]:
         """End a lane with padding slots holding its last frame, up to a length of ``rounds``."""
-        return [*lane, *[PaddingSlot(lane[-1])] * (rounds - len(lane))]
+        last = lane[-1]
+        padding = (
+            StreamPaddingSlot(last, last.augmentation_seed)
+            if isinstance(last, StreamSlot)
+            else PaddingSlot(last)
+        )
+        return [*lane, *[padding] * (rounds - len(lane))]
 
     def _log_epoch(self, epoch: int) -> None:
         """Log the padding slots that keep the lanes of an epoch aligned."""
@@ -430,7 +462,7 @@ class GroupStreamingSampler(DistributedSampler):
 
     def __iter__(self):
         """Yield this rank's lanes for the current epoch, one frame of every lane a round."""
-        lanes = self._cut_lanes(self._scene_order(self.epoch))
+        lanes = self._cut_lanes(self._scene_order(self.epoch), self.epoch)
         first_lane = self.rank * self.batch_size
         rank_lanes = [
             self._pad_lane(lane, self.rounds_per_epoch)

@@ -42,6 +42,9 @@ class DataLoaderConfig:
         drop_last: Whether to drop the final incomplete batch.
         stream_max_frames: Longest stream of a streaming datamodule, longer scenes are cut into
             consecutive streams. None streams whole scenes.
+        stream_consistent_augmentation: Whether a streaming datamodule augments every frame of
+            a stream alike, with one draw per stream and epoch, instead of every frame on its
+            own.
     """
 
     batch_size: int = 1
@@ -51,6 +54,7 @@ class DataLoaderConfig:
     shuffle: bool = False
     drop_last: bool = False
     stream_max_frames: int | None = None
+    stream_consistent_augmentation: bool = False
 
     def to_dataloader_kwargs(self) -> dict[str, Any]:
         """Convert to keyword arguments accepted by ``DataLoader``.
@@ -246,10 +250,11 @@ class DataModule(L.LightningDataModule):
             )
         if config is None:
             raise ValueError(f"Split {split} has no dataloader settings.")
-        if config.stream_max_frames is not None:
+        if config.stream_max_frames is not None or config.stream_consistent_augmentation:
             raise ValueError(
-                f"Split {split} sets stream_max_frames, which only the streaming datamodule "
-                "reads. Compose /datamodule/streaming@datamodule: default_streaming_datamodule."
+                f"Split {split} sets stream_max_frames or stream_consistent_augmentation, which "
+                "only the streaming datamodule reads. Compose "
+                "/datamodule/streaming@datamodule: default_streaming_datamodule."
             )
 
         kwargs = config.to_dataloader_kwargs()

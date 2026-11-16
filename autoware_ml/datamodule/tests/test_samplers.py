@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pickle
 from types import MappingProxyType
 
 import numpy as np
@@ -10,7 +11,12 @@ import pytest
 from torch.utils.data.distributed import DistributedSampler
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
-from autoware_ml.datamodule.base_dataset import ConcatDataset, PaddingSlot
+from autoware_ml.datamodule.base_dataset import (
+    ConcatDataset,
+    PaddingSlot,
+    StreamPaddingSlot,
+    StreamSlot,
+)
 from autoware_ml.datamodule.samplers import (
     LOW_PEDESTRIAN_CATEGORY,
     DistributedWeightedRandomSampler,
@@ -585,3 +591,81 @@ def test_a_lane_ends_with_at_most_one_padding_slot_holding_its_last_frame(
                 assert not any(padded[:-1])
                 if padded[-1]:
                     assert lane[-1] == lane[-2]
+
+
+def _stream_sampler(scene_lengths: list[int], batch_size: int, seed: int = 0, **settings):
+    return GroupStreamingSampler(
+        _FakeScenesDataset(scene_lengths),
+        batch_size=batch_size,
+        seed=seed,
+        consistent_augmentation=True,
+        **{"shuffle": False, **settings},
+    )
+
+
+def test_frames_of_a_scene_carry_one_augmentation_seed_and_scenes_differ() -> None:
+    """
+    Input: scenes of 6, 3 and 3 frames through two lanes with the consistent augmentation.
+    Expected: the same frames in the same order as without it, every frame a stream slot whose
+    seed is the one of its scene.
+    """
+    sampler = _stream_sampler([6, 3, 3], batch_size=2)
+    plain = GroupStreamingSampler(
+        _FakeScenesDataset([6, 3, 3]), batch_size=2, shuffle=False, seed=0
+    )
+
+    indices = list(sampler)
+    seeds = {
+        scene: {slot.augmentation_seed for slot in indices if int(slot) in frames}
+        for scene, frames in enumerate([range(0, 6), range(6, 9), range(9, 12)])
+    }
+
+    assert [int(index) for index in indices] == list(plain)
+    assert all(isinstance(index, StreamSlot) for index in indices)
+    assert all(len(scene_seeds) == 1 for scene_seeds in seeds.values())
+    assert len(set.union(*seeds.values())) == 3
+
+
+def test_a_scene_is_augmented_anew_every_epoch_and_alike_on_every_rank() -> None:
+    first, second = _stream_sampler([4, 4], batch_size=2), _stream_sampler([4, 4], batch_size=2)
+    other_run = _stream_sampler([4, 4], batch_size=2, seed=1)
+
+    def seeds(sampler: GroupStreamingSampler, epoch: int) -> list[int]:
+        sampler.set_epoch(epoch)
+        return [slot.augmentation_seed for slot in sampler]
+
+    assert seeds(first, 0) == seeds(second, 0)
+    assert set(seeds(first, 0)).isdisjoint(seeds(first, 1))
+    assert set(seeds(first, 0)).isdisjoint(seeds(other_run, 0))
+
+
+def test_a_scene_keeps_its_seed_when_the_scenes_are_shuffled_and_cut_into_lanes() -> None:
+    sampler = _stream_sampler([5, 4, 3, 2], batch_size=3, shuffle=True)
+    scene_of = {index: scene for scene, group in enumerate(sampler.scene_groups) for index in group}
+
+    seeds: dict[int, set[int]] = {}
+    for slot in sampler:
+        seeds.setdefault(scene_of[int(slot)], set()).add(slot.augmentation_seed)
+
+    assert all(len(scene_seeds) == 1 for scene_seeds in seeds.values())
+
+
+def test_a_padding_slot_keeps_the_seed_of_the_frame_it_repeats() -> None:
+    sampler = _stream_sampler([3, 2], batch_size=2)
+
+    # The five frames are cut into lanes of two and three, the shorter one is padded
+    short_lane = _lanes(sampler)[0]
+    padding = short_lane[-1]
+
+    assert isinstance(padding, StreamPaddingSlot) and isinstance(padding, PaddingSlot)
+    assert padding == short_lane[-2]
+    assert padding.augmentation_seed == short_lane[-2].augmentation_seed
+
+
+def test_a_stream_slot_keeps_its_seed_through_a_worker_and_a_concatenated_split() -> None:
+    slot, padding = StreamSlot(3, 42), StreamPaddingSlot(3, 42)
+
+    assert pickle.loads(pickle.dumps(slot)).augmentation_seed == 42
+    assert isinstance(pickle.loads(pickle.dumps(padding)), StreamPaddingSlot)
+    assert slot.at(1) == 1 and slot.at(1).augmentation_seed == 42
+    assert isinstance(padding.at(1), StreamPaddingSlot)
