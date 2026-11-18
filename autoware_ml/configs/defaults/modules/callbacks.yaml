@@ -56,5 +56,11 @@ callbacks:
     _target_: autoware_ml.callbacks.grad_norm_monitor.GradNormMonitor
     norm_type: l2
 
+  # Logs train/loss_scale, the loss scale of the AMP gradient scaler, under precision 16-mixed.
+  # A drop is an optimizer step skipped for non-finite gradients. The precisions without a
+  # scaler (bf16-mixed, 32-true) log nothing.
+  grad_scaler_monitor:
+    _target_: autoware_ml.callbacks.grad_scaler_monitor.GradScalerMonitor
+
   model_summary_example_input:
     _target_: autoware_ml.callbacks.model_summary_example_input.ModelSummaryExampleInput

@@ -77,6 +77,7 @@ def call_configured_factory(factory: Any, /, **runtime_kwargs: Any) -> Any:
 def build_optimizer_param_groups(
     model: nn.Module,
     group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
+    base_lr: float | None = None,
 ) -> list[nn.Parameter] | list[dict[str, Any]]:
     """Build optimizer parameter groups from model-defined named groups.
 
@@ -87,11 +88,18 @@ def build_optimizer_param_groups(
     Args:
         model: Model providing ``build_optimizer_groups`` and parameters.
         group_overrides: Optional per-group optimizer overrides keyed by group
-            name, for example ``{"backbone": {"lr": 1e-4}}``.
+            name, for example ``{"backbone": {"lr": 1e-4}}``. ``lr_scale`` sets
+            the learning rate of a group as a fraction of ``base_lr`` instead,
+            for example ``{"backbone": {"lr_scale": 0.1}}``.
+        base_lr: Learning rate of the optimizer, which ``lr_scale`` multiplies.
 
     Returns:
         Either a flat list of parameters or a list of optimizer parameter group
         dictionaries compatible with PyTorch optimizers.
+
+    Raises:
+        ValueError: If an override names an unknown group, sets both ``lr`` and
+            ``lr_scale``, or sets ``lr_scale`` without a ``base_lr`` to scale.
     """
     if hasattr(model, "build_optimizer_groups"):
         named_groups: Mapping[str, Sequence[nn.Parameter]] = model.build_optimizer_groups()
@@ -108,7 +116,7 @@ def build_optimizer_param_groups(
 
     param_groups: list[dict[str, Any]] = []
     for group_name, params in named_groups.items():
-        group_override = dict(overrides.pop(group_name, {}))
+        group_override = _resolve_lr_scale(group_name, overrides.pop(group_name, {}), base_lr)
         param_groups.append({"params": list(params), **group_override})
         logger.info(
             "Optimizer param group '%s' has %d tensors%s.",
@@ -121,6 +129,37 @@ def build_optimizer_param_groups(
         raise ValueError(f"Unknown optimizer group override(s): {sorted(overrides)}")
 
     return param_groups
+
+
+def _resolve_lr_scale(
+    group_name: str, group_override: Mapping[str, Any], base_lr: float | None
+) -> dict[str, Any]:
+    """Turn the ``lr_scale`` of a group override into the learning rate of the group.
+
+    Args:
+        group_name: Name of the optimizer group, for the error messages.
+        group_override: Optimizer overrides of the group.
+        base_lr: Learning rate of the optimizer, which ``lr_scale`` multiplies.
+
+    Returns:
+        The overrides with ``lr_scale`` replaced by ``lr``.
+
+    Raises:
+        ValueError: If the group sets both ``lr`` and ``lr_scale``, or sets ``lr_scale``
+            without a ``base_lr`` to scale.
+    """
+    group_override = dict(group_override)
+    if "lr_scale" not in group_override:
+        return group_override
+    if "lr" in group_override:
+        raise ValueError(f"Optimizer group '{group_name}' sets both lr and lr_scale.")
+    if base_lr is None:
+        raise ValueError(
+            f"Optimizer group '{group_name}' sets lr_scale, but the optimizer factory binds no "
+            "lr to scale."
+        )
+    group_override["lr"] = float(base_lr) * float(group_override.pop("lr_scale"))
+    return group_override
 
 
 def build_lightning_optimizer_config(
@@ -139,7 +178,9 @@ def build_lightning_optimizer_config(
         optimizer_factory: Configured optimizer factory.
         scheduler_factory: Optional configured scheduler factory.
         optimizer_group_overrides: Optional per-group optimizer overrides keyed
-            by the names returned from ``model.build_optimizer_groups()``.
+            by the names returned from ``model.build_optimizer_groups()``. A group
+            sets ``lr_scale`` to train at that fraction of the ``lr`` bound in
+            ``optimizer_factory``.
         scheduler_config: Optional Lightning scheduler metadata such as
             ``interval``, ``frequency``, or ``monitor``.
         estimated_stepping_batches: Total number of optimizer steps, used to
@@ -149,7 +190,11 @@ def build_lightning_optimizer_config(
     Returns:
         Optimizer instance or a Lightning optimizer configuration dictionary.
     """
-    param_groups = build_optimizer_param_groups(model, optimizer_group_overrides)
+    param_groups = build_optimizer_param_groups(
+        model,
+        optimizer_group_overrides,
+        base_lr=_get_partial_keywords(optimizer_factory).get("lr"),
+    )
     optimizer = call_configured_factory(optimizer_factory, params=param_groups)
 
     if scheduler_factory is None:

@@ -17,6 +17,8 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import logging
+from pathlib import Path
 
 from jaxtyping import Float32
 import torch
@@ -24,6 +26,11 @@ import torch.nn as nn
 
 from autoware_ml.models.common.multiview_image_encoder import encode_multiview_pyramid
 from autoware_ml.ops.deformable_aggregation.image_deformable_aggregation import ImageFeatures
+
+logger = logging.getLogger(__name__)
+
+# Prefix of the camera branch in the state dict of a Sparse4D detector
+CAMERA_NETWORK_PREFIX = "camera_network."
 
 
 class Sparse4DCamera(nn.Module):
@@ -36,7 +43,11 @@ class Sparse4DCamera(nn.Module):
     """
 
     def __init__(
-        self, img_backbone: nn.Module, img_neck: nn.Module, feature_strides: Sequence[int]
+        self,
+        img_backbone: nn.Module,
+        img_neck: nn.Module,
+        feature_strides: Sequence[int],
+        weights: str | Path | None = None,
     ) -> None:
         """Initialize the camera branch.
 
@@ -44,6 +55,8 @@ class Sparse4DCamera(nn.Module):
             img_backbone: Image backbone run on every camera.
             img_neck: Image neck returning one map per stride.
             feature_strides: Stride of every map of the neck against the images, finest first.
+            weights: Checkpoint the backbone and the neck start from, see
+                :meth:`load_weights`. None keeps their own initialization.
 
         Raises:
             ValueError: If no stride is given.
@@ -54,6 +67,48 @@ class Sparse4DCamera(nn.Module):
         self.img_backbone = img_backbone
         self.img_neck = img_neck
         self.feature_strides = tuple(int(stride) for stride in feature_strides)
+        if weights is not None:
+            self.load_weights(weights)
+
+    def load_weights(self, weights: str | Path) -> None:
+        """Load the image backbone and the neck from a checkpoint of a camera branch.
+
+        The checkpoint is a state dict, bare or under ``state_dict``, whose keys name the
+        backbone and the neck as this branch does (``img_backbone.*``, ``img_neck.*``) or as a
+        Sparse4D detector does (``camera_network.img_backbone.*``). Its other keys, the head
+        of a detector, are left out. The load is strict: every parameter and buffer of the
+        backbone and of the neck comes from the checkpoint, so it replaces any weights the
+        backbone loaded on its own.
+
+        Args:
+            weights: Path of the checkpoint.
+
+        Raises:
+            FileNotFoundError: If the checkpoint does not exist.
+            ValueError: If the checkpoint holds no key of the backbone or of the neck.
+            RuntimeError: If the checkpoint does not match the backbone and the neck.
+        """
+        path = Path(weights)
+        if not path.is_file():
+            raise FileNotFoundError(f"Camera branch weights {path} do not exist.")
+        checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+        state_dict = checkpoint.get("state_dict", checkpoint)
+        branch_state_dict = {
+            key.removeprefix(CAMERA_NETWORK_PREFIX): value for key, value in state_dict.items()
+        }
+        branch_state_dict = {
+            key: value
+            for key, value in branch_state_dict.items()
+            if key.startswith(("img_backbone.", "img_neck."))
+        }
+        if not branch_state_dict:
+            raise ValueError(f"{path} holds no img_backbone or img_neck weights.")
+        self.load_state_dict(branch_state_dict, strict=True)
+        logger.info(
+            "Loaded %d tensors of the image backbone and neck from %s.",
+            len(branch_state_dict),
+            path,
+        )
 
     def forward(
         self,

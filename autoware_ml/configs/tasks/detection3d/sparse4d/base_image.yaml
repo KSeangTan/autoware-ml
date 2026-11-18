@@ -17,7 +17,19 @@
 image_strides: [4, 8, 16, 32]
 image_channels: 256
 
+# Learning rate of the image backbone and of the image neck as a fraction of `optimizer.lr`.
+# Below 1.0 the pretrained image features train slower than the head, 1.0 trains them alike.
+# The scheduler warms up and decays every group from its own learning rate.
+image_backbone_lr_scale: 1.0
+image_neck_lr_scale: 1.0
+
 model:
+  optimizer_group_overrides:
+    img_backbone:
+      lr_scale: ${image_backbone_lr_scale}
+    img_neck:
+      lr_scale: ${image_neck_lr_scale}
+
   camera_network:
     _target_: autoware_ml.models.detection3d.main_modules.sparse4ds.sparse4d_camera.Sparse4DCamera
     img_backbone:
@@ -31,6 +43,9 @@ model:
       out_channels: ${image_channels}
       num_outs: 4
     feature_strides: ${image_strides}
+    # Checkpoint holding the image backbone and neck to start from, the camera branch of
+    # another detector. It replaces the weights the backbone loads on its own, null keeps them.
+    weights: null
 
   bbox_head:
     image_strides: ${image_strides}

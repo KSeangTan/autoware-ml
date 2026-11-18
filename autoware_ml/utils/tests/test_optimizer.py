@@ -10,6 +10,7 @@ import torch.nn as nn
 from omegaconf import OmegaConf
 from torch.optim.lr_scheduler import OneCycleLR
 
+from autoware_ml.utils.schedulers.cyclic_cosine_annealing import StepCyclicCosineAnnealingLR
 from autoware_ml.utils.optimizer import (
     build_lightning_optimizer_config,
     build_optimizer_param_groups,
@@ -44,6 +45,45 @@ def test_build_optimizer_param_groups_assigns_named_groups() -> None:
     assert param_groups[1]["lr"] == 1e-4
     assert len(param_groups[0]["params"]) == 2
     assert len(param_groups[1]["params"]) == 2
+
+
+def test_build_optimizer_param_groups_scales_the_base_lr_of_a_group() -> None:
+    param_groups = build_optimizer_param_groups(
+        _ToyModule(), {"block": {"lr_scale": 0.1, "weight_decay": 0.0}}, base_lr=2e-4
+    )
+
+    assert "lr" not in param_groups[0]
+    assert param_groups[1]["lr"] == pytest.approx(2e-5)
+    assert param_groups[1]["weight_decay"] == 0.0
+    assert "lr_scale" not in param_groups[1]
+
+
+def test_build_optimizer_param_groups_rejects_an_lr_scale_it_cannot_resolve() -> None:
+    with pytest.raises(ValueError, match="both lr and lr_scale"):
+        build_optimizer_param_groups(
+            _ToyModule(), {"block": {"lr": 1e-4, "lr_scale": 0.1}}, base_lr=1e-3
+        )
+    with pytest.raises(ValueError, match="binds no lr to scale"):
+        build_optimizer_param_groups(_ToyModule(), {"block": {"lr_scale": 0.1}})
+
+
+def test_build_lightning_optimizer_config_scales_a_group_through_the_schedule() -> None:
+    optimizers = build_lightning_optimizer_config(
+        _ToyModule(),
+        optimizer_factory=partial(torch.optim.AdamW, lr=1e-3),
+        scheduler_factory=partial(
+            StepCyclicCosineAnnealingLR, warmup_epochs=1, decay_epochs=1, max_lr_factor=2.0
+        ),
+        optimizer_group_overrides=OmegaConf.create({"block": {"lr_scale": 0.1}}),
+        estimated_stepping_batches=8,
+    )
+    optimizer, scheduler = optimizers["optimizer"], optimizers["lr_scheduler"]["scheduler"]
+
+    for _ in range(8):
+        default_lr, block_lr = (group["lr"] for group in optimizer.param_groups)
+        assert block_lr == pytest.approx(0.1 * default_lr)
+        optimizer.step()
+        scheduler.step()
 
 
 def test_build_optimizer_param_groups_rejects_unknown_group_overrides() -> None:

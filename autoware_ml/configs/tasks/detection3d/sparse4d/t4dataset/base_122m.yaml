@@ -127,6 +127,9 @@ datasets:
 
           point_cloud_range: ${point_cloud_range}
 
+        # Counted once in the points the model sees, the filters below read the stored count
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesPointCount
+
         # Order matters, it first filters bboxes within the default meters with less than 2 points.
         # Then it filters bboxes within 60 meters with less than 3 points
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesMinPointsFilter
@@ -138,14 +141,14 @@ datasets:
             - ${point_cloud_range.1}
             - ${point_cloud_range.3}
             - ${point_cloud_range.4}
+          use_bbox_num_lidar_points: true
 
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesMinPointsFilter
           _convert_: all
 
           min_points: 3
           bev_range: [-60.0, -60.0, 60.0, 60.0]
-
-        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesPointCount
+          use_bbox_num_lidar_points: true
 
   test:
     transforms:

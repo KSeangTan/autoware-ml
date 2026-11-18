@@ -90,7 +90,9 @@ class Sparse4DDetectionModel(ModuleBaseModel):
             log_dict_configs: Logging configuration for training and validation.
             optimizer: Optimizer factory.
             scheduler: Scheduler factory.
-            optimizer_group_overrides: Optimizer overrides keyed by optimizer group name.
+            optimizer_group_overrides: Optimizer overrides keyed by optimizer group name, see
+                :meth:`build_optimizer_groups`. ``{"img_backbone": {"lr_scale": 0.1}}`` trains
+                the image backbone at a tenth of the learning rate of the optimizer.
             scheduler_config: Lightning scheduler metadata such as ``interval``.
             metrics: Detection metrics accumulated during validation and test.
 
@@ -111,6 +113,26 @@ class Sparse4DDetectionModel(ModuleBaseModel):
         self.lidar_network = lidar_network
         self.camera_network = camera_network
         self.bbox_head = bbox_head
+
+    def build_optimizer_groups(self) -> dict[str, list[torch.nn.Parameter]]:
+        """Split the parameters into the image backbone, the image neck and the rest.
+
+        A pretrained image backbone and neck usually train slower than the head, so a detector
+        with a camera branch gives each a group of its own, ``img_backbone`` and ``img_neck``,
+        for ``optimizer_group_overrides`` to slow down. A lidar only detector keeps the single
+        ``default`` group.
+
+        Returns:
+            The trainable parameters of every group, ``default`` holding the rest of the model.
+        """
+        groups: dict[str, list[torch.nn.Parameter]] = {}
+        if self.camera_network is not None:
+            for name in ("img_backbone", "img_neck"):
+                module = getattr(self.camera_network, name)
+                groups[name] = [p for p in module.parameters() if p.requires_grad]
+        grouped = {id(p) for params in groups.values() for p in params}
+        default = [p for p in self.parameters() if p.requires_grad and id(p) not in grouped]
+        return {"default": default, **groups}
 
     def on_train_epoch_start(self) -> None:
         """Move the head to the training epoch, its local attention follows the epochs."""

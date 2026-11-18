@@ -25,6 +25,7 @@ from autoware_ml.datamodule.samplers import (
     compute_frame_sampling_weights,
 )
 from autoware_ml.databases.taxonomy import LabelTaxonomy, LabelVocabulary
+from autoware_ml.transforms.base import StreamParameters
 from autoware_ml.datamodule.t4dataset.dataset import T4Dataset
 from autoware_ml.types.geometry import Box3DFieldIndex
 
@@ -329,6 +330,10 @@ class _FakeScenesDataset:
     def scene_index_groups(self) -> list[list[int]]:
         return [list(group) for group in self._groups]
 
+    def sample_stream_augmentation(self, index: int) -> tuple[float]:
+        """One value drawn as a pipeline draws the rotation of a stream."""
+        return (float(np.random.uniform()),)
+
     def __len__(self) -> int:
         return sum(len(group) for group in self._groups)
 
@@ -603,11 +608,11 @@ def _stream_sampler(scene_lengths: list[int], batch_size: int, seed: int = 0, **
     )
 
 
-def test_frames_of_a_scene_carry_one_augmentation_seed_and_scenes_differ() -> None:
+def test_frames_of_a_scene_carry_one_augmentation_and_scenes_differ() -> None:
     """
     Input: scenes of 6, 3 and 3 frames through two lanes with the consistent augmentation.
     Expected: the same frames in the same order as without it, every frame a stream slot whose
-    seed is the one of its scene.
+    augmentation is the one drawn for its scene.
     """
     sampler = _stream_sampler([6, 3, 3], batch_size=2)
     plain = GroupStreamingSampler(
@@ -615,42 +620,53 @@ def test_frames_of_a_scene_carry_one_augmentation_seed_and_scenes_differ() -> No
     )
 
     indices = list(sampler)
-    seeds = {
-        scene: {slot.augmentation_seed for slot in indices if int(slot) in frames}
+    drawn = {
+        scene: {slot.augmentation for slot in indices if int(slot) in frames}
         for scene, frames in enumerate([range(0, 6), range(6, 9), range(9, 12)])
     }
 
     assert [int(index) for index in indices] == list(plain)
     assert all(isinstance(index, StreamSlot) for index in indices)
-    assert all(len(scene_seeds) == 1 for scene_seeds in seeds.values())
-    assert len(set.union(*seeds.values())) == 3
+    assert all(len(scene_drawn) == 1 for scene_drawn in drawn.values())
+    assert len(set.union(*drawn.values())) == 3
 
 
 def test_a_scene_is_augmented_anew_every_epoch_and_alike_on_every_rank() -> None:
     first, second = _stream_sampler([4, 4], batch_size=2), _stream_sampler([4, 4], batch_size=2)
     other_run = _stream_sampler([4, 4], batch_size=2, seed=1)
 
-    def seeds(sampler: GroupStreamingSampler, epoch: int) -> list[int]:
+    def drawn(sampler: GroupStreamingSampler, epoch: int) -> list[tuple]:
         sampler.set_epoch(epoch)
-        return [slot.augmentation_seed for slot in sampler]
+        return [slot.augmentation for slot in sampler]
 
-    assert seeds(first, 0) == seeds(second, 0)
-    assert set(seeds(first, 0)).isdisjoint(seeds(first, 1))
-    assert set(seeds(first, 0)).isdisjoint(seeds(other_run, 0))
+    assert drawn(first, 0) == drawn(second, 0)
+    assert set(drawn(first, 0)).isdisjoint(drawn(first, 1))
+    assert set(drawn(first, 0)).isdisjoint(drawn(other_run, 0))
 
 
-def test_a_scene_keeps_its_seed_when_the_scenes_are_shuffled_and_cut_into_lanes() -> None:
+def test_drawing_the_augmentation_leaves_the_random_state_as_it_was() -> None:
+    sampler = _stream_sampler([4, 4], batch_size=2)
+    np.random.seed(11)
+    expected = np.random.uniform(size=3).tolist()
+
+    np.random.seed(11)
+    list(sampler)
+
+    assert np.random.uniform(size=3).tolist() == expected
+
+
+def test_a_scene_keeps_its_augmentation_when_the_scenes_are_shuffled_and_cut_into_lanes() -> None:
     sampler = _stream_sampler([5, 4, 3, 2], batch_size=3, shuffle=True)
     scene_of = {index: scene for scene, group in enumerate(sampler.scene_groups) for index in group}
 
-    seeds: dict[int, set[int]] = {}
+    drawn: dict[int, set[tuple]] = {}
     for slot in sampler:
-        seeds.setdefault(scene_of[int(slot)], set()).add(slot.augmentation_seed)
+        drawn.setdefault(scene_of[int(slot)], set()).add(slot.augmentation)
 
-    assert all(len(scene_seeds) == 1 for scene_seeds in seeds.values())
+    assert all(len(scene_drawn) == 1 for scene_drawn in drawn.values())
 
 
-def test_a_padding_slot_keeps_the_seed_of_the_frame_it_repeats() -> None:
+def test_a_padding_slot_keeps_the_augmentation_of_the_frame_it_repeats() -> None:
     sampler = _stream_sampler([3, 2], batch_size=2)
 
     # The five frames are cut into lanes of two and three, the shorter one is padded
@@ -659,13 +675,14 @@ def test_a_padding_slot_keeps_the_seed_of_the_frame_it_repeats() -> None:
 
     assert isinstance(padding, StreamPaddingSlot) and isinstance(padding, PaddingSlot)
     assert padding == short_lane[-2]
-    assert padding.augmentation_seed == short_lane[-2].augmentation_seed
+    assert padding.augmentation == short_lane[-2].augmentation
 
 
-def test_a_stream_slot_keeps_its_seed_through_a_worker_and_a_concatenated_split() -> None:
-    slot, padding = StreamSlot(3, 42), StreamPaddingSlot(3, 42)
+def test_a_stream_slot_keeps_its_augmentation_through_a_worker_and_a_concatenated_split() -> None:
+    augmentation = (StreamParameters(True, (0.1, 1.02, (0.0, 0.1, 0.0))), None)
+    slot, padding = StreamSlot(3, augmentation), StreamPaddingSlot(3, augmentation)
 
-    assert pickle.loads(pickle.dumps(slot)).augmentation_seed == 42
+    assert pickle.loads(pickle.dumps(slot)).augmentation == augmentation
     assert isinstance(pickle.loads(pickle.dumps(padding)), StreamPaddingSlot)
-    assert slot.at(1) == 1 and slot.at(1).augmentation_seed == 42
+    assert slot.at(1) == 1 and slot.at(1).augmentation == augmentation
     assert isinstance(padding.at(1), StreamPaddingSlot)

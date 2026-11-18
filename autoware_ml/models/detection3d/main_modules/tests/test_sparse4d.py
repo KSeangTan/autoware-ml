@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -133,6 +134,58 @@ def _with_images(batch: ModelBatchInputs) -> ModelBatchInputs:
             calibration_statuses=None,
         )
     )
+
+
+def test_a_lidar_only_detector_keeps_one_optimizer_group(tmp_path: Path) -> None:
+    model = _build_model(tmp_path)
+
+    groups = model.build_optimizer_groups()
+
+    assert list(groups) == ["default"]
+    assert len(groups["default"]) == sum(p.requires_grad for p in model.parameters())
+
+
+def test_the_image_backbone_and_neck_train_at_a_fraction_of_the_learning_rate(
+    tmp_path: Path,
+) -> None:
+    model = Sparse4DDetectionModel(
+        data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
+        lidar_network=None,
+        camera_network=_camera_network(),
+        bbox_head=build_sparse4d_head(
+            make_anchor_file(tmp_path),
+            lidar_sampling="none",
+            image_strides=IMAGE_STRIDES,
+            image_channels=IMAGE_CHANNELS,
+        ),
+        log_dict_configs=LogDictConfigs(prog_bar=False),
+        optimizer=partial(torch.optim.AdamW, lr=1e-4),
+        optimizer_group_overrides={
+            "img_backbone": {"lr_scale": 0.1},
+            "img_neck": {"lr_scale": 0.5},
+        },
+    )
+
+    optimizer = model.configure_optimizers()
+    learning_rates = {
+        id(parameter): group["lr"]
+        for group in optimizer.param_groups
+        for parameter in group["params"]
+    }
+
+    # Every trainable parameter is optimized once, in the group of its module
+    trainable = {name: p for name, p in model.named_parameters() if p.requires_grad}
+    assert len(learning_rates) == len(trainable)
+    assert sum(len(group["params"]) for group in optimizer.param_groups) == len(learning_rates)
+    for name, parameter in trainable.items():
+        expected = (
+            1e-5
+            if name.startswith("camera_network.img_backbone.")
+            else 5e-5
+            if name.startswith("camera_network.img_neck.")
+            else 1e-4
+        )
+        assert learning_rates[id(parameter)] == pytest.approx(expected), name
 
 
 @pytest.mark.parametrize("lidar_sampling", ["bev", "bev_attention", "none"])

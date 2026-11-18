@@ -136,14 +136,22 @@ if __name__ == "__main__":
 
 
 class _Rotate(BaseTransform):
-    """Record one random draw of every sample, as a rotation reads its angle."""
+    """Record the angle applied to every sample, drawn per sample or handed in by its stream."""
 
     def __init__(self) -> None:
         super().__init__()
         self.draws: list[float] = []
 
+    def sample_parameters(self) -> float:
+        return float(np.random.uniform())
+
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        self.draws.append(float(np.random.uniform()))
+        return self.transform_with_parameters(model_gt_sample, self.sample_parameters())
+
+    def transform_with_parameters(
+        self, model_gt_sample: ModelGTSample, parameters: float
+    ) -> ModelGTSample:
+        self.draws.append(parameters)
         return model_gt_sample
 
 
@@ -163,35 +171,47 @@ class _AugmentedDataset(_Dataset):
 
 def test_frames_of_a_stream_are_augmented_alike_and_other_frames_on_their_own() -> None:
     dataset = _AugmentedDataset()
+    stream, other = dataset.sample_stream_augmentation(0), dataset.sample_stream_augmentation(0)
 
-    in_stream = [dataset.draw(StreamSlot(index, 7)) for index in (0, 1, 0)]
-    other_stream = dataset.draw(StreamSlot(0, 8))
+    in_stream = [dataset.draw(StreamSlot(index, stream)) for index in (0, 1, 0)]
+    other_stream = dataset.draw(StreamSlot(0, other))
     on_their_own = [dataset.draw(0), dataset.draw(0)]
 
-    assert len(set(in_stream)) == 1
-    assert other_stream != in_stream[0]
+    assert set(in_stream) == {stream[0].values}
+    assert other_stream == other[0].values != in_stream[0]
     assert on_their_own[0] != on_their_own[1]
+
+
+def test_a_dataset_without_a_pipeline_draws_no_stream_augmentation() -> None:
+    dataset = _Dataset(max_num_2d_gt_bboxes=1)
+
+    assert dataset.sample_stream_augmentation(0) == ()
+    assert dataset[StreamSlot(1, ())].is_padding is False
 
 
 def test_a_stream_slot_is_served_as_the_frame_or_the_padding_it_stands_for() -> None:
     dataset = _AugmentedDataset()
+    stream = dataset.sample_stream_augmentation(0)
 
-    assert dataset[StreamSlot(1, 7)].is_padding is False
-    assert dataset[StreamPaddingSlot(1, 7)].is_padding is True
+    assert dataset[StreamSlot(1, stream)].is_padding is False
+    assert dataset[StreamPaddingSlot(1, stream)].is_padding is True
 
 
-def test_a_concatenated_split_hands_its_sources_the_seed_and_the_padding_of_a_slot() -> None:
+def test_a_concatenated_split_hands_its_sources_the_augmentation_and_the_padding_of_a_slot() -> (
+    None
+):
     first, second = _AugmentedDataset(), _AugmentedDataset()
     split = ConcatDataset([first, second], repeats=[1, 1])
+    stream = split.sample_stream_augmentation(3)
 
-    split[StreamSlot(0, 7)]
-    split[StreamSlot(3, 7)]
-    assert first.rotate.draws == second.rotate.draws
+    split[StreamSlot(0, stream)]
+    split[StreamSlot(3, stream)]
+    assert first.rotate.draws == second.rotate.draws == [stream[0].values]
 
     served: list[int] = []
     with mock.patch.object(_Dataset, "__getitem__", lambda self, index: served.append(index)):
-        split[StreamPaddingSlot(3, 7)]
+        split[StreamPaddingSlot(3, stream)]
         split[PaddingSlot(3)]
-    assert isinstance(served[0], StreamPaddingSlot) and served[0].augmentation_seed == 7
+    assert isinstance(served[0], StreamPaddingSlot) and served[0].augmentation == stream
     assert served[0] == 1
     assert type(served[1]) is PaddingSlot
