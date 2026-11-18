@@ -23,8 +23,11 @@ from torch import Tensor
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
+from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.transforms.camera.resize import (
     CropAndScale,
+    ImageAugmentationDraw,
+    ImageAugmentationParameters,
     PadMultiViewImage,
     ResizeCropFlipRotImage,
     ResizeMultiviewImages,
@@ -580,6 +583,125 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
         intrinsics = output.camera_image_data.augmented_camera_intrinsics
         self.assertFalse(torch.allclose(intrinsics[0], intrinsics[1]))
         self.assert_projection_is_consistent(output.camera_image_data)
+
+    def build_training_transform(self) -> ResizeCropFlipRotImage:
+        """A transform that draws every part of the augmentation."""
+        return ResizeCropFlipRotImage(
+            target_size=[16, 24],
+            resize_range=[0.5, 1.5],
+            bottom_crop_ratio_range=[0.0, 0.3],
+            training=True,
+            random_horizontal_flip=True,
+            rotation_range=[-5.0, 5.0],
+        )
+
+    def augmented_intrinsics(
+        self, pipeline: TransformsCompose
+    ) -> Float32[Tensor, "num_cameras 3 3"]:
+        """Augmented intrinsics the pipeline gives a fresh sample."""
+        output = pipeline(self.build_multi_task_gt_sample())
+        assert output.camera_image_data is not None
+        self.assert_projection_is_consistent(output.camera_image_data)
+        return output.camera_image_data.augmented_camera_intrinsics
+
+    def test_frames_and_cameras_of_a_stream_get_the_same_augmentation(self) -> None:
+        """
+        Input: a training transform drawing resize, crop, flip and rotation, two frames
+        transformed after the draw of one stream and one frame after the draw of another.
+        Expected: the draw the transform keeps augments every camera of every frame of its
+        stream, and another stream is augmented differently.
+        Check: the augmented intrinsics of the two frames are equal, the two cameras of a
+        frame are equal, and the frame of the other stream differs.
+        """
+        pipeline = TransformsCompose([self.build_training_transform()])
+
+        pipeline.keep_stream_parameters((0, 0, 0))
+        first = self.augmented_intrinsics(pipeline)
+        second = self.augmented_intrinsics(pipeline)
+        pipeline.keep_stream_parameters((0, 0, 1))
+        other = self.augmented_intrinsics(pipeline)
+
+        self.assertTrue(torch.equal(first, second))
+        self.assertTrue(torch.equal(first[0], first[1]))
+        self.assertFalse(torch.equal(first, other))
+
+    def test_cameras_draw_on_their_own_again_after_a_stream(self) -> None:
+        """
+        Input: a training transform that read a frame of a stream, and one frame outside
+        the stream transformed afterwards.
+        Expected: outside a stream every camera draws its own augmentation again.
+        Check: the transform of the pipeline keeps no parameters and the two cameras of the
+        frame get different augmented intrinsics.
+        """
+        np.random.seed(0)
+        transform = self.build_training_transform()
+        pipeline = TransformsCompose([transform])
+
+        pipeline.keep_stream_parameters((0, 0, 0))
+        pipeline.clear_stream_parameters()
+        intrinsics = self.augmented_intrinsics(pipeline)
+
+        self.assertIsNone(transform.parameters)
+        self.assertFalse(torch.equal(intrinsics[0], intrinsics[1]))
+
+    def test_the_drawn_parameters_are_the_ones_applied(self) -> None:
+        """
+        Input: a 32 x 48 image, a resize range of 0.5 to 1.5, a target of 16 x 24 and a draw
+        a quarter into the resize range, dropping a quarter at the bottom, with the crop in
+        the middle of the free width, a flip and a rotation of 3 degrees.
+        Expected: the pixel values of the camera are built from the draw and the image size.
+        Check: the image is resized to 24 x 36 and cropped at row 2 and column 6, with the
+        flip and the rotation of the draw.
+        """
+        transform = self.build_training_transform()
+        draw = ImageAugmentationDraw(
+            resize_fraction=0.25,
+            bottom_crop_ratio=0.25,
+            horizontal_flip=True,
+            rotation=3.0,
+            crop_left_fraction=0.5,
+        )
+
+        parameters = transform.sample_augmentation(self.image_height, self.image_width, draw)
+
+        # A quarter into the resize range of 0.5 to 1.5 is 0.75, so 32 x 48 becomes 24 x 36.
+        # Three quarters of the height are kept above the bottom crop, 18 rows, 2 more than
+        # the target, and the crop sits in the middle of the 12 free columns.
+        self.assertEqual(
+            parameters,
+            ImageAugmentationParameters(
+                resized_height=24,
+                resized_width=36,
+                crop_top=2,
+                crop_left=6,
+                horizontal_flip=True,
+                rotation=3.0,
+            ),
+        )
+
+    def test_a_stream_in_validation_is_augmented_as_a_single_frame(self) -> None:
+        """
+        Input: a validation transform, one frame transformed on its own and one after the
+        draw of a stream.
+        Expected: validation keeps the middle of every range for a stream, the values it
+        applies to a single frame.
+        Check: both frames get the same augmented intrinsics.
+        """
+        pipeline = TransformsCompose(
+            [
+                ResizeCropFlipRotImage(
+                    target_size=[16, 24],
+                    resize_range=[0.5, 1.5],
+                    bottom_crop_ratio_range=[0.0, 0.3],
+                    training=False,
+                )
+            ]
+        )
+
+        single_frame = self.augmented_intrinsics(pipeline)
+        pipeline.keep_stream_parameters((0, 0, 0))
+
+        self.assertTrue(torch.equal(self.augmented_intrinsics(pipeline), single_frame))
 
     @staticmethod
     def intensity_centroid(

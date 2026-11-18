@@ -239,9 +239,7 @@ class _SampleDataset(BaseDataset):
         """Return the sample of one index."""
         return self.samples[index]
 
-    def apply_transforms(
-        self, model_gt_sample: ModelGTSample, stream_parameters: object = None
-    ) -> ModelGTSample:
+    def apply_transforms(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Record every sample the pipeline receives and return it unchanged."""
         self.transformed.append(model_gt_sample)
         return model_gt_sample
