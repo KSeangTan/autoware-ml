@@ -13,7 +13,9 @@ acceptable on both axes at once.
 Matching is class-agnostic (a box detected where an object is avoids both a
 phantom and a miss), and only the unmatched boxes that are critical are counted.
 Frames whose scene has no lanelet map carry no TTC and are excluded from the
-per-frame denominator (the suite logs that coverage).
+per-frame denominator (the suite logs that coverage). A prediction on a ground
+truth box the suite ignores for its point count is no false positive, and such a
+box is never a false negative.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from collections import Counter
 import numpy as np
 
 from autoware_ml.metrics.base import EvalStage, Metric, number_token
-from autoware_ml.metrics.detection3d.criticality import greedy_match
+from autoware_ml.metrics.detection3d.criticality import greedy_match, ignored_matches
 from autoware_ml.metrics.detection3d.matching import Detection3DState
 from autoware_ml.metrics.detection3d.naming import label_metric_name
 from autoware_ml.metrics.detection3d.structures import DEFAULT_TP_THRESHOLD
@@ -107,6 +109,15 @@ class CriticalFPFN(Metric[Detection3DState]):
                 )
                 # Critical false positives: unmatched predictions that are in-path.
                 false_positive = (~is_tp) & kept_critical
+                if sample.ignore_boxes is not None:
+                    # A prediction on an ignored ground-truth box is no phantom.
+                    false_positive &= ~ignored_matches(
+                        sample.ignore_boxes.numpy().astype(np.float64)[:, :2],
+                        kept_boxes[:, :2],
+                        kept_scores,
+                        is_tp,
+                        self.match_threshold,
+                    )
                 matched = np.zeros(gt_boxes.shape[0], dtype=bool)
                 matched[matched_gt[is_tp]] = True
                 # Critical false negatives: unmatched ground truth that is in-path.

@@ -82,6 +82,38 @@ def greedy_match(
     return greedy_match_thresholds(gt_centers, pred_centers, pred_scores, (threshold,))[threshold]
 
 
+def ignored_matches(
+    ignore_centers: np.ndarray,
+    pred_centers: np.ndarray,
+    pred_scores: np.ndarray,
+    is_tp: np.ndarray,
+    threshold: float,
+) -> np.ndarray:
+    """Predictions that match an ignored ground-truth box instead of a counted one.
+
+    The predictions that matched no counted box claim, in descending score order, the
+    nearest unclaimed ignored box within ``threshold``. Such a prediction is neither a
+    true nor a false positive.
+
+    Args:
+        ignore_centers: BEV centers of the ignored ground truth ``(I, 2+)``.
+        pred_centers: Prediction BEV centers ``(P, 2+)``.
+        pred_scores: Prediction confidences ``(P,)``.
+        is_tp: Predictions already matched to a counted box ``(P,)``.
+        threshold: Maximum center distance for a match, in meters.
+
+    Returns:
+        Boolean mask ``(P,)`` of the predictions an ignored box takes.
+    """
+    unmatched = np.flatnonzero(~is_tp)
+    ignored = np.zeros(pred_centers.shape[0], dtype=bool)
+    matched, _ = greedy_match(
+        ignore_centers, pred_centers[unmatched], pred_scores[unmatched], threshold
+    )
+    ignored[unmatched[matched]] = True
+    return ignored
+
+
 def weighted_average_precision(
     weights: np.ndarray,
     is_tp: np.ndarray,

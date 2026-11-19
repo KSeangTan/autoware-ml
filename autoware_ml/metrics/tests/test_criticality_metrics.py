@@ -182,3 +182,46 @@ def test_collision_weighted_map_unreachable_gt_has_no_weight() -> None:
 def test_criticality_metrics_reject_unusable_parameters(build) -> None:
     with pytest.raises(ValueError):
         build()
+
+
+def _with_ignored(sample: Detection3DSample, boxes: list) -> Detection3DSample:
+    """The frame with the given class 0 boxes as its ignored ground truth."""
+    return replace(
+        sample,
+        ignore_boxes=torch.tensor(boxes, dtype=torch.float32).reshape(-1, 9),
+        ignore_labels=torch.zeros(len(boxes), dtype=torch.long),
+    )
+
+
+def _phantom_frame() -> Detection3DSample:
+    """A matched prediction and, scored above it, a prediction where no counted box is."""
+    return _sample(
+        [collision_box(10.0), collision_box(30.0)],
+        [0.8, 0.9],
+        [0, 0],
+        [collision_box(10.0)],
+        [0],
+    )
+
+
+def test_critical_fp_skips_predictions_on_ignored_boxes() -> None:
+    dropped = Detection3DState(samples=[_phantom_frame()], class_names=("car",))
+    ignored = Detection3DState(
+        samples=[_with_ignored(_phantom_frame(), [collision_box(30.0)])], class_names=("car",)
+    )
+    metric = CriticalFPFN(confidences=(0.5,), match_threshold=2.0)
+    assert metric.evaluate(dropped, EvalStage.TEST)["critical_fp_conf0p5"] == pytest.approx(1.0)
+    out = metric.evaluate(ignored, EvalStage.TEST)
+    assert out["critical_fp_conf0p5"] == pytest.approx(0.0)
+    # An ignored box nobody matches is never a miss
+    assert out["critical_fn_conf0p5"] == pytest.approx(0.0)
+
+
+def test_collision_weighted_map_skips_predictions_on_ignored_boxes() -> None:
+    dropped = Detection3DState(samples=[_phantom_frame()], class_names=("car",))
+    ignored = Detection3DState(
+        samples=[_with_ignored(_phantom_frame(), [collision_box(30.0)])], class_names=("car",)
+    )
+    metric = CollisionWeightedMeanAP(thresholds=(2.0,), decay=0.5)
+    assert metric.evaluate(dropped, EvalStage.TEST)["cw_mAP"] < 1.0
+    assert metric.evaluate(ignored, EvalStage.TEST)["cw_mAP"] == pytest.approx(1.0)

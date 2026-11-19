@@ -966,6 +966,41 @@ and per class. The ground truth is already filtered by the minimum point count a
 of the suite, and both sides are clipped to the evaluated range, so a change of the eval filters
 shows up in the counts next to the scores.
 
+### Ignored low-point boxes
+
+A ground-truth box below `min_num_points` cannot be demanded from the model, but a prediction on
+it is not wrong either: a temporal model keeps an object through an occlusion, and a camera model
+sees objects the lidar does not hit. `low_point_policy` on `Detection3DMetricSuite` decides what
+the suite does with these boxes.
+
+| `low_point_policy` | Box below `min_num_points` | Prediction on it | Box nobody predicts |
+| --- | --- | --- | --- |
+| `drop` (default) | removed before matching | false positive | not counted |
+| `ignore` | kept as an ignored box | neither true nor false positive | not counted |
+
+Under `ignore` a prediction first looks for a counted box of its class within the match threshold,
+and takes an ignored box only when none is left, one prediction per ignored box. The ignored boxes
+therefore never change which predictions are true positives, they only take predictions out of
+the false positives, and every AP of the suite is at least the AP under `drop`. The AP family, the
+confident-error rate, the critical false positives and the collision-weighted mAP all leave the
+predictions on ignored boxes out. The T4Dataset per-class and grouped suites keep `drop`, as the
+nuScenes suite does to match the official evaluation, and T4Dataset adds the per-class suite once
+more under the `det3d_ignored` prefix with `ignore`, so both numbers are logged side by side.
+
+`IgnoredBoxes` reports what the AP no longer shows about these boxes, read at `match_threshold`
+(2 m by default). It reports nothing in a suite that drops the boxes.
+
+| Key | Meaning |
+| --- | --- |
+| `num_ignored_gts` | ignored ground-truth boxes |
+| `num_ignored_preds` | predictions the ignored boxes took out of the false positives |
+| `ignored_recall` | share of the ignored boxes a prediction matched, at any score |
+| `ignored_recall_conf<score>` | the same share over the predictions at or above each of `score_thresholds` |
+| `num_ignored_gts_<class>`, `ignored_recall_<class>` | per class, test stage only |
+
+There is no precision or AP over the ignored boxes: a prediction that matches nothing belongs to
+neither set of boxes.
+
 ### Occlusion-aware recall split
 
 Not a component but a suite pattern: with per-box point counts (`gt_num_points`) in the eval

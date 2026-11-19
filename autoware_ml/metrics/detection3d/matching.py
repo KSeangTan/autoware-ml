@@ -137,8 +137,9 @@ def _slice_sample(
     sample: Detection3DSample,
     gt_keep: torch.Tensor,
     pred_keep: torch.Tensor,
+    ignore_keep: torch.Tensor | None,
 ) -> Detection3DSample:
-    """Return a new sample with GT and predictions sliced by boolean masks."""
+    """Return a new sample with GT, ignored GT and predictions sliced by boolean masks."""
     return Detection3DSample(
         pred_boxes=sample.pred_boxes[pred_keep],
         pred_scores=sample.pred_scores[pred_keep],
@@ -148,6 +149,8 @@ def _slice_sample(
         gt_ttc=None if sample.gt_ttc is None else sample.gt_ttc[gt_keep],
         pred_ttc=None if sample.pred_ttc is None else sample.pred_ttc[pred_keep],
         ttc_covered=sample.ttc_covered,
+        ignore_boxes=None if ignore_keep is None else sample.ignore_boxes[ignore_keep],
+        ignore_labels=None if ignore_keep is None else sample.ignore_labels[ignore_keep],
     )
 
 
@@ -155,7 +158,7 @@ def clip_to_range(
     samples: list[Detection3DSample],
     metric_range: MetricRange,
 ) -> list[Detection3DSample]:
-    """Clip both GT and predictions to a radial distance window.
+    """Clip GT, ignored GT and predictions to a radial distance window.
 
     Args:
         samples: Accumulated per-frame samples.
@@ -172,6 +175,11 @@ def clip_to_range(
             ),
             pred_keep=_distance_mask(
                 sample.pred_boxes, metric_range.min_distance, metric_range.max_distance
+            ),
+            ignore_keep=None
+            if sample.ignore_boxes is None
+            else _distance_mask(
+                sample.ignore_boxes, metric_range.min_distance, metric_range.max_distance
             ),
         )
         for sample in samples
@@ -208,16 +216,26 @@ class PreparedLabel:
     threshold against it. Per-frame boxes are concatenated in frame order and
     stably sorted by descending score. Greedy claims never cross frames, so
     the flat order matches per-frame greedy matching exactly.
+
+    The ignored ground truth of the samples is prepared next to the counted one.
+    A prediction claims an ignored box only when no counted box is left within
+    the threshold, so the ignored boxes never change which predictions are true
+    positives, they only take predictions out of the false positives.
     """
 
     __slots__ = (
         "total_gt",
+        "total_ignored_gt",
         "pred_boxes",
         "scores",
         "cost_rows",
         "candidate_rows",
         "gt_flat",
         "gt_flat_index",
+        "ignore_cost_rows",
+        "ignore_candidate_rows",
+        "ignore_flat_index",
+        "num_ignore_slots",
     )
 
     def __init__(self, samples: list[Detection3DSample], label: int, cost_fn) -> None:
@@ -234,13 +252,26 @@ class PreparedLabel:
         candidate_row_chunks: list[list[np.ndarray]] = []
         gt_index_chunks: list[np.ndarray] = []
         gt_frames: list[np.ndarray] = []
+        ignore_cost_row_chunks: list[list[np.ndarray]] = []
+        ignore_candidate_row_chunks: list[list[int]] = []
+        ignore_index_chunks: list[np.ndarray] = []
         self.total_gt = 0
+        self.total_ignored_gt = 0
         gt_offset = 0
+        ignore_offset = 0
         for sample in samples:
             _validate_box_tensor(sample.gt_boxes, "gt_boxes")
             _validate_box_tensor(sample.pred_boxes, "pred_boxes")
             gt_boxes = sample.gt_boxes[sample.gt_labels == label].numpy().astype(np.float64)
             self.total_gt += int(gt_boxes.shape[0])
+            if sample.ignore_boxes is None:
+                ignore_boxes = np.zeros((0, 7), dtype=np.float64)
+            else:
+                _validate_box_tensor(sample.ignore_boxes, "ignore_boxes")
+                ignore_boxes = (
+                    sample.ignore_boxes[sample.ignore_labels == label].numpy().astype(np.float64)
+                )
+            self.total_ignored_gt += int(ignore_boxes.shape[0])
             pred_mask = sample.pred_labels == label
             if not bool(pred_mask.any()):
                 continue
@@ -257,7 +288,17 @@ class PreparedLabel:
             gt_frames.append(gt_boxes)
             gt_index_chunks.append(np.full(pred_boxes.shape[0], gt_offset, dtype=np.int64))
             gt_offset += gt_boxes.shape[0]
+            ignore_cost = cost_fn(pred_boxes, ignore_boxes)  # (P, I)
+            ignore_cost_row_chunks.append(list(ignore_cost))
+            ignore_candidate_row_chunks.append(
+                np.argsort(ignore_cost, axis=1, kind="stable").tolist()
+            )
+            ignore_index_chunks.append(np.full(pred_boxes.shape[0], ignore_offset, dtype=np.int64))
+            ignore_offset += ignore_boxes.shape[0]
 
+        # Ignored boxes of the frames holding a prediction of the class, the only ones a
+        # prediction can claim.
+        self.num_ignore_slots = ignore_offset
         if not pred_chunks:
             self.pred_boxes = np.zeros((0, 7), dtype=np.float64)
             self.scores = np.zeros(0, dtype=np.float64)
@@ -265,6 +306,9 @@ class PreparedLabel:
             self.candidate_rows: list[list[int]] = []
             self.gt_flat = np.zeros((0, 7), dtype=np.float64)
             self.gt_flat_index = np.zeros(0, dtype=np.int64)
+            self.ignore_cost_rows: list[np.ndarray] = []
+            self.ignore_candidate_rows: list[list[int]] = []
+            self.ignore_flat_index = np.zeros(0, dtype=np.int64)
             return
 
         scores = np.concatenate(score_chunks)
@@ -281,6 +325,11 @@ class PreparedLabel:
             np.concatenate(gt_frames) if gt_frames else np.zeros((0, 7), dtype=np.float64)
         )
         self.gt_flat_index = np.concatenate(gt_index_chunks)[order]
+        ignore_cost_rows = [row for chunk in ignore_cost_row_chunks for row in chunk]
+        self.ignore_cost_rows = [ignore_cost_rows[index] for index in order]
+        ignore_candidate_rows = [row for chunk in ignore_candidate_row_chunks for row in chunk]
+        self.ignore_candidate_rows = [ignore_candidate_rows[index] for index in order]
+        self.ignore_flat_index = np.concatenate(ignore_index_chunks)[order]
 
     def match(self, threshold: float) -> MatchCurve:
         """Greedy matching at one threshold over the prepared, score-ordered boxes.
@@ -288,6 +337,9 @@ class PreparedLabel:
         The Python loop does only the inherently sequential part, claiming,
         against precomputed cost rows. Every error channel is then computed
         vectorized over all matched pairs at once.
+
+        A prediction left without a counted box claims the nearest unclaimed
+        ignored box within the threshold, and is then left out of the curve.
 
         Args:
             threshold: Maximum match cost in meters.
@@ -297,8 +349,10 @@ class PreparedLabel:
         """
         num_pred = self.scores.shape[0]
         true_positive = np.zeros(num_pred, dtype=bool)
+        ignored = np.zeros(num_pred, dtype=bool)
         matched_flat_gt = np.full(num_pred, -1, dtype=np.int64)
         claimed = np.zeros(self.gt_flat.shape[0], dtype=bool)
+        claimed_ignore = np.zeros(self.num_ignore_slots, dtype=bool)
         for index in range(num_pred):
             costs = self.cost_rows[index]
             offset = int(self.gt_flat_index[index])
@@ -314,6 +368,19 @@ class PreparedLabel:
                 true_positive[index] = True
                 matched_flat_gt[index] = flat
                 claimed[flat] = True
+                break
+            if true_positive[index] or not self.num_ignore_slots:
+                continue
+            costs = self.ignore_cost_rows[index]
+            offset = int(self.ignore_flat_index[index])
+            for candidate_ignore in self.ignore_candidate_rows[index]:
+                if costs[candidate_ignore] > threshold:
+                    break
+                flat = offset + candidate_ignore
+                if claimed_ignore[flat]:
+                    continue
+                ignored[index] = True
+                claimed_ignore[flat] = True
                 break
 
         heading_score = np.zeros(num_pred, dtype=np.float64)
@@ -336,19 +403,24 @@ class PreparedLabel:
                 pred_boxes
             ) - nearest_surface_distances(gt_boxes)
 
+        # The predictions on ignored boxes leave the curve, they are neither true nor false
+        # positives. None of them is matched to a counted box, so no error channel is lost.
+        kept = ~ignored
         return MatchCurve(
             total_gt=self.total_gt,
-            scores=self.scores,
-            true_positive=true_positive,
-            false_positive=~true_positive,
-            heading_score=heading_score,
-            translation_error=errors["ATE"],
-            orientation_error=errors["AOE"],
-            scale_error=errors["ASE"],
-            velocity_error=errors["AVE"],
-            attribute_error=errors["AAE"],
-            corner_error=corner_error,
-            nearest_surface_error=nearest_surface,
+            scores=self.scores[kept],
+            true_positive=true_positive[kept],
+            false_positive=~true_positive[kept],
+            heading_score=heading_score[kept],
+            translation_error=errors["ATE"][kept],
+            orientation_error=errors["AOE"][kept],
+            scale_error=errors["ASE"][kept],
+            velocity_error=errors["AVE"][kept],
+            attribute_error=errors["AAE"][kept],
+            corner_error=corner_error[kept],
+            nearest_surface_error=nearest_surface[kept],
+            total_ignored_gt=self.total_ignored_gt,
+            ignored_scores=self.scores[ignored],
         )
 
 
@@ -614,11 +686,14 @@ class Detection3DState:
             back to ``class_{label}`` tokens in every metric key.
         match_cost: Matching cost name (``center`` or ``corner``). Each metric asks
             for the match curves at whatever thresholds it needs.
+        ignores_low_points: Whether the suite keeps the ground truth with too few lidar
+            points as ignored boxes on the samples instead of dropping it.
     """
 
     samples: list[Detection3DSample]
     class_names: tuple[str, ...] | None
     match_cost: str = "center"
+    ignores_low_points: bool = False
     _curve_cache: dict[tuple[int, float], MatchCurve] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )

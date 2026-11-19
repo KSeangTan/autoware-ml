@@ -14,7 +14,9 @@ class BoxCounts(Metric[Detection3DState]):
 
     The counts are taken from the state the suite hands over, so they are the
     boxes the other metrics actually score: ground truth is already filtered by
-    ``min_num_points`` and ``max_distances`` at accumulation time, and both
+    ``min_num_points`` and ``max_distances`` at accumulation time (the boxes a
+    suite ignores for their point count are not counted here, see
+    :class:`~autoware_ml.metrics.detection3d.ignored_boxes.IgnoredBoxes`), and both
     ground truth and predictions are clipped to the range the suite is currently
     evaluating. The suite appends the range suffix to every key, so each range
     reports its own counts.

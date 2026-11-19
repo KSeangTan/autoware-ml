@@ -8,7 +8,7 @@ in :mod:`autoware_ml.metrics.detection3d.matching`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import torch
@@ -35,6 +35,12 @@ class Detection3DSample:
     (their TTC is all-``inf`` by construction): the criticality metrics exclude
     such frames from their denominators, mirroring the region-filter coverage
     rule.
+
+    ``ignore_boxes`` / ``ignore_labels`` are the ground-truth boxes a suite with
+    ``low_point_policy: ignore`` holds too few lidar points to demand: they are no
+    part of ``gt_boxes``, a prediction matching one is left out of every count, and
+    one nobody matches is no miss. Both are ``None`` when the suite drops those
+    boxes instead.
     """
 
     pred_boxes: torch.Tensor
@@ -45,6 +51,8 @@ class Detection3DSample:
     gt_ttc: torch.Tensor | None = None
     pred_ttc: torch.Tensor | None = None
     ttc_covered: bool = True
+    ignore_boxes: torch.Tensor | None = None
+    ignore_labels: torch.Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -54,6 +62,11 @@ class MatchCurve:
     ``corner_error`` and ``nearest_surface_error`` are per-prediction arrays
     (``NaN`` for non-matches), filled for true positives alongside the nuScenes
     error channels so the driving-aware components read them without re-matching.
+
+    Predictions that matched an ignored ground-truth box are no part of the
+    per-prediction arrays, they are neither true nor false positives. Their scores
+    are kept in ``ignored_scores``, one per matched ignored box, next to the number
+    of ignored boxes of the class, ``total_ignored_gt``.
     """
 
     total_gt: int
@@ -68,6 +81,8 @@ class MatchCurve:
     attribute_error: np.ndarray
     corner_error: np.ndarray
     nearest_surface_error: np.ndarray
+    total_ignored_gt: int = 0
+    ignored_scores: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float64))
 
     @property
     def num_predictions(self) -> int:

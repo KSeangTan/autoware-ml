@@ -37,6 +37,8 @@ from autoware_ml.metrics.detection3d.structures import Detection3DSample
 
 logger = logging.getLogger(__name__)
 
+LOW_POINT_POLICIES = ("drop", "ignore")
+
 
 def _validate_name_tokens(names: tuple[str, ...] | None) -> None:
     """Reject class-name sets whose metric-key tokens collide."""
@@ -72,6 +74,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         ),
         max_distances: dict[str, float] | None = None,
         min_num_points: int = 0,
+        low_point_policy: str = "drop",
         observed_only: bool = False,
         match_cost: str = "center",
         class_groups: dict[str, list[str]] | None = None,
@@ -89,6 +92,10 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                 filter at accumulation.
             min_num_points: Minimum LiDAR points a GT box needs to count, 0 disables the
                 filter.
+            low_point_policy: What happens to a GT box below ``min_num_points``. ``drop``
+                removes it, so a prediction on it is a false positive. ``ignore`` keeps it as
+                an ignored box: a prediction matching it is neither a true nor a false
+                positive, and a box nobody matches is no miss.
             observed_only: Count only the GT boxes the model observed in its stream so far, as
                 a temporal model reports in ``gt_observed``.
             match_cost: Matching cost name, ``center`` or ``corner``.
@@ -104,6 +111,17 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         _validate_name_tokens(self.class_names)
         self.max_distances = max_distances
         self.min_num_points = int(min_num_points)
+        if low_point_policy not in LOW_POINT_POLICIES:
+            raise ValueError(
+                f"Unknown low_point_policy {low_point_policy!r}, expected one of "
+                f"{list(LOW_POINT_POLICIES)}."
+            )
+        if low_point_policy == "ignore" and self.min_num_points <= 0:
+            raise ValueError(
+                "low_point_policy 'ignore' needs min_num_points > 0, no box is below a "
+                "threshold of 0."
+            )
+        self.ignores_low_points = low_point_policy == "ignore"
         self.observed_only = bool(observed_only)
         self.match_cost = str(match_cost)
         resolve_match_cost(self.match_cost)  # a config typo must fail at build, not after the epoch
@@ -131,6 +149,9 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         # Per-frame flag: does the frame only pad a streaming lane? It is gathered like every
         # other frame, so the ranks hold as many entries, and left out of every metric.
         self.add_state("padding", default=[], dist_reduce_fx=None)
+        if self.ignores_low_points:
+            self.add_state("ignore_boxes", default=[], dist_reduce_fx=None)
+            self.add_state("ignore_labels", default=[], dist_reduce_fx=None)
         if self.collision is not None:
             self.add_state("gt_ttc", default=[], dist_reduce_fx=None)
             self.add_state("pred_ttc", default=[], dist_reduce_fx=None)
@@ -157,6 +178,8 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
             self.add_state("gt_region_masks", default=[], dist_reduce_fx=None)
             self.add_state("pred_region_masks", default=[], dist_reduce_fx=None)
             self.add_state("region_available", default=[], dist_reduce_fx=None)
+            if self.ignores_low_points:
+                self.add_state("ignore_region_masks", default=[], dist_reduce_fx=None)
 
     def compute(self) -> dict[str, float]:
         """Log TTC frame coverage once per epoch, then run the metric groups.
@@ -265,16 +288,20 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                 if gt_num_points is not None
                 else None
             )
-            keep = gt_keep_mask(
-                frame_boxes,
-                frame_labels,
-                num_points,
-                self.class_names or (),
-                self.max_distances,
-                self.min_num_points,
+            # The boxes the suite evaluates at all, then split by the point count: the boxes
+            # below min_num_points are dropped, or kept apart as ignored boxes.
+            evaluated = gt_keep_mask(
+                frame_boxes, frame_labels, None, self.class_names or (), self.max_distances, 0
             )
             if self.observed_only:
-                keep &= eval_out["gt_observed"][i].to(device=keep.device)
+                evaluated &= eval_out["gt_observed"][i].to(device=evaluated.device)
+            low_points = (
+                num_points < self.min_num_points
+                if self.min_num_points > 0
+                else torch.zeros_like(evaluated)
+            )
+            keep = evaluated & ~low_points
+            ignore = evaluated & low_points
 
             self._note_frame()
             pred_boxes = prediction["bboxes_3d"].detach().to(dtype=torch.float32)
@@ -283,6 +310,9 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
             self.pred_labels.append(prediction["labels_3d"].detach().to(dtype=torch.long))
             self.gt_boxes.append(frame_boxes[keep])
             self.gt_labels.append(frame_labels[keep])
+            if self.ignores_low_points:
+                self.ignore_boxes.append(frame_boxes[ignore])
+                self.ignore_labels.append(frame_labels[ignore])
             is_padding = bool(padding_mask[i]) if padding_mask is not None else False
             self.padding.append(torch.tensor([is_padding], device=frame_boxes.device))
 
@@ -317,6 +347,10 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                 self.pred_region_masks.append(
                     self._region_columns(pred_boxes, eval_out, i, available)
                 )
+                if self.ignores_low_points:
+                    self.ignore_region_masks.append(
+                        self._region_columns(frame_boxes[ignore], eval_out, i, available)
+                    )
 
     def bind_stage(self, stage: Any) -> None:
         """Drop the collision provider on stages where no metric reads TTC.
@@ -470,6 +504,17 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
             ttc_covered = (
                 bool(self.ttc_covered[index].item()) if self.collision is not None else True
             )
+            ignore_boxes = ignore_labels = None
+            if self.ignores_low_points:
+                ignore_boxes = self.ignore_boxes[index].cpu()
+                ignore_labels = self.ignore_labels[index].cpu()
+                if column is not None:
+                    ignore_mask = self.ignore_region_masks[index][:, column].cpu()
+                    ignore_boxes, ignore_labels = (
+                        ignore_boxes[ignore_mask],
+                        ignore_labels[ignore_mask],
+                    )
+                ignore_labels = self._fold(ignore_labels)
             if column is not None:
                 gt_mask = self.gt_region_masks[index][:, column].cpu()
                 pred_mask = self.pred_region_masks[index][:, column].cpu()
@@ -491,6 +536,8 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                     gt_ttc=gt_ttc,
                     pred_ttc=pred_ttc,
                     ttc_covered=ttc_covered,
+                    ignore_boxes=ignore_boxes,
+                    ignore_labels=ignore_labels,
                 )
             )
         if metric_range is not None:
@@ -499,6 +546,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
             samples=samples,
             class_names=self._grouped_names if self._group_lut is not None else self.class_names,
             match_cost=self.match_cost,
+            ignores_low_points=self.ignores_low_points,
         )
 
     def _fold(self, labels: torch.Tensor) -> torch.Tensor:

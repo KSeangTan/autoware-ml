@@ -75,6 +75,12 @@ detection3d_components:
   - { _target_: autoware_ml.metrics.detection3d.critical_fp_fn.CriticalFPFN, stages: [test], filter: '${metric_params.detection3d.filters.collision_filter}' }
   - { _target_: autoware_ml.metrics.detection3d.collision_weighted_map.CollisionWeightedMeanAP, stages: [test], filter: '${metric_params.detection3d.filters.collision_filter}' }
 
+# The det3d_ignored suite: the AP with the low-point boxes ignored, and those boxes themselves.
+ignored_boxes_components:
+  - { _target_: autoware_ml.metrics.detection3d.box_counts.BoxCounts, stages: [val, test] }
+  - { _target_: autoware_ml.metrics.detection3d.ignored_boxes.IgnoredBoxes, stages: [val, test] }
+  - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [val, test] }
+
 occlusion_split_components:
   - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [test] }
   - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [test], filter: '${metric_params.detection3d.filters.region_filters.road}' }

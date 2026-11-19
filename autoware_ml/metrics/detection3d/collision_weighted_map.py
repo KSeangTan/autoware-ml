@@ -24,6 +24,7 @@ import numpy as np
 from autoware_ml.metrics.base import EvalStage, Metric
 from autoware_ml.metrics.detection3d.criticality import (
     greedy_match_thresholds,
+    ignored_matches,
     weighted_average_precision,
 )
 from autoware_ml.metrics.detection3d.matching import Detection3DState, mean_valid
@@ -98,6 +99,7 @@ class CollisionWeightedMeanAP(Metric[Detection3DState]):
             pred_centers = sample.pred_boxes.numpy().astype(np.float64)[:, :2]
             pred_scores_all = sample.pred_scores.numpy().astype(np.float64)
             pred_weight_all = collision_weights(sample.pred_ttc.numpy(), self.decay)
+            ignore_labels = None if sample.ignore_labels is None else sample.ignore_labels.numpy()
             for label in labels:
                 gt_mask = gt_labels == label
                 gt_weight = gt_weight_all[gt_mask]
@@ -110,14 +112,27 @@ class CollisionWeightedMeanAP(Metric[Detection3DState]):
                 matches = greedy_match_thresholds(
                     gt_centers[gt_mask], pred_centers[pred_mask], pred_scores, self.thresholds
                 )
+                ignore_centers = (
+                    None
+                    if ignore_labels is None
+                    else sample.ignore_boxes.numpy().astype(np.float64)[ignore_labels == label, :2]
+                )
                 for threshold, (tp, matched) in matches.items():
                     # A true positive inherits its matched GT's weight, a false
                     # positive keeps its own.
                     weight = pred_weight_all[pred_mask].copy()
                     weight[tp] = gt_weight[matched[tp]]
-                    scores[(label, threshold)].append(pred_scores)
-                    weights[(label, threshold)].append(weight)
-                    is_tp[(label, threshold)].append(tp)
+                    # A prediction on an ignored ground-truth box carries no mass at all.
+                    counted = (
+                        np.ones(pred_scores.shape[0], dtype=bool)
+                        if ignore_centers is None
+                        else ~ignored_matches(
+                            ignore_centers, pred_centers[pred_mask], pred_scores, tp, threshold
+                        )
+                    )
+                    scores[(label, threshold)].append(pred_scores[counted])
+                    weights[(label, threshold)].append(weight[counted])
+                    is_tp[(label, threshold)].append(tp[counted])
 
         per_class: dict[int, float] = {}
         for label in labels:

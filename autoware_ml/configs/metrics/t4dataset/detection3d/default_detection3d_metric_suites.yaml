@@ -1,4 +1,5 @@
-# Detection metric suites, per class, then grouped, then split by occlusion.
+# Detection metric suites, per class, then grouped, then with the low-point boxes ignored, then
+# split by occlusion.
 - _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
   components: ${metric_params.detection3d.components.detection3d_components}
   class_names: ${taxonomy.detection3d.class_names}
@@ -15,6 +16,18 @@
   max_distances: ${metric_params.detection3d.max_distances}
   class_groups: ${metric_params.detection3d.class_groups}
   collision: ${metric_params.detection3d.collision}
+  ranges: ${metric_ranges}
+
+# The per class suite with the ground truth below min_num_points ignored instead of dropped: a
+# prediction on such a box, as a temporal model keeps through an occlusion, is neither a true
+# nor a false positive, and the suite reports how many of these boxes the model still finds.
+- _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
+  prefix: det3d_ignored
+  components: ${metric_params.detection3d.components.ignored_boxes_components}
+  class_names: ${taxonomy.detection3d.class_names}
+  min_num_points: 2
+  low_point_policy: ignore
+  max_distances: ${metric_params.detection3d.max_distances}
   ranges: ${metric_ranges}
 
 - _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
